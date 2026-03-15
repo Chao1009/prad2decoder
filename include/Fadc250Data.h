@@ -1,6 +1,6 @@
 #pragma once
 
-#include "TObject.h"
+// #include "TObject.h"
 
 #define FADC250_MAX_NPEAKS 4
 #define FADC250_MAX_NSAMPLES 256
@@ -25,7 +25,7 @@ public:
         return (i >= pos - left) && (i <= pos + right);
     }
 
-    ClassDef(Peak, 1);
+//    ClassDef(Peak, 1);
 };
 
 class Pedestal {
@@ -34,7 +34,7 @@ public:
 
     Pedestal(double m = 0., double e = 0.) : mean(m), err(e) {}
 
-    ClassDef(Pedestal, 1);
+//    ClassDef(Pedestal, 1);
 };
 
 class Fadc250Data
@@ -52,7 +52,7 @@ public:
 
     void Clear() { ped = Pedestal(0., 0.), peaks.clear(), raw.clear(); }
 
-    ClassDef(Fadc250Data, 1);  // root io
+//    ClassDef(Fadc250Data, 1);  // root io
 };
 
 }; // namespace fdec
