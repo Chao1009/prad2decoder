@@ -10,59 +10,75 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # ---------------------------------------------------------------------------
-# Paths to prebuilt CODA/ET libraries and headers
-# Override with -DCODA_LIB_DIR=... and -DCODA_INCLUDE_DIR=... if needed
+# Dependencies: evio and et
+# Three modes, selected by -DEVIO_SOURCE=... and -DET_SOURCE=...
+#   prebuilt  (default) - use .a files from CODA_LIB_DIR
+#   fetch               - download and build from GitHub with FetchContent
+#   system              - let find_package locate an installed version
 # ---------------------------------------------------------------------------
+set(EVIO_SOURCE "fetch" CACHE STRING "evio provider: prebuilt | fetch | system")
+set(ET_SOURCE   "fetch" CACHE STRING "et provider:   prebuilt | fetch | system")
+
 set(CODA_ROOT "/usr/clas12/release/1.4.0/coda/Linux_x86_64_RHEL9"
-    CACHE PATH "Root of the CODA installation")
-
+    CACHE PATH "Root of the prebuilt CODA installation")
 set(CODA_LIB_DIR     "${CODA_ROOT}/lib"
-    CACHE PATH "Directory containing libevio.a and libet.a")
-
+    CACHE PATH "Directory containing prebuilt libevio.a and libet.a")
 set(CODA_INCLUDE_DIR "/usr/clas12/release/1.4.0/coda/common/include"
     CACHE PATH "Directory containing evio.h and et.h")
 
-# ---------------------------------------------------------------------------
-# Locate libevio.a
-# ---------------------------------------------------------------------------
-find_library(EVIO_LIB
-    NAMES evio
-    PATHS ${CODA_LIB_DIR}
-    NO_DEFAULT_PATH
-    REQUIRED
-)
-message(STATUS "Found libevio : ${EVIO_LIB}")
+# --- evio -----------------------------------------------------------------
+if(EVIO_SOURCE STREQUAL "fetch")
+    include(FetchContent)
+    FetchContent_Declare(evio
+        GIT_REPOSITORY https://github.com/JeffersonLab/evio.git
+        GIT_TAG        main
+    )
+    FetchContent_MakeAvailable(evio)
+    message(STATUS "evio: building from source (FetchContent)")
 
-# libevio depends on expat (Expat XML parser) for dictionary support
-find_library(EXPAT_LIB
-    NAMES expat
-    REQUIRED
-)
-message(STATUS "Found libexpat: ${EXPAT_LIB}")
+elseif(EVIO_SOURCE STREQUAL "system")
+    find_package(evio REQUIRED)
+    message(STATUS "evio: using system installation")
 
-add_library(evio STATIC IMPORTED GLOBAL)
-set_target_properties(evio PROPERTIES
-    IMPORTED_LOCATION             "${EVIO_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CODA_INCLUDE_DIR}"
-    INTERFACE_LINK_LIBRARIES      "${EXPAT_LIB}"
-)
+else()  # prebuilt
+    find_library(EVIO_LIB NAMES evio PATHS ${CODA_LIB_DIR} NO_DEFAULT_PATH REQUIRED)
+    message(STATUS "evio: prebuilt at ${EVIO_LIB}")
 
-# ---------------------------------------------------------------------------
-# Locate libet.a
-# ---------------------------------------------------------------------------
-find_library(ET_LIB
-    NAMES et
-    PATHS ${CODA_LIB_DIR}
-    NO_DEFAULT_PATH
-    REQUIRED
-)
-message(STATUS "Found libet   : ${ET_LIB}")
+    find_library(EXPAT_LIB NAMES expat REQUIRED)
+    message(STATUS "Found libexpat: ${EXPAT_LIB}")
 
-add_library(et STATIC IMPORTED GLOBAL)
-set_target_properties(et PROPERTIES
-    IMPORTED_LOCATION             "${ET_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CODA_INCLUDE_DIR}"
-)
+    add_library(evio STATIC IMPORTED GLOBAL)
+    set_target_properties(evio PROPERTIES
+        IMPORTED_LOCATION             "${EVIO_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${CODA_INCLUDE_DIR}"
+        INTERFACE_LINK_LIBRARIES      "${EXPAT_LIB}"
+    )
+endif()
+
+# --- et -------------------------------------------------------------------
+if(ET_SOURCE STREQUAL "fetch")
+    include(FetchContent)
+    FetchContent_Declare(et
+        GIT_REPOSITORY https://github.com/JeffersonLab/et.git
+        GIT_TAG        main
+    )
+    FetchContent_MakeAvailable(et)
+    message(STATUS "et: building from source (FetchContent)")
+
+elseif(ET_SOURCE STREQUAL "system")
+    find_package(coda_et REQUIRED)
+    message(STATUS "et: using system installation")
+
+else()  # prebuilt
+    find_library(ET_LIB NAMES et PATHS ${CODA_LIB_DIR} NO_DEFAULT_PATH REQUIRED)
+    message(STATUS "et: prebuilt at ${ET_LIB}")
+
+    add_library(et STATIC IMPORTED GLOBAL)
+    set_target_properties(et PROPERTIES
+        IMPORTED_LOCATION             "${ET_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${CODA_INCLUDE_DIR}"
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # Static library: libevc.a
@@ -119,6 +135,6 @@ install(FILES
 message(STATUS "----------------------------------------------------")
 message(STATUS "  evc ${PROJECT_VERSION}")
 message(STATUS "  Build type   : ${CMAKE_BUILD_TYPE}")
-message(STATUS "  CODA lib dir : ${CODA_LIB_DIR}")
-message(STATUS "  CODA inc dir : ${CODA_INCLUDE_DIR}")
+message(STATUS "  evio source  : ${EVIO_SOURCE}")
+message(STATUS "  et source    : ${ET_SOURCE}")
 message(STATUS "----------------------------------------------------")
