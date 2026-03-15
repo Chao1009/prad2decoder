@@ -1,3 +1,4 @@
+#include <iostream>
 #include "Fadc250Decoder.h"
 
 using namespace fdec;
