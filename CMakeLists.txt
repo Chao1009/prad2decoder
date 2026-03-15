@@ -29,6 +29,7 @@ set(CODA_INCLUDE_DIR "/usr/clas12/release/1.4.0/coda/common/include"
 # --- evio -----------------------------------------------------------------
 if(EVIO_SOURCE STREQUAL "fetch")
     include(FetchContent)
+    set(MAKE_EXAMPLES OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(evio
         GIT_REPOSITORY https://github.com/JeffersonLab/evio.git
         GIT_TAG        evio-6.0
@@ -64,6 +65,8 @@ if(ET_SOURCE STREQUAL "fetch")
     )
     FetchContent_MakeAvailable(et)
     message(STATUS "et: building from source (FetchContent)")
+    # et's CMake doesn't always export its include path; set it explicitly.
+    set(ET_INCLUDE_DIR "${et_SOURCE_DIR}/src/libsrc")
 
 elseif(ET_SOURCE STREQUAL "system")
     find_package(coda_et REQUIRED)
@@ -78,6 +81,7 @@ else()  # prebuilt
         IMPORTED_LOCATION             "${ET_LIB}"
         INTERFACE_INCLUDE_DIRECTORIES "${CODA_INCLUDE_DIR}"
     )
+    set(ET_INCLUDE_DIR "${CODA_INCLUDE_DIR}")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -92,6 +96,7 @@ target_include_directories(evc
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+        $<BUILD_INTERFACE:${ET_INCLUDE_DIR}>
 )
 
 target_link_libraries(evc
