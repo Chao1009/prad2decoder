@@ -4,7 +4,7 @@
 // accumulates histograms, stores latest N events in a ring buffer,
 // pushes WebSocket notifications to the viewer on new events.
 //
-// Usage: evc_monitor [port] [--config online_config.json]
+// Usage: evc_monitor [-p port] [-c online_config.json]
 
 #include "EtChannel.h"
 #include "Fadc250Data.h"
@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <csignal>
+#include <getopt.h>
 
 using json = nlohmann::json;
 using WsServer = websocketpp::server<websocketpp::config::asio>;
@@ -466,10 +467,22 @@ int main(int argc, char *argv[])
     int port = 5051;
     std::string config_file;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--config" && i + 1 < argc) config_file = argv[++i];
-        else if (arg[0] != '-') port = std::atoi(argv[i]);
+    static struct option long_opts[] = {
+        {"port",   required_argument, nullptr, 'p'},
+        {"config", required_argument, nullptr, 'c'},
+        {"help",   no_argument,       nullptr, '?'},
+        {nullptr, 0, nullptr, 0},
+    };
+
+    int opt;
+    while ((opt = getopt_long(argc, argv, "p:c:", long_opts, nullptr)) != -1) {
+        switch (opt) {
+        case 'p': port = std::atoi(optarg); break;
+        case 'c': config_file = optarg; break;
+        default:
+            std::cerr << "Usage: " << argv[0] << " [-p port] [-c online_config.json]\n";
+            return 1;
+        }
     }
 
     std::string db_dir  = DATABASE_DIR;

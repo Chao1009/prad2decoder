@@ -1,9 +1,9 @@
 // src/evc_viewer.cpp — HyCal event viewer
 //
 // Usage:
-//   evc_viewer <evio_file> [port] [--hist [config.json]] [--data-dir /path/to/data]
+//   evc_viewer <evio_file> [-p port] [-H] [-c config.json] [-d /path/to/data]
 //
-// --data-dir enables file browsing: the viewer shows a file picker limited to
+// -d enables file browsing: the viewer shows a file picker limited to
 // .evio files under that directory tree. Selecting a new file triggers
 // background re-indexing + histogram building with progress updates.
 
@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
+#include <getopt.h>
 
 using json = nlohmann::json;
 using WsServer = websocketpp::server<websocketpp::config::asio>;
@@ -636,28 +637,37 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
 // -------------------------------------------------------------------------
 int main(int argc, char *argv[])
 {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0]
-                  << " <evio_file> [port] [--hist [config.json]] [--data-dir /path]\n";
-        return 1;
-    }
-
-    std::string evio_file = argv[1];
+    std::string evio_file;
     int port = 5050;
     std::string hist_config_file;
 
-    for (int i = 2; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--hist") {
-            g_hist_enabled = true;
-            if (i + 1 < argc && argv[i+1][0] != '-')
-                hist_config_file = argv[++i];
-        } else if (arg == "--data-dir" && i + 1 < argc) {
-            g_data_dir = argv[++i];
-        } else if (arg[0] != '-') {
-            port = std::atoi(argv[i]);
+    static struct option long_opts[] = {
+        {"port",        required_argument, nullptr, 'p'},
+        {"hist",        no_argument,       nullptr, 'H'},
+        {"hist-config", required_argument, nullptr, 'c'},
+        {"data-dir",    required_argument, nullptr, 'd'},
+        {"help",        no_argument,       nullptr, '?'},
+        {nullptr, 0, nullptr, 0},
+    };
+
+    int opt;
+    while ((opt = getopt_long(argc, argv, "p:Hc:d:", long_opts, nullptr)) != -1) {
+        switch (opt) {
+        case 'p': port = std::atoi(optarg); break;
+        case 'H': g_hist_enabled = true; break;
+        case 'c': hist_config_file = optarg; g_hist_enabled = true; break;
+        case 'd': g_data_dir = optarg; break;
+        default:
+            std::cerr << "Usage: " << argv[0]
+                      << " <evio_file> [-p port] [-H] [-c hist_config.json] [-d data_dir]\n";
+            return 1;
         }
     }
+    if (optind >= argc) {
+        std::cerr << "Error: evio_file required\n";
+        return 1;
+    }
+    evio_file = argv[optind];
 
     std::string db_dir  = DATABASE_DIR;
     std::string res_dir = RESOURCE_DIR;
