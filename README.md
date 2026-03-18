@@ -19,7 +19,7 @@ cmake .. -DEVIO_SOURCE=prebuilt -DET_SOURCE=prebuilt
 ## Event Viewer
 
 ```bash
-evc_viewer <evio_file> [-p port] [-H] [-c hist_config.json] [-d data_dir]
+evc_viewer [evio_file] [-p port] [-H] [-c hist_config.json] [-d data_dir]
 ```
 
 | Option | Description |
@@ -28,6 +28,15 @@ evc_viewer <evio_file> [-p port] [-H] [-c hist_config.json] [-d data_dir]
 | `-H, --hist` | Build per-channel histograms and occupancy on startup |
 | `-c, --hist-config` | Histogram config file (implies `-H`, default: `database/hist_config.json`) |
 | `-d, --data-dir` | Enable in-browser file picker sandboxed to this directory |
+
+The evio file is optional. Without it, the viewer starts empty and you pick a file from the GUI. Examples:
+
+```bash
+evc_viewer data.evio -H                     # open file with histograms
+evc_viewer -d /data/stage6 -H               # browse and pick from GUI
+evc_viewer data.evio -H -d /data/stage6     # open file + enable browsing
+evc_viewer -p 8080                           # empty viewer on port 8080
+```
 
 Open `http://localhost:5050` in a browser.
 

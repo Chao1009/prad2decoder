@@ -305,9 +305,8 @@ function connectWebSocket() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${location.host}`);
 
-    ws.onopen = () => { console.log('WS connected'); };
+    ws.onopen = () => {};
     ws.onclose = () => {
-        console.log('WS disconnected, reconnecting in 2s');
         setTimeout(connectWebSocket, 2000);
     };
     ws.onmessage = (evt) => {

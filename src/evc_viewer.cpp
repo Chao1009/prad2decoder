@@ -13,7 +13,6 @@
 
 #include "EvChannel.h"
 #include "Fadc250Data.h"
-#include "Fadc250Decoder.h"
 #include "WaveAnalyzer.h"
 
 #include <nlohmann/json.hpp>

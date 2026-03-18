@@ -53,9 +53,9 @@ int main(int argc, char* argv[])
     conf.set_host(host.c_str());
     conf.set_serverport(port);
 
-    char *fname = strdup(et_file.c_str());
-    auto status = et_open(&et_id, fname, conf.configure().get());
-    free(fname);
+    std::vector<char> fname(et_file.begin(), et_file.end());
+    fname.push_back('\0');
+    auto status = et_open(&et_id, fname.data(), conf.configure().get());
 
     if (status != ET_OK) {
         std::cerr << "Cannot open ET at " << host << ":" << port << " with " << et_file << "\n";
