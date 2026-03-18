@@ -13,7 +13,6 @@
 
 #include <nlohmann/json.hpp>
 
-#define ASIO_STANDALONE
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 
@@ -109,7 +108,7 @@ static WsServer *g_server_ptr = nullptr;
 // state
 static std::atomic<bool> g_running{true};
 static std::atomic<bool> g_et_connected{false};
-static std::string g_viewer_html;
+static std::string g_res_dir;
 static json g_config;
 
 // -------------------------------------------------------------------------
@@ -125,6 +124,27 @@ static std::string findFile(const std::string &name, const std::string &base) {
     std::string p = base + "/" + name;
     { std::ifstream f(p); if (f.good()) return p; }
     return "";
+}
+
+static std::string contentType(const std::string &path) {
+    if (path.size() >= 5 && path.substr(path.size()-5) == ".html") return "text/html; charset=utf-8";
+    if (path.size() >= 4 && path.substr(path.size()-4) == ".css")  return "text/css; charset=utf-8";
+    if (path.size() >= 3 && path.substr(path.size()-3) == ".js")   return "application/javascript; charset=utf-8";
+    return "application/octet-stream";
+}
+
+static bool serveResource(const std::string &uri, WsServer::connection_ptr con)
+{
+    if (g_res_dir.empty()) return false;
+    std::string relpath = (uri == "/") ? "viewer.html" : uri.substr(1);
+    if (relpath.find("..") != std::string::npos || relpath[0] == '/') return false;
+    std::string fullpath = g_res_dir + "/" + relpath;
+    std::string content = readFile(fullpath);
+    if (content.empty()) return false;
+    con->set_status(websocketpp::http::status_code::ok);
+    con->set_body(content);
+    con->append_header("Content-Type", contentType(fullpath));
+    return true;
 }
 
 // -------------------------------------------------------------------------
@@ -350,8 +370,8 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         con->append_header("Content-Type", ct);
     };
 
-    if (uri == "/") {
-        reply(g_viewer_html, "text/html; charset=utf-8"); return;
+    if (uri == "/" || uri == "/viewer.css" || uri == "/viewer.js") {
+        if (serveResource(uri, con)) return;
     }
 
     if (uri == "/api/config") {
@@ -469,14 +489,14 @@ int main(int argc, char *argv[])
     g_pos_nbins = std::max(1, (int)std::ceil(
         (g_hist_cfg.pos_max - g_hist_cfg.pos_min) / g_hist_cfg.pos_step));
 
-    // load viewer and database
-    std::string html_file = findFile("viewer.html", res_dir);
+    // resources directory (viewer.html, viewer.css, viewer.js)
+    g_res_dir = res_dir;
+    if (readFile(g_res_dir + "/viewer.html").empty())
+        std::cerr << "Warning: viewer.html not found in " << g_res_dir << "\n";
+
+    // load database
     std::string mod_file  = findFile("hycal_modules.json", db_dir);
     std::string daq_file  = findFile("daq_map.json", db_dir);
-
-    g_viewer_html = readFile(html_file);
-    if (g_viewer_html.empty())
-        std::cerr << "Warning: viewer.html not found\n";
 
     json modules_j = json::array(), daq_j = json::array();
     { std::string s = readFile(mod_file); if (!s.empty()) modules_j = json::parse(s, nullptr, false); }

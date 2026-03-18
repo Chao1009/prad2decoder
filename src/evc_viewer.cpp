@@ -128,7 +128,7 @@ static bool g_hist_enabled = false;
 static int  g_hist_nbins = 0, g_pos_nbins = 0;
 
 static std::string g_data_dir;            // sandboxed data directory (empty = disabled)
-static std::string g_viewer_html;
+static std::string g_res_dir;             // resources directory (viewer.html, .css, .js)
 static json g_base_config;                // config without per-file fields
 static Progress g_progress;
 
@@ -146,6 +146,34 @@ static std::string findFile(const std::string &name, const std::string &base) {
     std::string p = base + "/" + name;
     { std::ifstream f(p); if (f.good()) return p; }
     return "";
+}
+
+static std::string contentType(const std::string &path) {
+    if (path.size() >= 5 && path.substr(path.size()-5) == ".html") return "text/html; charset=utf-8";
+    if (path.size() >= 4 && path.substr(path.size()-4) == ".css")  return "text/css; charset=utf-8";
+    if (path.size() >= 3 && path.substr(path.size()-3) == ".js")   return "application/javascript; charset=utf-8";
+    return "application/octet-stream";
+}
+
+// Serve a file from the resources directory (no directory traversal)
+static bool serveResource(const std::string &uri, websocketpp::server<websocketpp::config::asio>::connection_ptr con)
+{
+    if (g_res_dir.empty()) return false;
+
+    // map "/" to "/viewer.html"
+    std::string relpath = (uri == "/") ? "viewer.html" : uri.substr(1);
+
+    // reject anything with .. or absolute paths
+    if (relpath.find("..") != std::string::npos || relpath[0] == '/') return false;
+
+    std::string fullpath = g_res_dir + "/" + relpath;
+    std::string content = readFile(fullpath);
+    if (content.empty()) return false;
+
+    con->set_status(websocketpp::http::status_code::ok);
+    con->set_body(content);
+    con->append_header("Content-Type", contentType(fullpath));
+    return true;
 }
 
 // -------------------------------------------------------------------------
@@ -450,6 +478,15 @@ static json buildConfig()
     cfg["total_events"] = data ? (int)data->index.size() : 0;
     cfg["current_file"] = data ? data->filepath : "";
     cfg["data_dir_enabled"] = !g_data_dir.empty();
+    cfg["hist_enabled"] = g_hist_enabled;
+    // always include hist config so the client can use ranges for coloring
+    cfg["hist"] = {
+        {"time_min", g_hist_cfg.time_min}, {"time_max", g_hist_cfg.time_max},
+        {"bin_min", g_hist_cfg.bin_min}, {"bin_max", g_hist_cfg.bin_max},
+        {"bin_step", g_hist_cfg.bin_step}, {"threshold", g_hist_cfg.threshold},
+        {"pos_min", g_hist_cfg.pos_min}, {"pos_max", g_hist_cfg.pos_max},
+        {"pos_step", g_hist_cfg.pos_step},
+    };
     return cfg;
 }
 
@@ -467,7 +504,9 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         con->append_header("Content-Type", ct);
     };
 
-    if (uri == "/") { reply(g_viewer_html, "text/html; charset=utf-8"); return; }
+    if (uri == "/" || uri == "/viewer.css" || uri == "/viewer.js") {
+        if (serveResource(uri, con)) return;
+    }
 
     if (uri == "/api/config") { reply(buildConfig().dump()); return; }
 
@@ -497,8 +536,8 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         reply(g_progress.toJson().dump()); return;
     }
 
-    // /api/load?file=relative/path.evio — switch to a new file
-    if (uri.rfind("/api/load?file=", 0) == 0) {
+    // /api/load?file=relative/path.evio&hist=1 — switch to a new file
+    if (uri.rfind("/api/load?", 0) == 0) {
         if (g_data_dir.empty()) {
             reply("{\"error\":\"file browsing not enabled (use --data-dir)\"}"); return;
         }
@@ -506,23 +545,46 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         if (!g_progress.loading.compare_exchange_strong(expected, true)) {
             reply("{\"error\":\"already loading a file\"}"); return;
         }
-        // loading flag is now true; loadFileAsync will clear it when done
-        // URL-decode (basic: replace + and %XX)
-        std::string raw = uri.substr(15);
-        std::string relpath;
-        for (size_t i = 0; i < raw.size(); ++i) {
-            if (raw[i] == '+') relpath += ' ';
-            else if (raw[i] == '%' && i + 2 < raw.size()) {
-                int hex = std::stoi(raw.substr(i+1, 2), nullptr, 16);
-                relpath += (char)hex;
-                i += 2;
-            } else relpath += raw[i];
+
+        // parse query string
+        std::string qs = uri.substr(10);  // after "/api/load?"
+        auto urlDecode = [](const std::string &raw) {
+            std::string out;
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '+') out += ' ';
+                else if (raw[i] == '%' && i + 2 < raw.size()) {
+                    out += (char)std::stoi(raw.substr(i+1, 2), nullptr, 16);
+                    i += 2;
+                } else out += raw[i];
+            }
+            return out;
+        };
+        auto getParam = [&](const std::string &key) -> std::string {
+            std::string prefix = key + "=";
+            size_t pos = qs.find(prefix);
+            if (pos == std::string::npos) return "";
+            size_t start = pos + prefix.size();
+            size_t end = qs.find('&', start);
+            return urlDecode(qs.substr(start, end == std::string::npos ? end : end - start));
+        };
+
+        std::string relpath = getParam("file");
+        std::string hist_param = getParam("hist");
+
+        if (relpath.empty()) {
+            g_progress.loading = false;
+            reply("{\"error\":\"missing file parameter\"}"); return;
         }
 
         std::string fullpath = resolveDataFile(relpath);
         if (fullpath.empty()) {
+            g_progress.loading = false;
             reply("{\"error\":\"file not found or access denied\"}"); return;
         }
+
+        // update histogram enabled flag
+        if (!hist_param.empty())
+            g_hist_enabled = (hist_param == "1" || hist_param == "true");
 
         // start background loading (join any previous load first)
         {
@@ -531,7 +593,8 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
             g_load_thread = std::thread([fullpath]() { loadFileAsync(fullpath); });
         }
 
-        reply(json({{"status", "loading"}, {"file", relpath}}).dump());
+        reply(json({{"status", "loading"}, {"file", relpath},
+                     {"hist_enabled", g_hist_enabled}}).dump());
         return;
     }
 
@@ -570,28 +633,26 @@ int main(int argc, char *argv[])
     std::string db_dir  = DATABASE_DIR;
     std::string res_dir = RESOURCE_DIR;
 
-    // load histogram config
-    if (g_hist_enabled) {
-        if (hist_config_file.empty())
-            hist_config_file = findFile("hist_config.json", db_dir);
+    // always load histogram config (needed if user enables hist via GUI later)
+    if (hist_config_file.empty())
+        hist_config_file = findFile("hist_config.json", db_dir);
 
-        std::string hcfg_str = readFile(hist_config_file);
-        if (!hcfg_str.empty()) {
-            auto hcfg = json::parse(hcfg_str, nullptr, false);
-            if (hcfg.contains("hist")) {
-                auto &h = hcfg["hist"];
-                if (h.contains("time_min"))  g_hist_cfg.time_min  = h["time_min"];
-                if (h.contains("time_max"))  g_hist_cfg.time_max  = h["time_max"];
-                if (h.contains("bin_min"))   g_hist_cfg.bin_min   = h["bin_min"];
-                if (h.contains("bin_max"))   g_hist_cfg.bin_max   = h["bin_max"];
-                if (h.contains("bin_step"))  g_hist_cfg.bin_step  = h["bin_step"];
-                if (h.contains("threshold")) g_hist_cfg.threshold = h["threshold"];
-                if (h.contains("pos_min"))   g_hist_cfg.pos_min   = h["pos_min"];
-                if (h.contains("pos_max"))   g_hist_cfg.pos_max   = h["pos_max"];
-                if (h.contains("pos_step"))  g_hist_cfg.pos_step  = h["pos_step"];
-            }
-            std::cerr << "Hist config: " << hist_config_file << "\n";
+    std::string hcfg_str = readFile(hist_config_file);
+    if (!hcfg_str.empty()) {
+        auto hcfg = json::parse(hcfg_str, nullptr, false);
+        if (hcfg.contains("hist")) {
+            auto &h = hcfg["hist"];
+            if (h.contains("time_min"))  g_hist_cfg.time_min  = h["time_min"];
+            if (h.contains("time_max"))  g_hist_cfg.time_max  = h["time_max"];
+            if (h.contains("bin_min"))   g_hist_cfg.bin_min   = h["bin_min"];
+            if (h.contains("bin_max"))   g_hist_cfg.bin_max   = h["bin_max"];
+            if (h.contains("bin_step"))  g_hist_cfg.bin_step  = h["bin_step"];
+            if (h.contains("threshold")) g_hist_cfg.threshold = h["threshold"];
+            if (h.contains("pos_min"))   g_hist_cfg.pos_min   = h["pos_min"];
+            if (h.contains("pos_max"))   g_hist_cfg.pos_max   = h["pos_max"];
+            if (h.contains("pos_step"))  g_hist_cfg.pos_step  = h["pos_step"];
         }
+        std::cerr << "Hist config: " << hist_config_file << "\n";
     }
 
     g_hist_nbins = std::max(1, (int)std::ceil(
@@ -599,10 +660,10 @@ int main(int argc, char *argv[])
     g_pos_nbins = std::max(1, (int)std::ceil(
         (g_hist_cfg.pos_max - g_hist_cfg.pos_min) / g_hist_cfg.pos_step));
 
-    // load viewer and database
-    g_viewer_html = readFile(findFile("viewer.html", res_dir));
-    if (g_viewer_html.empty())
-        std::cerr << "Warning: viewer.html not found\n";
+    // resources directory (viewer.html, viewer.css, viewer.js)
+    g_res_dir = res_dir;
+    if (readFile(g_res_dir + "/viewer.html").empty())
+        std::cerr << "Warning: viewer.html not found in " << g_res_dir << "\n";
 
     json modules_j = json::array(), daq_j = json::array();
     { std::string s = readFile(findFile("hycal_modules.json", db_dir));
@@ -616,17 +677,7 @@ int main(int argc, char *argv[])
         {"daq", daq_j},
         {"crate_roc", {{"0",0x80},{"1",0x82},{"2",0x84},{"3",0x86},{"4",0x88},{"5",0x8a},{"6",0x8c}}},
         {"mode", "file"},
-        {"hist_enabled", g_hist_enabled},
     };
-    if (g_hist_enabled) {
-        g_base_config["hist"] = {
-            {"time_min", g_hist_cfg.time_min}, {"time_max", g_hist_cfg.time_max},
-            {"bin_min", g_hist_cfg.bin_min}, {"bin_max", g_hist_cfg.bin_max},
-            {"bin_step", g_hist_cfg.bin_step}, {"threshold", g_hist_cfg.threshold},
-            {"pos_min", g_hist_cfg.pos_min}, {"pos_max", g_hist_cfg.pos_max},
-            {"pos_step", g_hist_cfg.pos_step},
-        };
-    }
 
     std::cerr << "Database  : " << db_dir << "\n"
               << "Resources : " << res_dir << "\n";
