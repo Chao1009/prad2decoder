@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
+#include <csignal>
 #include <getopt.h>
 
 using json = nlohmann::json;
@@ -733,7 +734,16 @@ int main(int argc, char *argv[])
         loadFileAsync(evio_file);
 
     // start server
+    static WsServer *g_server_ptr = nullptr;
     WsServer server;
+    g_server_ptr = &server;
+
+    std::signal(SIGINT, [](int) {
+        if (g_server_ptr) {
+            try { g_server_ptr->stop_listening(); g_server_ptr->stop(); } catch (...) {}
+        }
+    });
+
     server.set_access_channels(websocketpp::log::alevel::none);
     server.set_error_channels(websocketpp::log::elevel::warn | websocketpp::log::elevel::rerror);
     server.init_asio();

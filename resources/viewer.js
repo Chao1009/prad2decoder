@@ -21,6 +21,17 @@ let currentHist={};  // {divId: {x:[], y:[]}} for histogram copy
 
 // color range: null = auto from data, number = user-set or hist-synced
 let rangeMin=null, rangeMax=null;
+let rangeUserEdited=false;  // true if user manually edited min/max
+
+// default ranges per metric (overridden by hist config)
+const RANGE_DEFAULTS={
+    integral:  [0, 10000],
+    height:    [0, 1000],
+    time:      [0, 400],
+    pedestal:  [0, 500],
+    occupancy: [0, 100],
+    occupancy_tcut: [0, 100],
+};
 
 // =========================================================================
 // Color scale
@@ -31,18 +42,18 @@ function viridis(t){
 }
 function drawColorBar(){const c=document.getElementById('colorbar-canvas'),x=c.getContext('2d');for(let i=0;i<c.width;i++){x.fillStyle=viridis(i/c.width);x.fillRect(i,0,1,c.height);}}
 
-// sync color range from histogram config when a matching metric is selected
+// sync color range: hist config > defaults. Only called on metric change (not per-event).
 function syncRangeFromHist(){
+    if(rangeUserEdited) return;  // user set values manually, don't override
     const mt=document.getElementById('color-metric').value;
     const h=histConfig;
     if(mt==='integral' && h.bin_min!==undefined){
         rangeMin=h.bin_min; rangeMax=h.bin_max;
     } else if(mt==='time' && h.pos_min!==undefined){
         rangeMin=h.pos_min; rangeMax=h.pos_max;
-    } else if((mt==='occupancy' || mt==='occupancy_tcut') && occTotal>0){
-        rangeMin=0; rangeMax=occTotal;
     } else {
-        rangeMin=null; rangeMax=null;
+        const def=RANGE_DEFAULTS[mt]||[null,null];
+        rangeMin=def[0]; rangeMax=def[1];
     }
     updateRangeDisplay();
 }
@@ -81,9 +92,9 @@ function c2d(cx,cy){return[(cx-offsetX)/scale,-(cy-offsetY)/scale];}
 function modVal(m){
     const key=`${m.roc}_${m.sl}_${m.ch}`;
     const mt=document.getElementById('color-metric').value;
-    // occupancy metrics use pre-computed counts, not per-event data
-    if(mt==='occupancy') return occTotal>0 ? (occData[key]||0) : null;
-    if(mt==='occupancy_tcut') return occTotal>0 ? (occTcutData[key]||0) : null;
+    // occupancy metrics: percentage (0–100)
+    if(mt==='occupancy') return occTotal>0 ? 100.0*(occData[key]||0)/occTotal : null;
+    if(mt==='occupancy_tcut') return occTotal>0 ? 100.0*(occTcutData[key]||0)/occTotal : null;
     const d=eventChannels[key];
     if(!d)return null;
     if(mt==='pedestal')return d.pm||0;
@@ -100,16 +111,9 @@ function drawGeo(){
     if(!geoCtx)return;const ctx=geoCtx;ctx.clearRect(0,0,canvasW,canvasH);
     const useLog=document.getElementById('log-scale').checked;
     const vals=modules.map(modVal);
-    const numVals=vals.filter(v=>v!==null);
-    const autoMin=numVals.length?Math.min(...numVals):0;
-    const autoMax=numVals.length?Math.max(...numVals):1;
     const vmin=rangeMin!==null?rangeMin:0;
-    const vmax=rangeMax!==null?rangeMax:Math.max(autoMax,1);
+    const vmax=rangeMax!==null?rangeMax:100;
     const span=vmax-vmin||1;
-
-    // update display if auto
-    if(rangeMin===null) document.getElementById('range-min-show').textContent=vmin.toFixed(0);
-    if(rangeMax===null) document.getElementById('range-max-show').textContent=vmax.toFixed(0);
 
     for(let i=0;i<modules.length;i++){
         const m=modules[i],[cx,cy]=d2c(m.x,m.y),w=m.sx*scale,h=m.sy*scale,v=vals[i];
@@ -573,7 +577,7 @@ function init(){
     document.getElementById('btn-prev').onclick=()=>{if(currentEvent>1)loadEvent(currentEvent-1);};
     document.getElementById('btn-next').onclick=()=>{if(currentEvent<totalEvents)loadEvent(currentEvent+1);};
     document.getElementById('ev-input').onchange=e=>{const v=parseInt(e.target.value);if(v>=1&&v<=totalEvents)loadEvent(v);};
-    document.getElementById('color-metric').onchange=()=>{syncRangeFromHist();drawGeo();};
+    document.getElementById('color-metric').onchange=()=>{rangeUserEdited=false;syncRangeFromHist();drawGeo();};
     document.getElementById('log-scale').onchange=drawGeo;
 
     // --- file browser ---
@@ -605,6 +609,7 @@ function init(){
             edit.classList.remove('active'); show.style.display='';
             const v=parseFloat(edit.value);
             if(isMax) rangeMax=isNaN(v)?null:v; else rangeMin=isNaN(v)?null:v;
+            if(!isNaN(v)) rangeUserEdited=true;
             updateRangeDisplay(); drawGeo();
         }
 
@@ -642,8 +647,9 @@ function init(){
             }
             else if(d)t+=`\nPed ${d.pm.toFixed(1)}  (no peaks)`;
             if(occTotal>0){
-                const o=occData[key]||0, ot=occTcutData[key]||0;
-                t+=`\nOcc ${o}/${occTotal}  Occ(t) ${ot}/${occTotal}`;
+                const o=100.0*(occData[key]||0)/occTotal;
+                const ot=100.0*(occTcutData[key]||0)/occTotal;
+                t+=`\nOcc ${o.toFixed(1)}%  Occ(t) ${ot.toFixed(1)}%  (${occTotal} evts)`;
             } else if(histEnabled===false){
                 t+=`\nOcc: not computed (enable histograms)`;
             }

@@ -271,6 +271,12 @@ static void wsBroadcast(const std::string &msg)
     }
 }
 
+// Interruptible sleep: returns early if g_running becomes false
+static void sleepMs(int ms) {
+    for (int elapsed = 0; elapsed < ms && g_running; elapsed += 100)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
 // -------------------------------------------------------------------------
 // ET reader thread
 // -------------------------------------------------------------------------
@@ -289,14 +295,14 @@ static void etReaderThread()
 
         if (ch.Connect(g_et_cfg.host, g_et_cfg.port, g_et_cfg.et_file) != status::success) {
             std::cerr << "ET: connect failed, retrying in 3s\n";
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            sleepMs(3000);
             continue;
         }
 
         if (ch.Open(g_et_cfg.station) != status::success) {
             std::cerr << "ET: station open failed, retrying in 3s\n";
             ch.Disconnect();
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            sleepMs(3000);
             continue;
         }
 
@@ -350,7 +356,7 @@ static void etReaderThread()
         wsBroadcast("{\"type\":\"status\",\"connected\":false}");
 
         if (g_running)
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            sleepMs(3000);
     }
 }
 
@@ -578,8 +584,16 @@ int main(int argc, char *argv[])
               << "Ring buf  : " << g_ring_size << " events\n"
               << "Hist bins : " << g_hist_nbins << " integral, " << g_pos_nbins << " position\n";
 
-    // signal handler
-    std::signal(SIGINT, [](int) { g_running = false; });
+    // signal handler — stop server event loop
+    std::signal(SIGINT, [](int) {
+        g_running = false;
+        if (g_server_ptr) {
+            try {
+                g_server_ptr->stop_listening();
+                g_server_ptr->stop();
+            } catch (...) {}
+        }
+    });
 
     // start WebSocket/HTTP server
     WsServer server;
@@ -615,7 +629,9 @@ int main(int argc, char *argv[])
     server.run();
 
     // cleanup
+    std::cerr << "\nShutting down...\n";
     g_running = false;
     if (reader.joinable()) reader.join();
+    std::cerr << "Done.\n";
     return 0;
 }
