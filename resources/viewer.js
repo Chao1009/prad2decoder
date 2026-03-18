@@ -527,7 +527,7 @@ function init(){
         const text=`x: [${currentWaveform.x.join(', ')}]\ny: [${currentWaveform.y.join(', ')}]`;
         navigator.clipboard.writeText(text).then(()=>{
             const btn=document.getElementById('btn-copy-wf');
-            btn.textContent='✓'; setTimeout(()=>{btn.textContent='📋';},1000);
+            btn.textContent='✓'; setTimeout(()=>{btn.textContent='copy';},1000);
         });
     };
 
