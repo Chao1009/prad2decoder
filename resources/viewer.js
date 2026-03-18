@@ -21,7 +21,8 @@ let currentHist={};  // {divId: {x:[], y:[]}} for histogram copy
 
 // color range: null = auto from data, number = user-set or hist-synced
 let rangeMin=null, rangeMax=null;
-let rangeUserEdited=false;  // true if user manually edited min/max
+let rangeUserEdited=false;
+const rangeUserOverrides={};  // {metric: [min, max]} — persists user edits per metric
 
 // default ranges per metric (overridden by hist config)
 const RANGE_DEFAULTS={
@@ -78,8 +79,16 @@ function drawColorBar(){
 
 // sync color range: hist config > defaults. Only called on metric change (not per-event).
 function syncRangeFromHist(){
-    if(rangeUserEdited) return;  // user set values manually, don't override
     const mt=document.getElementById('color-metric').value;
+    // restore user edits for this metric if they exist
+    if(rangeUserOverrides[mt]){
+        rangeMin=rangeUserOverrides[mt][0];
+        rangeMax=rangeUserOverrides[mt][1];
+        rangeUserEdited=true;
+        updateRangeDisplay();
+        return;
+    }
+    rangeUserEdited=false;
     const h=histConfig;
     if(mt==='integral' && h.bin_min!==undefined){
         rangeMin=h.bin_min; rangeMax=h.bin_max;
@@ -679,7 +688,7 @@ function init(){
     document.getElementById('btn-prev').onclick=()=>{if(currentEvent>1)loadEvent(currentEvent-1);};
     document.getElementById('btn-next').onclick=()=>{if(currentEvent<totalEvents)loadEvent(currentEvent+1);};
     document.getElementById('ev-input').onchange=e=>{const v=parseInt(e.target.value);if(v>=1&&v<=totalEvents)loadEvent(v);};
-    document.getElementById('color-metric').onchange=()=>{rangeUserEdited=false;syncRangeFromHist();drawGeo();};
+    document.getElementById('color-metric').onchange=()=>{syncRangeFromHist();drawGeo();};
     document.getElementById('log-scale').onchange=drawGeo;
     document.getElementById('time-cut').onchange=drawGeo;
 
@@ -712,7 +721,11 @@ function init(){
             edit.classList.remove('active'); show.style.display='';
             const v=parseFloat(edit.value);
             if(isMax) rangeMax=isNaN(v)?null:v; else rangeMin=isNaN(v)?null:v;
-            if(!isNaN(v)) rangeUserEdited=true;
+            if(!isNaN(v)){
+                rangeUserEdited=true;
+                const mt=document.getElementById('color-metric').value;
+                rangeUserOverrides[mt]=[rangeMin,rangeMax];
+            }
             updateRangeDisplay(); drawGeo();
         }
 
