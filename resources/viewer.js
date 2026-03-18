@@ -361,6 +361,12 @@ function setEtStatus(connected) {
     el.style.color = connected ? '#51cf66' : '#f66';
 }
 
+function updateFollowStatus() {
+    const el = document.getElementById('follow-status');
+    if (!el) return;
+    el.style.display = autoFollow ? 'none' : '';
+}
+
 function connectWebSocket() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${location.host}`);
@@ -684,7 +690,7 @@ function init(){
 
     // --- online mode nav ---
     document.getElementById('ring-select').onchange=e=>{
-        autoFollow=false;
+        autoFollow=false; updateFollowStatus();
         loadEvent(parseInt(e.target.value));
     };
     document.getElementById('ring-select').onfocus=()=>{ updateRingSelector(); };
@@ -729,10 +735,10 @@ function init(){
                 const opts=[...sel.options].map(o=>parseInt(o.value));
                 const cur=parseInt(sel.value);
                 const idx=opts.indexOf(cur);
-                if(e.key==='ArrowRight'&&idx>0){sel.value=opts[idx-1];autoFollow=false;loadEvent(opts[idx-1]);}
-                if(e.key==='ArrowLeft'&&idx<opts.length-1){sel.value=opts[idx+1];autoFollow=false;loadEvent(opts[idx+1]);}
+                if(e.key==='ArrowRight'&&idx>0){sel.value=opts[idx-1];autoFollow=false;updateFollowStatus();loadEvent(opts[idx-1]);}
+                if(e.key==='ArrowLeft'&&idx<opts.length-1){sel.value=opts[idx+1];autoFollow=false;updateFollowStatus();loadEvent(opts[idx+1]);}
             }
-            if(e.key==='f'||e.key==='F'){autoFollow=true;loadLatestEvent();}  // F = follow latest
+            if(e.key==='f'||e.key==='F'){autoFollow=true;updateFollowStatus();loadLatestEvent();}
         }
     });
 
