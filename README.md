@@ -2,7 +2,7 @@
 
 FADC250 waveform decoder and event viewer for PRad-II at Jefferson Lab.
 
-Reads CODA evio files, decodes composite data banks (`c,i,l,N(c,Ns)` format), performs waveform analysis (pedestal, peak finding, integration), and provides a web-based event display.
+Reads CODA evio files, decodes composite data banks (`c,i,l,N(c,Ns)` format), performs waveform analysis (pedestal, peak finding, integration), and provides a web-based event display with geometry view, histograms, and occupancy maps.
 
 ## Building
 
@@ -12,9 +12,8 @@ cmake ..
 make -j$(nproc)
 ```
 
-Requires CMake ≥ 3.14 and a C++17 compiler. Dependencies (`evio`, `et`, `nlohmann/json`, `websocketpp`, `asio`) are fetched automatically.
+Requires CMake ≥ 3.14 and a C++17 compiler. Dependencies (`evio`, `et`, `nlohmann/json`, `websocketpp`, `asio`) are fetched automatically. For prebuilt CODA libraries:
 
-To use prebuilt CODA libraries instead of fetching:
 ```bash
 cmake .. -DEVIO_SOURCE=prebuilt -DET_SOURCE=prebuilt
 ```
@@ -22,123 +21,111 @@ cmake .. -DEVIO_SOURCE=prebuilt -DET_SOURCE=prebuilt
 ## Usage
 
 ### Command-line test
-```bash
-# Channel hit counts (JSON output)
-./bin/evc_test data.evio
-
-# Verbose: print all waveforms
-./bin/evc_test data.evio -v
-
-# Print bank tree
-./bin/evc_test data.evio -t
-```
-
-### Event viewer
-```bash
-./bin/evc_viewer data.evio [port]
-# Open http://localhost:5050
-```
-
-The viewer auto-discovers `database/hycal_modules.json` and `database/daq_map.json` at the compile-time `DATABASE_DIR` path.
-
-#### Histogram mode
-Use `--hist` to do a one-time pass over all events and accumulate peak integral histograms per channel. The largest peak within a configurable sample range is selected for each channel per event.
 
 ```bash
-# Use default config from database/hist_config.json
-./bin/evc_viewer data.evio --hist
-
-# Use a custom config file
-./bin/evc_viewer data.evio --hist my_hist_config.json
+./bin/evc_test data.evio         # channel hit counts (JSON)
+./bin/evc_test data.evio -v      # print all waveforms
+./bin/evc_test data.evio -t      # print bank tree
 ```
 
-Example `hist_config.json`:
+### Event viewer (file mode)
+
+```bash
+./bin/evc_viewer data.evio [port] [--hist] [--data-dir /path/to/data]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--hist` | One-time pass to build per-channel histograms and occupancy |
+| `--hist config.json` | Use custom histogram config (default: `database/hist_config.json`) |
+| `--data-dir /path` | Enable in-browser file picker, sandboxed to this directory |
+
+The viewer auto-discovers `database/*.json` and `resources/viewer.*` via compile-time `DATABASE_DIR` / `RESOURCE_DIR` paths.
+
+#### GUI features
+
+- **Geometry view** (left panel): HyCal modules colored by selectable metric with editable min/max range. Metrics: Peak Integral, Peak Height, Peak Time, Pedestal, Occupancy, Occupancy (time cut). Color range auto-syncs with histogram config for integral and time metrics.
+- **Histograms** (right, top): per-channel integral histogram (time-cut) and peak position histogram. Titles show entries, underflow, overflow counts.
+- **Waveform** (right, bottom-right): Plotly interactive plot with colored peak regions, shaded integral area, pedestal/threshold lines.
+- **Peaks table** (right, bottom-left): per-peak position, time, height, integral, range, overflow flag.
+- **File browser** (`--data-dir`): 📂 Open button opens a file picker with filter. "Process histograms" checkbox remembers last choice. Background loading with progress bar.
+- **Navigation**: arrow keys, direct event number input.
+- All panel dividers are adjustable by dragging.
+
+### Online monitor (ET mode)
+
+```bash
+./bin/evc_monitor [port] [--config online_config.json]
+```
+
+Connects to an ET system and monitors events in real time. Same GUI as the file viewer, with additional controls:
+
+- ET connection status indicator (green/red)
+- Ring buffer dropdown to select recent events (default 20, configurable)
+- **Clear Hist** button to reset all histograms and occupancy
+- Auto-follows latest event; press **F** to resume after manual selection
+- WebSocket push for live updates, throttled for performance
+
+### Configuration files
+
+`database/hist_config.json` (file viewer):
 ```json
 {
     "hist": {
-        "time_min": 170,
-        "time_max": 190,
-        "bin_min": 0,
-        "bin_max": 20000,
-        "bin_step": 100,
-        "threshold": 3.0
+        "time_min": 170, "time_max": 190,
+        "bin_min": 0, "bin_max": 20000, "bin_step": 100,
+        "threshold": 3.0,
+        "pos_min": 0, "pos_max": 400, "pos_step": 4
     }
+}
+```
+
+`database/online_config.json` (monitor):
+```json
+{
+    "et": { "host": "localhost", "port": 11111,
+            "et_file": "/tmp/et_sys_prad2", "station": "prad2_monitor" },
+    "ring_buffer_size": 20,
+    "hist": { "...same fields as above..." }
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `time_min`, `time_max` | Peak time range in nanoseconds |
-| `bin_min`, `bin_max`, `bin_step` | Histogram axis range and bin width |
-| `threshold` | Minimum peak height (ADC above pedestal) to count |
-
-Without `--hist`, the histogram panel in the GUI shows empty.
-
-### Online monitor (ET)
-```bash
-./bin/evc_monitor [port] [--config online_config.json]
-# Open http://localhost:5051
-```
-
-Connects to an ET system and monitors events in real time. The viewer auto-discovers `database/online_config.json` at the compile-time `DATABASE_DIR` path.
-
-Features:
-- Background thread reads events from ET continuously
-- Histograms accumulate until the user clicks **Clear Hist** in the GUI
-- Latest N events stored in a ring buffer (default 20, configurable)
-- WebSocket push notifies the viewer on each new event
-- Viewer auto-follows the latest event; select older events from the dropdown
-- Arrow keys navigate the ring buffer; press **F** to resume auto-follow
-
-Example `online_config.json`:
-```json
-{
-    "et": {
-        "host": "localhost",
-        "port": 11111,
-        "et_file": "/tmp/et_sys_prad2",
-        "station": "prad2_monitor"
-    },
-    "ring_buffer_size": 20,
-    "hist": { ... same fields as hist_config.json ... }
-}
-```
+| `time_min`, `time_max` | Peak time window (ns) for integral histogram and time-cut occupancy |
+| `bin_min`, `bin_max`, `bin_step` | Integral histogram range and bin width |
+| `pos_min`, `pos_max`, `pos_step` | Peak position histogram range (ns) and bin width |
+| `threshold` | Minimum peak height (ADC above pedestal) for histogram/occupancy counting |
 
 ## Project Structure
 
 ```
 CMakeLists.txt
 database/
-    daq_map.json              DAQ channel map (crate/slot/channel → module)
+    daq_map.json              DAQ channel map (crate/slot/channel → module name)
     hycal_modules.json        Module geometry (name, type, position, size)
-    hist_config.json          Histogram settings for file viewer (optional)
-    online_config.json        ET + histogram settings for online monitor
+    hist_config.json          Histogram/occupancy config for file viewer
+    online_config.json        ET connection + histogram config for monitor
 prad2dec/                     Static library: libprad2dec.a
     include/
-        EvStruct.h            Evio header parsers and EvNode tree structure
-        EvChannel.h           Evio file reader and bank tree scanner
-        EtChannel.h           ET system live reader
-        EtConfigWrapper.h     ET configuration C++ wrapper
-        Fadc250Data.h         Pre-allocated event data (zero-alloc flat arrays)
-        Fadc250Decoder.h      Composite bank decoder
-        WaveAnalyzer.h        Waveform analysis (pedestal, peaks, integration)
+        EvStruct.h  EvChannel.h  EtChannel.h  EtConfigWrapper.h
+        Fadc250Data.h  Fadc250Decoder.h  WaveAnalyzer.h
     src/
-        EvChannel.cpp
-        EtChannel.cpp
-        Fadc250Decoder.cpp
-        WaveAnalyzer.cpp
+        EvChannel.cpp  EtChannel.cpp  Fadc250Decoder.cpp  WaveAnalyzer.cpp
 resources/
-    viewer.html               Web-based event display (file + online modes)
+    viewer.html               HTML structure
+    viewer.css                Styles
+    viewer.js                 Application logic (Plotly.js + Canvas)
 src/
-    evc_viewer.cpp            File viewer HTTP server (websocketpp/asio)
+    evc_viewer.cpp            File viewer: HTTP server + evio decoder
     evc_monitor.cpp           Online monitor: ET reader + WebSocket push
 test/
-    test_main.cpp             CLI test and channel counting tool
+    test_main.cpp             CLI test tool
 ```
 
 ## Data Format
 
-Each evio event contains ROC banks (tags `0x80`–`0x8c`), each holding a composite bank (tag `0xe101`) with format string `c,i,l,N(c,Ns)`:
+Evio composite bank tag `0xe101`, format `c,i,l,N(c,Ns)` — packed native LE:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -150,7 +137,7 @@ Each evio event contains ROC banks (tags `0x80`–`0x8c`), each holding a compos
 | `N` | uint32 | Number of samples |
 | `s` | int16[] | ADC sample values |
 
-Slots repeat back-to-back within a single ROC's composite payload.
+ROC bank tags: `0x80`–`0x8c` (adchycal1–7). Slots repeat back-to-back within one ROC's composite payload.
 
 ## Library API
 
@@ -162,7 +149,7 @@ Slots repeat back-to-back within a single ROC's composite payload.
 evc::EvChannel ch;
 ch.Open("data.evio");
 
-fdec::EventData event;          // allocate once, reuse
+fdec::EventData event;
 fdec::WaveAnalyzer ana;
 fdec::WaveResult wres;
 
