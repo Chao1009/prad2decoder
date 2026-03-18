@@ -99,6 +99,59 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
     font-size:11px; color:var(--dim); z-index:20;
 }
 .empty-msg { padding:20px; color:var(--dim); text-align:center; font-size:13px; }
+
+/* file browser */
+.file-dialog {
+    display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    width:520px; max-height:70vh; z-index:100; box-shadow:0 8px 32px rgba(0,0,0,0.5);
+    flex-direction:column;
+}
+.file-dialog.open { display:flex; }
+.file-dialog-header {
+    padding:10px 14px; border-bottom:1px solid var(--border); font-size:13px; font-weight:600;
+    display:flex; justify-content:space-between; align-items:center;
+}
+.file-dialog-header button { background:none; border:none; color:var(--dim); font-size:16px; cursor:pointer; }
+.file-dialog-header button:hover { color:var(--text); }
+.file-dialog-list {
+    flex:1; overflow-y:auto; padding:6px 0; font-size:12px;
+}
+.file-item {
+    padding:6px 14px; cursor:pointer; display:flex; justify-content:space-between; gap:10px;
+}
+.file-item:hover { background:rgba(0,180,216,0.1); }
+.file-item.current { color:var(--accent); font-weight:600; }
+.file-item .fsize { color:var(--dim); white-space:nowrap; }
+.file-dialog-filter {
+    padding:6px 14px; border-bottom:1px solid var(--border);
+}
+.file-dialog-filter input {
+    width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text);
+    padding:4px 8px; border-radius:3px; font-family:inherit; font-size:12px;
+}
+
+/* progress overlay */
+.progress-overlay {
+    display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,0.7); z-index:200;
+    justify-content:center; align-items:center;
+}
+.progress-overlay.active { display:flex; }
+.progress-box {
+    background:var(--panel); border:1px solid var(--border); border-radius:6px;
+    padding:24px 32px; text-align:center; min-width:300px;
+}
+.progress-box h3 { color:var(--accent); font-size:14px; margin-bottom:12px; }
+.progress-bar-outer {
+    width:100%; height:8px; background:var(--bg); border-radius:4px; overflow:hidden; margin:10px 0;
+}
+.progress-bar-inner {
+    height:100%; background:var(--accent); border-radius:4px; transition:width 0.3s;
+}
+.progress-text { color:var(--dim); font-size:12px; }
+.backdrop { display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.3); z-index:99; }
+.backdrop.open { display:block; }
 </style>
 </head>
 <body>
@@ -106,6 +159,7 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
 <div class="header">
     <h1>PRad2 HyCal Viewer</h1>
     <div class="nav" id="nav-file">
+        <button id="btn-open" title="Open file" style="display:none">📂</button>
         <button id="btn-prev" title="← key">◀</button>
         <input type="number" id="ev-input" value="1" min="1">
         <span style="color:var(--dim);font-size:12px" id="ev-total">/ 0</span>
@@ -117,6 +171,28 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
         <button id="btn-clear-hist" title="Clear all histograms">Clear Hist</button>
     </div>
     <div class="info" id="header-info"></div>
+</div>
+
+<!-- file browser dialog -->
+<div class="backdrop" id="file-backdrop"></div>
+<div class="file-dialog" id="file-dialog">
+    <div class="file-dialog-header">
+        <span>Open EVIO File</span>
+        <button id="file-dialog-close">&times;</button>
+    </div>
+    <div class="file-dialog-filter">
+        <input type="text" id="file-filter" placeholder="Filter files...">
+    </div>
+    <div class="file-dialog-list" id="file-list"></div>
+</div>
+
+<!-- progress overlay -->
+<div class="progress-overlay" id="progress-overlay">
+    <div class="progress-box">
+        <h3 id="progress-title">Loading...</h3>
+        <div class="progress-bar-outer"><div class="progress-bar-inner" id="progress-bar"></div></div>
+        <div class="progress-text" id="progress-text">Preparing...</div>
+    </div>
 </div>
 
 <div class="main">
@@ -511,6 +587,102 @@ function clearHistograms() {
 }
 
 // =========================================================================
+// File browser
+// =========================================================================
+let allFiles = [];
+
+function openFileDialog() {
+    fetch('/api/files').then(r => r.json()).then(data => {
+        allFiles = data.files || [];
+        renderFileList('');
+        document.getElementById('file-dialog').classList.add('open');
+        document.getElementById('file-backdrop').classList.add('open');
+        document.getElementById('file-filter').value = '';
+        document.getElementById('file-filter').focus();
+    });
+}
+
+function closeFileDialog() {
+    document.getElementById('file-dialog').classList.remove('open');
+    document.getElementById('file-backdrop').classList.remove('open');
+}
+
+function renderFileList(filter) {
+    const list = document.getElementById('file-list');
+    const currentFile = (g_currentFile || '').replace(/.*\//, ''); // basename
+    const filt = filter.toLowerCase();
+    let html = '';
+    for (const f of allFiles) {
+        if (filt && !f.path.toLowerCase().includes(filt)) continue;
+        const isCurrent = f.path === g_currentFile || f.path.endsWith('/' + currentFile);
+        html += `<div class="file-item${isCurrent ? ' current' : ''}" data-path="${f.path}">
+            <span>${f.path}</span><span class="fsize">${f.size_mb} MB</span></div>`;
+    }
+    if (!html) html = '<div style="padding:12px;color:var(--dim);text-align:center">No matching files</div>';
+    list.innerHTML = html;
+
+    // click handlers
+    list.querySelectorAll('.file-item[data-path]').forEach(el => {
+        el.onclick = () => {
+            closeFileDialog();
+            loadNewFile(el.dataset.path);
+        };
+    });
+}
+
+let g_currentFile = '';
+
+function loadNewFile(relpath) {
+    document.getElementById('status-bar').textContent = `Loading ${relpath}...`;
+    fetch(`/api/load?file=${encodeURIComponent(relpath)}`).then(r => r.json()).then(data => {
+        if (data.error) {
+            document.getElementById('status-bar').textContent = data.error;
+            return;
+        }
+        // show progress overlay and start polling
+        showProgress(relpath);
+    });
+}
+
+function showProgress(filename) {
+    document.getElementById('progress-overlay').classList.add('active');
+    document.getElementById('progress-title').textContent = `Loading ${filename.replace(/.*\//, '')}`;
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('progress-text').textContent = 'Starting...';
+    pollProgress();
+}
+
+function pollProgress() {
+    fetch('/api/progress').then(r => r.json()).then(data => {
+        if (!data.loading) {
+            // done — hide overlay, reload config + first event
+            document.getElementById('progress-overlay').classList.remove('active');
+            fetch('/api/config').then(r => r.json()).then(cfg => {
+                totalEvents = cfg.total_events || 0;
+                g_currentFile = cfg.current_file || '';
+                document.getElementById('ev-total').textContent = `/ ${totalEvents}`;
+                updateHeaderInfo(cfg);
+                if (totalEvents > 0) loadEvent(1);
+            });
+            return;
+        }
+        const pct = data.total > 0 ? Math.round(100 * data.current / data.total) : 0;
+        const phaseText = data.phase === 'indexing' ? 'Indexing events' : 'Building histograms';
+        document.getElementById('progress-bar').style.width = `${Math.min(pct, 100)}%`;
+        document.getElementById('progress-text').textContent =
+            `${phaseText}... ${data.current}` + (data.total > 0 ? ` / ${data.total}` : '');
+        setTimeout(pollProgress, 300);
+    }).catch(() => setTimeout(pollProgress, 1000));
+}
+
+function updateHeaderInfo(cfg) {
+    const hi = cfg.hist_enabled ? ` · hist [${(cfg.hist||{}).time_min||170}-${(cfg.hist||{}).time_max||190} ns]` : '';
+    const fname = g_currentFile.replace(/.*\//, '') || '';
+    document.getElementById('header-info').textContent =
+        `${modules.length} mod · ${totalEvents} evts${hi}` + (fname ? ` · ${fname}` : '');
+}
+
+// =========================================================================
 // Draggable dividers
 // =========================================================================
 function setupDivider(divId, axis, getTarget, getContainer, getOffset, minA, minB, onResize){
@@ -575,6 +747,16 @@ function init(){
     document.getElementById('ev-input').onchange=e=>{const v=parseInt(e.target.value);if(v>=1&&v<=totalEvents)loadEvent(v);};
     document.getElementById('color-metric').onchange=()=>{syncRangeFromHist();drawGeo();};
     document.getElementById('log-scale').onchange=drawGeo;
+
+    // --- file browser ---
+    document.getElementById('btn-open').onclick = openFileDialog;
+    document.getElementById('file-dialog-close').onclick = closeFileDialog;
+    document.getElementById('file-backdrop').onclick = closeFileDialog;
+    document.getElementById('file-filter').oninput = e => renderFileList(e.target.value);
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && document.getElementById('file-dialog').classList.contains('open'))
+            closeFileDialog();
+    });
 
     // --- range editing ---
     function setupRangeEdit(btnId, editId, showId, isMax) {
@@ -665,15 +847,20 @@ function init(){
         histEnabled=data.hist_enabled||false;
         histConfig=data.hist||{};
         mode=data.mode||'file';
+        g_currentFile=data.current_file||'';
 
         // show/hide mode-specific UI
         document.getElementById('nav-file').style.display   = mode==='file'?'flex':'none';
         document.getElementById('nav-online').style.display = mode==='online'?'flex':'none';
 
+        // show file browser button if data-dir is enabled
+        if(data.data_dir_enabled)
+            document.getElementById('btn-open').style.display='';
+
         if(mode==='file'){
             document.getElementById('ev-total').textContent=`/ ${totalEvents}`;
-            const hi=histEnabled?` · hist [${histConfig.time_min}-${histConfig.time_max} ns]`:'';
-            document.getElementById('header-info').textContent=`${modules.length} modules · ${totalEvents} events${hi}`;
+            updateHeaderInfo(data);
+            syncRangeFromHist();
             resizeGeo();
             if(totalEvents>0)loadEvent(1);
         } else {

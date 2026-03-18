@@ -1,12 +1,11 @@
 // src/evc_viewer.cpp — HyCal event viewer
 //
-// Single C++ binary: evio decoder + waveform analysis + HTTP server.
-// Auto-discovers database files from compile-time DATABASE_DIR / RESOURCE_DIR.
-//
 // Usage:
-//   evc_viewer <evio_file> [port]
-//   evc_viewer <evio_file> [port] --hist                   (use default hist_config.json)
-//   evc_viewer <evio_file> [port] --hist my_config.json    (custom config)
+//   evc_viewer <evio_file> [port] [--hist [config.json]] [--data-dir /path/to/data]
+//
+// --data-dir enables file browsing: the viewer shows a file picker limited to
+// .evio files under that directory tree. Selecting a new file triggers
+// background re-indexing + histogram building with progress updates.
 
 #include "EvChannel.h"
 #include "Fadc250Data.h"
@@ -18,16 +17,22 @@
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
+#include <thread>
+#include <atomic>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm>
 
 using json = nlohmann::json;
 using WsServer = websocketpp::server<websocketpp::config::asio>;
+namespace fs = std::filesystem;
 using namespace evc;
 
 #ifndef DATABASE_DIR
@@ -38,213 +43,324 @@ using namespace evc;
 #endif
 
 // -------------------------------------------------------------------------
-// Globals
+// Forward declarations
 // -------------------------------------------------------------------------
+struct HistConfig;
+struct Histogram;
 struct EventIndex { int buffer_num, sub_event; };
 
-static std::string g_filepath;
-static std::vector<EventIndex> g_index;
-static std::string g_viewer_html;
-static json g_config;
-
 // -------------------------------------------------------------------------
-// Histogram storage
+// Histogram types
 // -------------------------------------------------------------------------
 struct HistConfig {
-    float time_min  = 170;      // peak time range in ns (for integral histogram)
+    float time_min  = 170;
     float time_max  = 190;
-    float bin_min   = 0;        // integral histogram range
+    float bin_min   = 0;
     float bin_max   = 20000;
     float bin_step  = 100;
-    float threshold = 3.0;      // minimum peak height (ADC above pedestal)
-    // peak position histogram
-    float pos_min   = 0;        // ns
-    float pos_max   = 400;      // ns
-    float pos_step  = 4;        // ns
+    float threshold = 3.0;
+    float pos_min   = 0;
+    float pos_max   = 400;
+    float pos_step  = 4;
 };
 
 struct Histogram {
-    int underflow = 0;
-    int overflow  = 0;
+    int underflow = 0, overflow = 0;
     std::vector<int> bins;
-
-    void init(int nbins) { bins.assign(nbins, 0); underflow = overflow = 0; }
-
-    void fill(float value, float bin_min, float bin_step)
-    {
-        if (value < bin_min) { ++underflow; return; }
-        int b = static_cast<int>((value - bin_min) / bin_step);
+    void init(int n) { bins.assign(n, 0); underflow = overflow = 0; }
+    void fill(float v, float bmin, float bstep) {
+        if (v < bmin) { ++underflow; return; }
+        int b = (int)((v - bmin) / bstep);
         if (b >= (int)bins.size()) { ++overflow; return; }
         ++bins[b];
     }
 };
 
+// -------------------------------------------------------------------------
+// Data container: holds everything for one loaded file
+// -------------------------------------------------------------------------
+struct FileData {
+    std::string filepath;
+    std::vector<EventIndex> index;
+    std::map<std::string, Histogram> histograms;
+    std::map<std::string, Histogram> pos_histograms;
+    int hist_events_processed = 0;
+};
+
+// -------------------------------------------------------------------------
+// Loading progress
+// -------------------------------------------------------------------------
+struct Progress {
+    std::atomic<bool> loading{false};
+    std::atomic<int>  phase{0};         // 0=idle, 1=indexing, 2=histograms
+    std::atomic<int>  current{0};       // buffers or events processed so far
+    std::atomic<int>  total{0};         // estimated total (0 if unknown)
+    std::string       target_file;      // file being loaded
+    std::mutex        mtx;              // protects target_file
+
+    json toJson() {
+        std::lock_guard<std::mutex> lk(mtx);
+        return {
+            {"loading", loading.load()},
+            {"phase", phase == 1 ? "indexing" : phase == 2 ? "histograms" : "idle"},
+            {"current", current.load()},
+            {"total", total.load()},
+            {"file", target_file},
+        };
+    }
+
+    void setFile(const std::string &f) {
+        std::lock_guard<std::mutex> lk(mtx);
+        target_file = f;
+    }
+};
+
+// -------------------------------------------------------------------------
+// Globals
+// -------------------------------------------------------------------------
+static std::shared_ptr<FileData> g_data;  // current active data (read by HTTP threads)
+static std::mutex g_data_mtx;             // protects swap of g_data pointer
+static std::thread g_load_thread;         // background loading thread
+static std::mutex g_load_mtx;             // protects g_load_thread join
+
 static HistConfig g_hist_cfg;
 static bool g_hist_enabled = false;
-static std::map<std::string, Histogram> g_histograms;      // integral histograms
-static std::map<std::string, Histogram> g_pos_histograms;   // peak position histograms
-static int g_hist_nbins = 0;
-static int g_pos_nbins  = 0;
-static int g_hist_events_processed = 0;
+static int  g_hist_nbins = 0, g_pos_nbins = 0;
+
+static std::string g_data_dir;            // sandboxed data directory (empty = disabled)
+static std::string g_viewer_html;
+static json g_base_config;                // config without per-file fields
+static Progress g_progress;
 
 // -------------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------------
-static std::string readFile(const std::string &path)
-{
+static std::string readFile(const std::string &path) {
     std::ifstream f(path);
     if (!f) return "";
     return {std::istreambuf_iterator<char>(f), {}};
 }
 
-static std::string findFile(const std::string &name, const std::string &base_dir)
-{
+static std::string findFile(const std::string &name, const std::string &base) {
     { std::ifstream f(name); if (f.good()) return name; }
-    std::string p = base_dir + "/" + name;
+    std::string p = base + "/" + name;
     { std::ifstream f(p); if (f.good()) return p; }
     return "";
 }
 
 // -------------------------------------------------------------------------
-// Index the evio file
+// File listing (sandboxed)
 // -------------------------------------------------------------------------
-static void buildIndex(const std::string &path)
+static json listFiles(const std::string &data_dir)
 {
-    g_filepath = path;
-    g_index.clear();
+    json files = json::array();
+    if (data_dir.empty()) return files;
 
-    EvChannel ch;
-    if (ch.Open(path) != status::success) {
-        std::cerr << "Failed to open " << path << "\n";
-        return;
+    try {
+        fs::path root(data_dir);
+        for (auto &entry : fs::recursive_directory_iterator(root,
+                fs::directory_options::skip_permission_denied)) {
+            if (!entry.is_regular_file()) continue;
+            // match: *.evio, *.evio.0, *.evio.00000, etc.
+            std::string fname = entry.path().filename().string();
+            if (fname.find(".evio") == std::string::npos) continue;
+            {
+                // relative path from data_dir
+                auto rel = fs::relative(entry.path(), root).string();
+                auto sz = entry.file_size();
+                files.push_back({
+                    {"path", rel},
+                    {"size", sz},
+                    {"size_mb", std::round(sz / 1048576.0 * 10) / 10},
+                });
+            }
+        }
+    } catch (const std::exception &e) {
+        std::cerr << "listFiles error: " << e.what() << "\n";
     }
 
+    // sort by path
+    std::sort(files.begin(), files.end(),
+        [](const json &a, const json &b) { return a["path"] < b["path"]; });
+    return files;
+}
+
+// -------------------------------------------------------------------------
+// Validate a requested file path (prevent directory traversal)
+// -------------------------------------------------------------------------
+static std::string resolveDataFile(const std::string &relpath)
+{
+    if (g_data_dir.empty()) return "";
+    try {
+        fs::path full = fs::canonical(fs::path(g_data_dir) / relpath);
+        fs::path root = fs::canonical(fs::path(g_data_dir));
+        // must be under root
+        auto rootStr = root.string();
+        if (full.string().rfind(rootStr, 0) != 0) return "";
+        if (!fs::is_regular_file(full)) return "";
+        return full.string();
+    } catch (...) { return ""; }
+}
+
+// -------------------------------------------------------------------------
+// Build index for a file
+// -------------------------------------------------------------------------
+static void buildIndex(const std::string &path, std::vector<EventIndex> &index,
+                       Progress &prog)
+{
+    index.clear();
+    EvChannel ch;
+    if (ch.Open(path) != status::success) return;
+
+    prog.phase = 1;
+    prog.current = 0;
     int buf = 0;
     while (ch.Read() == status::success) {
         ++buf;
+        prog.current = buf;
         if (!ch.Scan()) continue;
         for (int i = 0; i < ch.GetNEvents(); ++i)
-            g_index.push_back({buf, i});
+            index.push_back({buf, i});
     }
     ch.Close();
-    std::cerr << "Indexed " << g_index.size() << " events in " << buf << " buffers\n";
+    prog.total = (int)index.size();
 }
 
 // -------------------------------------------------------------------------
-// Fill a single event's channels into histograms
+// Build histograms
 // -------------------------------------------------------------------------
-static void fillHistEvent(fdec::EventData &event, fdec::WaveAnalyzer &ana,
-                          fdec::WaveResult &wres)
+static void buildHistograms(const std::string &path,
+                            std::map<std::string, Histogram> &hists,
+                            std::map<std::string, Histogram> &pos_hists,
+                            int &events_out, Progress &prog)
 {
-    for (int r = 0; r < event.nrocs; ++r) {
-        auto &roc = event.rocs[r];
-        if (!roc.present) continue;
-
-        for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
-            if (!roc.slots[s].present) continue;
-            auto &slot = roc.slots[s];
-
-            for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                if (!(slot.channel_mask & (1u << c))) continue;
-                auto &cd = slot.channels[c];
-                if (cd.nsamples <= 0) continue;
-
-                ana.Analyze(cd.samples, cd.nsamples, wres);
-
-                std::string key = std::to_string(roc.tag) + "_"
-                                + std::to_string(s) + "_" + std::to_string(c);
-
-                // --- integral histogram: largest peak within time cut ---
-                float best_integral = -1;
-                for (int p = 0; p < wres.npeaks; ++p) {
-                    auto &pk = wres.peaks[p];
-                    if (pk.height < g_hist_cfg.threshold) continue;
-                    if (pk.time < g_hist_cfg.time_min || pk.time > g_hist_cfg.time_max) continue;
-                    if (pk.integral > best_integral)
-                        best_integral = pk.integral;
-                }
-                if (best_integral >= 0) {
-                    auto &h = g_histograms[key];
-                    if (h.bins.empty()) h.init(g_hist_nbins);
-                    h.fill(best_integral, g_hist_cfg.bin_min, g_hist_cfg.bin_step);
-                }
-
-                // --- position histogram: all peaks above threshold, no time cut ---
-                for (int p = 0; p < wres.npeaks; ++p) {
-                    auto &pk = wres.peaks[p];
-                    if (pk.height < g_hist_cfg.threshold) continue;
-                    auto &ph = g_pos_histograms[key];
-                    if (ph.bins.empty()) ph.init(g_pos_nbins);
-                    ph.fill(pk.time, g_hist_cfg.pos_min, g_hist_cfg.pos_step);
-                }
-            }
-        }
-    }
-}
-
-// -------------------------------------------------------------------------
-// Build histograms: one full pass over all events
-// -------------------------------------------------------------------------
-static void buildHistograms()
-{
-    g_hist_nbins = std::max(1, (int)std::ceil(
-        (g_hist_cfg.bin_max - g_hist_cfg.bin_min) / g_hist_cfg.bin_step));
-    g_pos_nbins = std::max(1, (int)std::ceil(
-        (g_hist_cfg.pos_max - g_hist_cfg.pos_min) / g_hist_cfg.pos_step));
-    g_histograms.clear();
-    g_pos_histograms.clear();
-    g_hist_events_processed = 0;
-
-    std::cerr << "Building histograms:\n"
-              << "  Integral: time [" << g_hist_cfg.time_min << ", " << g_hist_cfg.time_max
-              << "] ns, " << g_hist_nbins << " bins (" << g_hist_cfg.bin_min
-              << " to " << g_hist_cfg.bin_max << ", step " << g_hist_cfg.bin_step << ")\n"
-              << "  Position: " << g_pos_nbins << " bins ("
-              << g_hist_cfg.pos_min << " to " << g_hist_cfg.pos_max
-              << " ns, step " << g_hist_cfg.pos_step << " ns)\n";
+    hists.clear();
+    pos_hists.clear();
+    events_out = 0;
 
     EvChannel ch;
-    if (ch.Open(g_filepath) != status::success) {
-        std::cerr << "Failed to open file for histogram pass\n";
-        return;
-    }
+    if (ch.Open(path) != status::success) return;
 
     fdec::EventData event;
     fdec::WaveAnalyzer ana;
     fdec::WaveResult wres;
-    int buf = 0, total = 0;
 
+    prog.phase = 2;
+    prog.current = 0;
+
+    int buf = 0, total = 0;
     while (ch.Read() == status::success) {
         ++buf;
         if (!ch.Scan()) continue;
         for (int i = 0; i < ch.GetNEvents(); ++i) {
             if (!ch.DecodeEvent(i, event)) continue;
-            fillHistEvent(event, ana, wres);
             ++total;
+            prog.current = total;
+
+            // fill histograms
+            for (int r = 0; r < event.nrocs; ++r) {
+                auto &roc = event.rocs[r];
+                if (!roc.present) continue;
+                for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
+                    if (!roc.slots[s].present) continue;
+                    auto &slot = roc.slots[s];
+                    for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
+                        if (!(slot.channel_mask & (1u << c))) continue;
+                        auto &cd = slot.channels[c];
+                        if (cd.nsamples <= 0) continue;
+
+                        ana.Analyze(cd.samples, cd.nsamples, wres);
+
+                        std::string key = std::to_string(roc.tag) + "_"
+                                        + std::to_string(s) + "_" + std::to_string(c);
+
+                        // integral histogram
+                        float best = -1;
+                        for (int p = 0; p < wres.npeaks; ++p) {
+                            auto &pk = wres.peaks[p];
+                            if (pk.height < g_hist_cfg.threshold) continue;
+                            if (pk.time >= g_hist_cfg.time_min && pk.time <= g_hist_cfg.time_max)
+                                if (pk.integral > best) best = pk.integral;
+                        }
+                        if (best >= 0) {
+                            auto &h = hists[key];
+                            if (h.bins.empty()) h.init(g_hist_nbins);
+                            h.fill(best, g_hist_cfg.bin_min, g_hist_cfg.bin_step);
+                        }
+
+                        // position histogram
+                        for (int p = 0; p < wres.npeaks; ++p) {
+                            auto &pk = wres.peaks[p];
+                            if (pk.height < g_hist_cfg.threshold) continue;
+                            auto &ph = pos_hists[key];
+                            if (ph.bins.empty()) ph.init(g_pos_nbins);
+                            ph.fill(pk.time, g_hist_cfg.pos_min, g_hist_cfg.pos_step);
+                        }
+                    }
+                }
+            }
         }
-        // progress
-        if (buf % 100 == 0)
-            std::cerr << "  " << buf << " buffers, " << total << " events...\r" << std::flush;
     }
     ch.Close();
-    g_hist_events_processed = total;
-
-    std::cerr << "Histograms built: " << total << " events, "
-              << g_histograms.size() << " channels\n";
+    events_out = total;
 }
 
 // -------------------------------------------------------------------------
-// Decode one event → JSON (on-demand for viewer)
+// Load a file: index + optional histograms, then swap into g_data
+// -------------------------------------------------------------------------
+static void loadFileAsync(const std::string &filepath)
+{
+    g_progress.loading = true;
+    g_progress.setFile(filepath);
+    g_progress.phase = 0;
+    g_progress.current = 0;
+    g_progress.total = 0;
+
+    auto data = std::make_shared<FileData>();
+    data->filepath = filepath;
+
+    std::cerr << "Loading: " << filepath << "\n";
+
+    // index
+    buildIndex(filepath, data->index, g_progress);
+    std::cerr << "  Indexed " << data->index.size() << " events\n";
+
+    // histograms
+    if (g_hist_enabled) {
+        g_progress.total = (int)data->index.size();
+        buildHistograms(filepath, data->histograms, data->pos_histograms,
+                        data->hist_events_processed, g_progress);
+        std::cerr << "  Histograms: " << data->hist_events_processed << " events, "
+                  << data->histograms.size() << " channels\n";
+    }
+
+    // atomic swap
+    {
+        std::lock_guard<std::mutex> lk(g_data_mtx);
+        g_data = data;
+    }
+
+    g_progress.loading = false;
+    g_progress.phase = 0;
+    std::cerr << "  Ready\n";
+}
+
+// -------------------------------------------------------------------------
+// Decode one event → JSON (from current g_data)
 // -------------------------------------------------------------------------
 static json decodeEvent(int ev1)
 {
+    std::shared_ptr<FileData> data;
+    { std::lock_guard<std::mutex> lk(g_data_mtx); data = g_data; }
+    if (!data) return {{"error", "no file loaded"}};
+
     int idx = ev1 - 1;
-    if (idx < 0 || idx >= (int)g_index.size())
+    if (idx < 0 || idx >= (int)data->index.size())
         return {{"error", "event out of range"}};
 
-    auto &ei = g_index[idx];
+    auto &ei = data->index[idx];
     EvChannel ch;
-    if (ch.Open(g_filepath) != status::success)
+    if (ch.Open(data->filepath) != status::success)
         return {{"error", "cannot open file"}};
 
     for (int b = 0; b < ei.buffer_num; ++b)
@@ -262,11 +378,9 @@ static json decodeEvent(int ev1)
     for (int r = 0; r < event.nrocs; ++r) {
         auto &roc = event.rocs[r];
         if (!roc.present) continue;
-
         for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
             if (!roc.slots[s].present) continue;
             auto &slot = roc.slots[s];
-
             for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
                 if (!(slot.channel_mask & (1u << c))) continue;
                 auto &cd = slot.channels[c];
@@ -307,23 +421,36 @@ static json decodeEvent(int ev1)
 // -------------------------------------------------------------------------
 // Histogram API
 // -------------------------------------------------------------------------
-static json getHist(const std::map<std::string, Histogram> &hmap, const std::string &key)
+static json getHist(bool integral, const std::string &key)
 {
-    if (!g_hist_enabled)
-        return {{"error", "histograms not enabled (use --hist)"}};
+    std::shared_ptr<FileData> data;
+    { std::lock_guard<std::mutex> lk(g_data_mtx); data = g_data; }
+    if (!data || !g_hist_enabled)
+        return {{"bins", json::array()}, {"underflow", 0}, {"overflow", 0}, {"events", 0}};
 
+    auto &hmap = integral ? data->histograms : data->pos_histograms;
     auto it = hmap.find(key);
     if (it == hmap.end())
         return {{"bins", json::array()}, {"underflow", 0}, {"overflow", 0},
-                {"events", g_hist_events_processed}};
-
+                {"events", data->hist_events_processed}};
     auto &h = it->second;
-    return {
-        {"bins", h.bins},
-        {"underflow", h.underflow},
-        {"overflow", h.overflow},
-        {"events", g_hist_events_processed},
-    };
+    return {{"bins", h.bins}, {"underflow", h.underflow}, {"overflow", h.overflow},
+            {"events", data->hist_events_processed}};
+}
+
+// -------------------------------------------------------------------------
+// Build config JSON for current state
+// -------------------------------------------------------------------------
+static json buildConfig()
+{
+    std::shared_ptr<FileData> data;
+    { std::lock_guard<std::mutex> lk(g_data_mtx); data = g_data; }
+
+    json cfg = g_base_config;
+    cfg["total_events"] = data ? (int)data->index.size() : 0;
+    cfg["current_file"] = data ? data->filepath : "";
+    cfg["data_dir_enabled"] = !g_data_dir.empty();
+    return cfg;
 }
 
 // -------------------------------------------------------------------------
@@ -334,44 +461,77 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
     auto con = srv->get_con_from_hdl(hdl);
     std::string uri = con->get_resource();
 
-    if (uri == "/") {
+    auto reply = [&](const std::string &body, const std::string &ct = "application/json") {
         con->set_status(websocketpp::http::status_code::ok);
-        con->set_body(g_viewer_html);
-        con->append_header("Content-Type", "text/html; charset=utf-8");
-        return;
-    }
+        con->set_body(body);
+        con->append_header("Content-Type", ct);
+    };
 
-    if (uri == "/api/config") {
-        con->set_status(websocketpp::http::status_code::ok);
-        con->set_body(g_config.dump());
-        con->append_header("Content-Type", "application/json");
-        return;
-    }
+    if (uri == "/") { reply(g_viewer_html, "text/html; charset=utf-8"); return; }
+
+    if (uri == "/api/config") { reply(buildConfig().dump()); return; }
 
     // /api/event/<num>
     if (uri.rfind("/api/event/", 0) == 0) {
         int evnum = std::atoi(uri.c_str() + 11);
-        con->set_status(websocketpp::http::status_code::ok);
-        con->set_body(decodeEvent(evnum).dump());
-        con->append_header("Content-Type", "application/json");
-        return;
+        reply(decodeEvent(evnum).dump()); return;
     }
 
-    // /api/hist/<roc>_<slot>_<ch>  — integral histogram
+    // /api/hist/<key>
     if (uri.rfind("/api/hist/", 0) == 0) {
-        std::string key = uri.substr(10);
-        con->set_status(websocketpp::http::status_code::ok);
-        con->set_body(getHist(g_histograms, key).dump());
-        con->append_header("Content-Type", "application/json");
-        return;
+        reply(getHist(true, uri.substr(10)).dump()); return;
     }
 
-    // /api/poshist/<roc>_<slot>_<ch>  — peak position histogram
+    // /api/poshist/<key>
     if (uri.rfind("/api/poshist/", 0) == 0) {
-        std::string key = uri.substr(13);
-        con->set_status(websocketpp::http::status_code::ok);
-        con->set_body(getHist(g_pos_histograms, key).dump());
-        con->append_header("Content-Type", "application/json");
+        reply(getHist(false, uri.substr(13)).dump()); return;
+    }
+
+    // /api/files — list .evio files under data-dir
+    if (uri == "/api/files") {
+        reply(json({{"files", listFiles(g_data_dir)}}).dump()); return;
+    }
+
+    // /api/progress — loading progress
+    if (uri == "/api/progress") {
+        reply(g_progress.toJson().dump()); return;
+    }
+
+    // /api/load?file=relative/path.evio — switch to a new file
+    if (uri.rfind("/api/load?file=", 0) == 0) {
+        if (g_data_dir.empty()) {
+            reply("{\"error\":\"file browsing not enabled (use --data-dir)\"}"); return;
+        }
+        bool expected = false;
+        if (!g_progress.loading.compare_exchange_strong(expected, true)) {
+            reply("{\"error\":\"already loading a file\"}"); return;
+        }
+        // loading flag is now true; loadFileAsync will clear it when done
+        // URL-decode (basic: replace + and %XX)
+        std::string raw = uri.substr(15);
+        std::string relpath;
+        for (size_t i = 0; i < raw.size(); ++i) {
+            if (raw[i] == '+') relpath += ' ';
+            else if (raw[i] == '%' && i + 2 < raw.size()) {
+                int hex = std::stoi(raw.substr(i+1, 2), nullptr, 16);
+                relpath += (char)hex;
+                i += 2;
+            } else relpath += raw[i];
+        }
+
+        std::string fullpath = resolveDataFile(relpath);
+        if (fullpath.empty()) {
+            reply("{\"error\":\"file not found or access denied\"}"); return;
+        }
+
+        // start background loading (join any previous load first)
+        {
+            std::lock_guard<std::mutex> lk(g_load_mtx);
+            if (g_load_thread.joinable()) g_load_thread.join();
+            g_load_thread = std::thread([fullpath]() { loadFileAsync(fullpath); });
+        }
+
+        reply(json({{"status", "loading"}, {"file", relpath}}).dump());
         return;
     }
 
@@ -385,7 +545,8 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <evio_file> [port] [--hist [config.json]]\n";
+        std::cerr << "Usage: " << argv[0]
+                  << " <evio_file> [port] [--hist [config.json]] [--data-dir /path]\n";
         return 1;
     }
 
@@ -393,20 +554,19 @@ int main(int argc, char *argv[])
     int port = 5050;
     std::string hist_config_file;
 
-    // parse args
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--hist") {
             g_hist_enabled = true;
-            // optional: next arg is config file if it doesn't start with '-'
             if (i + 1 < argc && argv[i+1][0] != '-')
                 hist_config_file = argv[++i];
+        } else if (arg == "--data-dir" && i + 1 < argc) {
+            g_data_dir = argv[++i];
         } else if (arg[0] != '-') {
             port = std::atoi(argv[i]);
         }
     }
 
-    // auto-discover paths
     std::string db_dir  = DATABASE_DIR;
     std::string res_dir = RESOURCE_DIR;
 
@@ -431,57 +591,50 @@ int main(int argc, char *argv[])
                 if (h.contains("pos_step"))  g_hist_cfg.pos_step  = h["pos_step"];
             }
             std::cerr << "Hist config: " << hist_config_file << "\n";
-        } else {
-            std::cerr << "Hist config: using defaults (no config file found)\n";
         }
     }
 
-    // index events
-    buildIndex(evio_file);
+    g_hist_nbins = std::max(1, (int)std::ceil(
+        (g_hist_cfg.bin_max - g_hist_cfg.bin_min) / g_hist_cfg.bin_step));
+    g_pos_nbins = std::max(1, (int)std::ceil(
+        (g_hist_cfg.pos_max - g_hist_cfg.pos_min) / g_hist_cfg.pos_step));
 
-    // build histograms if enabled (one full pass)
-    if (g_hist_enabled)
-        buildHistograms();
-
-    // load static files
-    std::string html_file = findFile("viewer.html", res_dir);
-    std::string mod_file  = findFile("hycal_modules.json", db_dir);
-    std::string daq_file  = findFile("daq_map.json", db_dir);
-
-    g_viewer_html = readFile(html_file);
+    // load viewer and database
+    g_viewer_html = readFile(findFile("viewer.html", res_dir));
     if (g_viewer_html.empty())
-        std::cerr << "Warning: viewer.html not found (tried " << res_dir << ")\n";
+        std::cerr << "Warning: viewer.html not found\n";
 
-    // build config JSON
     json modules_j = json::array(), daq_j = json::array();
-    { std::string s = readFile(mod_file);  if (!s.empty()) modules_j = json::parse(s, nullptr, false); }
-    { std::string s = readFile(daq_file);  if (!s.empty()) daq_j     = json::parse(s, nullptr, false); }
+    { std::string s = readFile(findFile("hycal_modules.json", db_dir));
+      if (!s.empty()) modules_j = json::parse(s, nullptr, false); }
+    { std::string s = readFile(findFile("daq_map.json", db_dir));
+      if (!s.empty()) daq_j = json::parse(s, nullptr, false); }
 
-    g_config = {
+    // base config (file-independent fields)
+    g_base_config = {
         {"modules", modules_j},
         {"daq", daq_j},
         {"crate_roc", {{"0",0x80},{"1",0x82},{"2",0x84},{"3",0x86},{"4",0x88},{"5",0x8a},{"6",0x8c}}},
-        {"total_events", (int)g_index.size()},
+        {"mode", "file"},
         {"hist_enabled", g_hist_enabled},
     };
     if (g_hist_enabled) {
-        g_config["hist"] = {
-            {"time_min",  g_hist_cfg.time_min},
-            {"time_max",  g_hist_cfg.time_max},
-            {"bin_min",   g_hist_cfg.bin_min},
-            {"bin_max",   g_hist_cfg.bin_max},
-            {"bin_step",  g_hist_cfg.bin_step},
-            {"threshold", g_hist_cfg.threshold},
-            {"pos_min",   g_hist_cfg.pos_min},
-            {"pos_max",   g_hist_cfg.pos_max},
-            {"pos_step",  g_hist_cfg.pos_step},
-            {"events",    g_hist_events_processed},
+        g_base_config["hist"] = {
+            {"time_min", g_hist_cfg.time_min}, {"time_max", g_hist_cfg.time_max},
+            {"bin_min", g_hist_cfg.bin_min}, {"bin_max", g_hist_cfg.bin_max},
+            {"bin_step", g_hist_cfg.bin_step}, {"threshold", g_hist_cfg.threshold},
+            {"pos_min", g_hist_cfg.pos_min}, {"pos_max", g_hist_cfg.pos_max},
+            {"pos_step", g_hist_cfg.pos_step},
         };
     }
 
-    std::cerr << "Database  : " << db_dir << " ("
-              << modules_j.size() << " modules, " << daq_j.size() << " DAQ channels)\n"
+    std::cerr << "Database  : " << db_dir << "\n"
               << "Resources : " << res_dir << "\n";
+    if (!g_data_dir.empty())
+        std::cerr << "Data dir  : " << g_data_dir << "\n";
+
+    // load initial file (blocking)
+    loadFileAsync(evio_file);
 
     // start server
     WsServer server;
@@ -493,11 +646,21 @@ int main(int argc, char *argv[])
     server.listen(port);
     server.start_accept();
 
-    std::cout << "Viewer at http://localhost:" << port << "\n"
-              << "  " << g_index.size() << " events"
-              << (g_hist_enabled ? ", histograms enabled" : "") << "\n"
-              << "  Ctrl+C to stop\n";
+    {
+        auto data = g_data;
+        std::cout << "Viewer at http://localhost:" << port << "\n"
+                  << "  " << (data ? data->index.size() : 0) << " events"
+                  << (g_hist_enabled ? ", histograms enabled" : "")
+                  << (g_data_dir.empty() ? "" : ", file browser enabled") << "\n"
+                  << "  Ctrl+C to stop\n";
+    }
 
     server.run();
+
+    // clean shutdown: join any in-progress load thread
+    {
+        std::lock_guard<std::mutex> lk(g_load_mtx);
+        if (g_load_thread.joinable()) g_load_thread.join();
+    }
     return 0;
 }
