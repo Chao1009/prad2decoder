@@ -1,0 +1,10 @@
+{
+    "hist": {
+        "time_min": 170,
+        "time_max": 190,
+        "bin_min": 0,
+        "bin_max": 20000,
+        "bin_step": 100,
+        "threshold": 3.0
+    }
+}

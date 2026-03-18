@@ -39,10 +39,40 @@ cmake .. -DEVIO_SOURCE=prebuilt -DET_SOURCE=prebuilt
 # Open http://localhost:5050
 ```
 
-The viewer auto-discovers `database/hycal_modules.json` and `database/daq_map.json` at the compile-time `DATABASE_DIR` path. Override with:
+The viewer auto-discovers `database/hycal_modules.json` and `database/daq_map.json` at the compile-time `DATABASE_DIR` path.
+
+#### Histogram mode
+Use `--hist` to do a one-time pass over all events and accumulate peak integral histograms per channel. The largest peak within a configurable sample range is selected for each channel per event.
+
 ```bash
-./bin/evc_viewer data.evio 8080 --modules /path/to/hycal_modules.json --daq /path/to/daq_map.json
+# Use default config from database/hist_config.json
+./bin/evc_viewer data.evio --hist
+
+# Use a custom config file
+./bin/evc_viewer data.evio --hist my_hist_config.json
 ```
+
+Example `hist_config.json`:
+```json
+{
+    "hist": {
+        "time_min": 170,
+        "time_max": 190,
+        "bin_min": 0,
+        "bin_max": 20000,
+        "bin_step": 100,
+        "threshold": 3.0
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `time_min`, `time_max` | Sample range to search for peaks |
+| `bin_min`, `bin_max`, `bin_step` | Histogram axis range and bin width |
+| `threshold` | Minimum peak height (ADC above pedestal) to count |
+
+Without `--hist`, the histogram panel in the GUI shows empty.
 
 ## Project Structure
 
@@ -51,6 +81,7 @@ CMakeLists.txt
 database/
     daq_map.json              DAQ channel map (crate/slot/channel → module)
     hycal_modules.json        Module geometry (name, type, position, size)
+    hist_config.json          Histogram accumulation settings (optional)
 prad2dec/                     Static library: libprad2dec.a
     include/
         EvStruct.h            Evio header parsers and EvNode tree structure

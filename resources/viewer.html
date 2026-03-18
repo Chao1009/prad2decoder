@@ -74,7 +74,13 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
 .hdivider:hover, .hdivider.active { background:var(--accent); }
 
 .peaks-table-wrap {
-    flex:1; overflow-y:auto; font-size:12px; min-height:80px;
+    flex:1; overflow-y:auto; font-size:12px; min-height:60px; min-width:0;
+}
+.bottom-panel {
+    flex:1; display:flex; flex-direction:row; min-height:80px; overflow:hidden;
+}
+.hist-wrap {
+    flex:1; min-width:200px; min-height:80px; border-left:1px solid var(--border);
 }
 .peaks-table { width:100%; border-collapse:collapse; }
 .peaks-table th {
@@ -141,14 +147,17 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
         </div>
         <div class="waveform-wrap" id="waveform-div"></div>
         <div class="hdivider" id="hdivider"></div>
-        <div class="peaks-table-wrap" id="peaks-wrap">
-            <table class="peaks-table">
-                <thead><tr>
-                    <th>#</th><th>Pos</th><th>Time (ns)</th><th>Height</th>
-                    <th>Integral</th><th>Left</th><th>Right</th><th>OVF</th>
-                </tr></thead>
-                <tbody id="peaks-tbody"></tbody>
-            </table>
+        <div class="bottom-panel" id="bottom-panel">
+            <div class="peaks-table-wrap" id="peaks-wrap">
+                <table class="peaks-table">
+                    <thead><tr>
+                        <th>#</th><th>Pos</th><th>Time (ns)</th><th>Height</th>
+                        <th>Integral</th><th>Left</th><th>Right</th><th>OVF</th>
+                    </tr></thead>
+                    <tbody id="peaks-tbody"></tbody>
+                </table>
+            </div>
+            <div class="hist-wrap" id="hist-div"></div>
         </div>
     </div>
 </div>
@@ -169,6 +178,8 @@ const CRATE_NAME = {
     0x88:'adchycal5', 0x8a:'adchycal6', 0x8c:'adchycal7',
 };
 function crateName(roc) { return CRATE_NAME[roc] || `ROC 0x${roc.toString(16)}`; }
+
+let histEnabled = false, histConfig = {};
 
 // =========================================================================
 // Color scale
@@ -286,6 +297,7 @@ function showWaveform(mod) {
         }, PLOT_CFG);
         document.getElementById('peaks-tbody').innerHTML =
             '<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:8px">No data</td></tr>';
+        showHistogram(mod);
         drawGeo(); return;
     }
 
@@ -331,7 +343,62 @@ function showWaveform(mod) {
         rows += `<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:8px">No peaks</td></tr>`;
     }
     document.getElementById('peaks-tbody').innerHTML = rows;
+    showHistogram(mod);
     drawGeo();
+}
+
+// =========================================================================
+// Histogram display
+// =========================================================================
+const HIST_LAYOUT = {
+    paper_bgcolor:'#1a1a2e', plot_bgcolor:'#11112a',
+    font:{family:'Consolas, monospace', size:10, color:'#aaa'},
+    margin:{l:45, r:10, t:26, b:34},
+    title:{text:'', font:{size:11, color:'#ccc'}},
+    xaxis:{title:'Peak Integral', gridcolor:'#1a1a3a', zerolinecolor:'#222'},
+    yaxis:{title:'Counts', gridcolor:'#1a1a3a', zerolinecolor:'#222'},
+    bargap:0.05,
+};
+
+function showHistogram(mod) {
+    if (!histEnabled) {
+        Plotly.react('hist-div', [], {
+            ...HIST_LAYOUT, title:{text:'Histograms disabled', font:{size:11, color:'#444'}},
+        }, PLOT_CFG);
+        return;
+    }
+
+    const key = `${mod.roc}_${mod.sl}_${mod.ch}`;
+    fetch(`/api/hist/${key}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error || !data.bins || data.bins.length === 0) {
+                Plotly.react('hist-div', [], {
+                    ...HIST_LAYOUT,
+                    title:{text:`${mod.n} — No histogram data`, font:{size:11, color:'#555'}},
+                }, PLOT_CFG);
+                return;
+            }
+            const step = histConfig.bin_step || 100;
+            const bmin = histConfig.bin_min || 0;
+            const x = data.bins.map((_,i) => bmin + (i + 0.5) * step);
+            const title = `${mod.n} — ${data.events} events`
+                + (data.underflow ? ` (UF:${data.underflow})` : '')
+                + (data.overflow ? ` (OF:${data.overflow})` : '');
+            Plotly.react('hist-div', [{
+                x, y:data.bins, type:'bar',
+                marker:{color:'#00b4d8', line:{width:0}},
+                hovertemplate:'%{x:.0f}: %{y}<extra></extra>',
+            }], {
+                ...HIST_LAYOUT,
+                title:{text:title, font:{size:11, color:'#ccc'}},
+            }, PLOT_CFG);
+        })
+        .catch(() => {
+            Plotly.react('hist-div', [], {
+                ...HIST_LAYOUT, title:{text:'Histogram fetch error', font:{size:11, color:'#f66'}},
+            }, PLOT_CFG);
+        });
 }
 
 // =========================================================================
@@ -377,6 +444,7 @@ function init() {
 
     // create an empty plot so Plotly.react always has a valid target
     Plotly.newPlot('waveform-div', [], PLOT_LAYOUT, PLOT_CFG);
+    Plotly.newPlot('hist-div', [], HIST_LAYOUT, PLOT_CFG);
 
     // --- draggable divider ---
     const divider = document.getElementById('divider');
@@ -399,6 +467,7 @@ function init() {
         geoPanel.style.width = Math.max(min, Math.min(max, x)) + 'px';
         resizeGeo();
         Plotly.Plots.resize('waveform-div');
+        Plotly.Plots.resize('hist-div');
     });
     document.addEventListener('mouseup', () => {
         if (!dragging) return;
@@ -429,6 +498,7 @@ function init() {
         const min = 100, max = rect.height - hdr - 80;
         wfDiv.style.height = Math.max(min, Math.min(max, y)) + 'px';
         Plotly.Plots.resize('waveform-div');
+        Plotly.Plots.resize('hist-div');
     });
     document.addEventListener('mouseup', () => {
         if (!hdragging) return;
@@ -493,9 +563,12 @@ function init() {
             }
         }
         totalEvents = data.total_events||0;
+        histEnabled = data.hist_enabled||false;
+        histConfig = data.hist||{};
         document.getElementById('ev-total').textContent = `/ ${totalEvents}`;
+        const histInfo = histEnabled ? ` · hist [${histConfig.time_min}-${histConfig.time_max}]` : '';
         document.getElementById('header-info').textContent =
-            `${modules.length} modules · ${totalEvents} events · ${Object.keys(crateRoc).length} crates`;
+            `${modules.length} modules · ${totalEvents} events · ${Object.keys(crateRoc).length} crates${histInfo}`;
         resizeGeo();
         if (totalEvents>0) loadEvent(1);
     });
