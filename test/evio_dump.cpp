@@ -17,6 +17,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <bitset>
 #include <cstdlib>
 
 using namespace evc;
@@ -251,7 +252,7 @@ static int doEvent(EvChannel &ch, int target)
         ch.PrintTree(std::cout);
 
         // if physics, try decoding
-        if (hdr.tag >= 0xFF50 && hdr.tag <= 0xFF8F) {
+        if (ch.GetNEvents() > 0) {
             std::cout << "\n--- Physics Decode ---\n";
             std::cout << "Sub-events in block: " << ch.GetNEvents() << "\n";
 
@@ -263,8 +264,13 @@ static int doEvent(EvChannel &ch, int target)
                 }
 
                 std::cout << "  sub-event " << i
-                          << ": trigger=" << evt.info.trigger_number
+                          << ": event#=" << evt.info.event_number
+                          << " trigger#=" << evt.info.trigger_number
+                          << " trigger_bits=0x" << std::hex
+                          << (int)evt.info.trigger_bits << std::dec
                           << " timestamp=" << evt.info.timestamp
+                          << " run=" << evt.info.run_number
+                          << " unix_time=" << evt.info.unix_time
                           << " rocs=" << evt.nrocs << "\n";
 
                 for (int r = 0; r < evt.nrocs; ++r) {
@@ -324,6 +330,53 @@ static int doEvent(EvChannel &ch, int target)
     return 1;
 }
 
+// --- mode: triggers ---------------------------------------------------------
+static int doTriggers(EvChannel &ch)
+{
+    fdec::EventData evt;
+    int record = 0, decoded = 0;
+    std::map<uint8_t, int> trig_counts;
+
+    std::cout << std::setw(8) << "event#"
+              << std::setw(10) << "trigger#"
+              << std::setw(14) << "trigger_bits"
+              << std::setw(18) << "timestamp"
+              << std::setw(8) << "rocs"
+              << "\n";
+    std::cout << std::string(58, '-') << "\n";
+
+    while (ch.Read() == status::success) {
+        record++;
+        if (!ch.Scan()) continue;
+        if (ch.GetNEvents() == 0) continue;
+
+        for (int i = 0; i < ch.GetNEvents(); ++i) {
+            if (!ch.DecodeEvent(i, evt)) continue;
+            decoded++;
+            trig_counts[evt.info.trigger_bits]++;
+
+            std::cout << std::setw(8) << evt.info.event_number
+                      << std::setw(10) << evt.info.trigger_number
+                      << "        0x" << std::hex << std::setw(2)
+                      << std::setfill('0') << (int)evt.info.trigger_bits
+                      << std::dec << std::setfill(' ')
+                      << std::setw(18) << evt.info.timestamp
+                      << std::setw(8) << evt.nrocs
+                      << "\n";
+        }
+    }
+
+    std::cout << "\n=== Trigger Bits Summary (" << decoded << " events) ===\n";
+    for (auto &[bits, cnt] : trig_counts) {
+        std::cout << "  0x" << std::hex << std::setw(2) << std::setfill('0')
+                  << (int)bits << std::dec << std::setfill(' ')
+                  << "  (" << std::bitset<8>(bits) << ")"
+                  << "  count=" << cnt << "\n";
+    }
+
+    return 0;
+}
+
 // --- main -------------------------------------------------------------------
 static void usage(const char *prog)
 {
@@ -334,7 +387,8 @@ static void usage(const char *prog)
         << "  " << prog << " <file> --tree [--num N]      Print bank tree (default N=5)\n"
         << "  " << prog << " <file> --tags                List all unique bank tags with stats\n"
         << "  " << prog << " <file> --epics               Dump all EPICS event text\n"
-        << "  " << prog << " <file> --event N             Detailed dump of record N (1-based)\n";
+        << "  " << prog << " <file> --event N             Detailed dump of record N (1-based)\n"
+        << "  " << prog << " <file> --triggers            List trigger info for all events\n";
 }
 
 int main(int argc, char *argv[])
@@ -362,6 +416,9 @@ int main(int argc, char *argv[])
     }
     else if (mode == "--epics") {
         rc = doEpics(ch);
+    }
+    else if (mode == "--triggers") {
+        rc = doTriggers(ch);
     }
     else if (mode == "--event") {
         if (argc < 4) { usage(argv[0]); return 1; }

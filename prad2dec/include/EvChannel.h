@@ -64,6 +64,9 @@ public:
     const EvNode               &GetChild(const EvNode &n, size_t i) const { return nodes[n.child_first + i]; }
     std::vector<const EvNode*>  FindByTag(uint32_t tag) const;
 
+    // Find first node with given tag (no allocation). Returns nullptr if not found.
+    const EvNode *FindFirstByTag(uint32_t tag) const;
+
     const uint32_t *GetData(const EvNode &n) const { return &buffer[n.data_begin]; }
     const uint8_t  *GetBytes(const EvNode &n) const
     { return reinterpret_cast<const uint8_t*>(&buffer[n.data_begin]); }

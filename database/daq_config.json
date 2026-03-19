@@ -2,9 +2,8 @@
     "_comment": "DAQ configuration for prad2decoder — derived from prad_023109.evio analysis",
 
     "event_tags": {
-        "_comment": "0x00FE = single-event CODA mode (num field = session ID, not event count)",
-        "physics_min":  "0x00FE",
-        "physics_max":  "0x00FE",
+        "_comment": "JLab CODA single-event tags: 0xB1 or 0xFE. Built-trigger 0xFF50-0xFF8F handled automatically.",
+        "physics":      ["0xB1", "0xFE"],
         "prestart":     "0x11",
         "go":           "0x12",
         "end":          "0x14",

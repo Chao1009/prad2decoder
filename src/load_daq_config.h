@@ -41,8 +41,11 @@ inline bool load_daq_config(const std::string &path, DaqConfig &cfg)
     // event tags
     if (j.contains("event_tags")) {
         auto &et = j["event_tags"];
-        if (et.contains("physics_min"))  cfg.physics_tag_min = parse_hex(et["physics_min"]);
-        if (et.contains("physics_max"))  cfg.physics_tag_max = parse_hex(et["physics_max"]);
+        if (et.contains("physics")) {
+            cfg.physics_tags.clear();
+            for (auto &v : et["physics"])
+                cfg.physics_tags.push_back(parse_hex(v));
+        }
         if (et.contains("prestart"))     cfg.prestart_tag    = parse_hex(et["prestart"]);
         if (et.contains("go"))           cfg.go_tag          = parse_hex(et["go"]);
         if (et.contains("end"))          cfg.end_tag         = parse_hex(et["end"]);

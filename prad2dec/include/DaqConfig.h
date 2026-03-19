@@ -20,11 +20,10 @@ struct DaqConfig
 {
     // --- event type identification (top-level bank tag ranges) ---------------
 
-    // physics event tag range
-    // PRad uses 0xFE (single-event CODA mode, num = session ID)
-    // CODA built-trigger uses 0xFF50-0xFF8F (num = event count)
-    uint32_t physics_tag_min  = 0x00FE;
-    uint32_t physics_tag_max  = 0x00FE;
+    // physics event tags (JLab CODA convention)
+    // Single-event mode: 0xB1 or 0xFE (depends on CODA event writer)
+    // Built-trigger mode: 0xFF50-0xFF8F (num = event count)
+    std::vector<uint32_t> physics_tags = {0x00B1, 0x00FE};
 
     // control event tags
     uint32_t prestart_tag     = 0x11;
@@ -65,6 +64,14 @@ struct DaqConfig
     uint32_t ti_time_high_mask  = 0xFFFF0000;
     int      ti_time_high_shift = 16;   // right-shift before combining
 
+    // --- trigger type extraction from TI bank --------------------------------
+    // PRad-I: trigger bits in TI data[2] >> 24 (old format with 2 extra headers)
+    // PRad-II: likely TI word[0] >> 24 (header encodes event/trigger type)
+    // Set to -1 to disable trigger type extraction.
+    int ti_trigger_type_word  = 0;
+    int ti_trigger_type_shift = 24;
+    uint32_t ti_trigger_type_mask = 0xFF;
+
     // --- trigger bank format (tag 0xC000) -----------------------------------
     int trig_event_number_word = 0;
     int trig_event_type_word   = 1;
@@ -87,7 +94,11 @@ struct DaqConfig
     // --- helpers ------------------------------------------------------------
     bool is_physics(uint32_t tag) const
     {
-        return tag >= physics_tag_min && tag <= physics_tag_max;
+        // single-event tags
+        for (auto t : physics_tags)
+            if (tag == t) return true;
+        // built-trigger range
+        return (tag >= 0xFF50 && tag <= 0xFF8F);
     }
 
     bool is_control(uint32_t tag) const
@@ -113,12 +124,12 @@ enum class EventType : uint8_t {
 
 inline EventType classify_event(uint32_t tag, const DaqConfig &cfg)
 {
-    if (cfg.is_physics(tag)) return EventType::Physics;
-    if (cfg.is_sync(tag))    return EventType::Sync;
-    if (cfg.is_epics(tag))   return EventType::Epics;
     if (tag == cfg.prestart_tag) return EventType::Prestart;
     if (tag == cfg.go_tag)       return EventType::Go;
     if (tag == cfg.end_tag)      return EventType::End;
+    if (cfg.is_sync(tag))        return EventType::Sync;
+    if (cfg.is_epics(tag))       return EventType::Epics;
+    if (cfg.is_physics(tag))     return EventType::Physics;
     if (cfg.is_control(tag))     return EventType::Control;
     return EventType::Unknown;
 }
