@@ -11,6 +11,7 @@
 #include "EvChannel.h"
 #include "EvStruct.h"
 #include "Fadc250Data.h"
+#include "load_daq_config.h"
 #include <iostream>
 #include <iomanip>
 #include <string>
@@ -414,7 +415,9 @@ static void usage(const char *prog)
         << "  " << prog << " <file> --tags                List all unique bank tags with stats\n"
         << "  " << prog << " <file> --epics               Dump all EPICS event text\n"
         << "  " << prog << " <file> --event N             Detailed dump of record N (1-based)\n"
-        << "  " << prog << " <file> --triggers            List trigger info for all events\n";
+        << "  " << prog << " <file> --triggers            List trigger info for all events\n"
+        << "\nOptions:\n"
+        << "  -D <daq_config.json>    Load DAQ configuration (for PRad etc.)\n";
 }
 
 int main(int argc, char *argv[])
@@ -422,9 +425,27 @@ int main(int argc, char *argv[])
     if (argc < 2) { usage(argv[0]); return 1; }
 
     std::string path = argv[1];
-    std::string mode = (argc > 2) ? argv[2] : "";
+    std::string mode;
+    std::string daq_config_file;
+
+    // parse args: file, mode, and optional -D
+    for (int i = 2; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "-D" && i + 1 < argc) { daq_config_file = argv[++i]; }
+        else if (mode.empty()) { mode = a; }
+    }
+
+    evc::DaqConfig daq_cfg;
+    if (!daq_config_file.empty()) {
+        if (evc::load_daq_config(daq_config_file, daq_cfg))
+            std::cerr << "DAQ config: " << daq_config_file
+                      << " (adc_format=" << daq_cfg.adc_format << ")\n";
+        else
+            std::cerr << "Warning: failed to load DAQ config\n";
+    }
 
     EvChannel ch;
+    ch.SetConfig(daq_cfg);
     if (ch.Open(path) != status::success) {
         std::cerr << "Failed to open: " << path << "\n";
         return 1;
@@ -447,8 +468,11 @@ int main(int argc, char *argv[])
         rc = doTriggers(ch);
     }
     else if (mode == "--event") {
-        if (argc < 4) { usage(argv[0]); return 1; }
-        rc = doEvent(ch, std::atoi(argv[3]));
+        int evnum = 1;
+        for (int i = 2; i < argc; ++i)
+            if (argv[i][0] != '-' && std::string(argv[i]) != path && std::string(argv[i]) != "--event")
+                evnum = std::atoi(argv[i]);
+        rc = doEvent(ch, evnum);
     }
     else {
         rc = doSummary(ch);
