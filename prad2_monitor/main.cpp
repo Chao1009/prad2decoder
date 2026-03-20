@@ -2,8 +2,8 @@
 // prad2_monitor – Lightweight Qt WebEngine client for PRad2 event viewer/monitor
 //
 // Usage:
-//   prad2_monitor                        # http://localhost:5050
-//   prad2_monitor -H clonpc19            # http://clonpc19:5050
+//   prad2_monitor                        # http://localhost:5051
+//   prad2_monitor -H clonpc19            # http://clonpc19:5051
 //   prad2_monitor -H clonpc19 -p 8080   # http://clonpc19:8080
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -23,7 +23,7 @@ static void printUsage(const char *prog)
         << "  " << prog << " [-H host] [-p port]\n"
         << "\nOptions:\n"
         << "  -H <host>   Server hostname (default: localhost)\n"
-        << "  -p <port>   Server port (default: 5050)\n"
+        << "  -p <port>   Server port (default: 5051)\n"
         << "  -h          Show this help\n";
 }
 
@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
     app.setApplicationVersion("1.0.0");
 
     std::string host = "localhost";
-    std::string port = "5050";
+    std::string port = "5051";
 
     optind = 1;
     int opt;
