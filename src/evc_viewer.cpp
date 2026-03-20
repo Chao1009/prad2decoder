@@ -149,6 +149,7 @@ static evc::DaqConfig g_daq_cfg;              // DAQ configuration (default = PR
 
 static fdec::HyCalSystem g_hycal;
 static fdec::ClusterConfig g_cluster_cfg;
+static fdec::ClusterConfig g_island_cfg;
 static float g_adc_to_mev = 1.0f;
 static std::unordered_map<int, int> g_roc_to_crate;  // ROC tag → crate index
 
@@ -513,7 +514,7 @@ static json computeClusters(int ev1)
 
     // per-request clusterer (lightweight, no mutex needed)
     fdec::HyCalCluster clusterer(g_hycal);
-    clusterer.SetConfig(g_cluster_cfg);
+    clusterer.SetConfig(g_island_cfg);
 
     // collect per-module energies
     int nmod = g_hycal.module_count();
@@ -976,17 +977,20 @@ int main(int argc, char *argv[])
     std::string reco_str = readFile(reco_file);
     if (!reco_str.empty()) {
         auto rcfg = json::parse(reco_str, nullptr, false);
-        if (rcfg.contains("hycal_cluster")) {
-            auto &hc = rcfg["hycal_cluster"];
-            if (hc.contains("min_module_energy"))  g_cluster_cfg.min_module_energy  = hc["min_module_energy"];
-            if (hc.contains("min_center_energy"))  g_cluster_cfg.min_center_energy  = hc["min_center_energy"];
-            if (hc.contains("min_cluster_energy")) g_cluster_cfg.min_cluster_energy = hc["min_cluster_energy"];
-            if (hc.contains("min_cluster_size"))    g_cluster_cfg.min_cluster_size   = hc["min_cluster_size"];
-            if (hc.contains("corner_conn"))         g_cluster_cfg.corner_conn        = hc["corner_conn"];
-            if (hc.contains("split_iter"))          g_cluster_cfg.split_iter         = hc["split_iter"];
-            if (hc.contains("least_split"))         g_cluster_cfg.least_split        = hc["least_split"];
-            if (hc.contains("log_weight_thres"))    g_cluster_cfg.log_weight_thres   = hc["log_weight_thres"];
-        }
+        auto loadClCfg = [](const json &hc, fdec::ClusterConfig &cfg) {
+            if (hc.contains("min_module_energy"))  cfg.min_module_energy  = hc["min_module_energy"];
+            if (hc.contains("min_center_energy"))  cfg.min_center_energy  = hc["min_center_energy"];
+            if (hc.contains("min_cluster_energy")) cfg.min_cluster_energy = hc["min_cluster_energy"];
+            if (hc.contains("min_cluster_size"))   cfg.min_cluster_size   = hc["min_cluster_size"];
+            if (hc.contains("corner_conn"))        cfg.corner_conn        = hc["corner_conn"];
+            if (hc.contains("split_iter"))         cfg.split_iter         = hc["split_iter"];
+            if (hc.contains("least_split"))        cfg.least_split        = hc["least_split"];
+            if (hc.contains("log_weight_thres"))   cfg.log_weight_thres   = hc["log_weight_thres"];
+        };
+        if (rcfg.contains("hycal_cluster"))
+            loadClCfg(rcfg["hycal_cluster"], g_cluster_cfg);
+        if (rcfg.contains("island_cluster"))
+            loadClCfg(rcfg["island_cluster"], g_island_cfg);
         if (rcfg.contains("calibration")) {
             auto &cal = rcfg["calibration"];
             if (cal.contains("adc_to_mev")) g_adc_to_mev = cal["adc_to_mev"];
