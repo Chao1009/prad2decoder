@@ -567,6 +567,36 @@ static json computeClusters(int ev1)
         }
     }
 
+    // debug: count hits and energy range
+    {
+        auto d2 = g_data;
+        int idx2 = ev1 - 1;
+        if (d2 && idx2 >= 0 && idx2 < (int)d2->index.size()) {
+            auto &ei2 = d2->index[idx2];
+            std::cerr << "  decode: ev1=" << ev1
+                      << " buf=" << ei2.buffer_num
+                      << " sub=" << ei2.sub_event << "\n";
+        }
+    }
+    int nhits = 0;
+    float emin = 1e9f, emax = 0.f, esum = 0.f;
+    for (int i = 0; i < nmod; ++i) {
+        if (mod_energy[i] > 0.f) {
+            nhits++;
+            esum += mod_energy[i];
+            if (mod_energy[i] < emin) emin = mod_energy[i];
+            if (mod_energy[i] > emax) emax = mod_energy[i];
+        }
+    }
+    std::cerr << "/api/clusters/" << ev1
+              << "  rocs=" << event.nrocs
+              << "  hits=" << nhits
+              << "  E=[" << (nhits ? emin : 0) << ", " << emax << "]"
+              << "  Esum=" << esum
+              << "  evnum=" << event.info.event_number
+              << "  trigger=" << event.info.trigger_number
+              << "\n";
+
     clusterer.FormClusters();
 
     // build hits map (module index → energy, only non-zero)
