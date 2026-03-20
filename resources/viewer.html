@@ -90,8 +90,12 @@
             <input type="checkbox" id="cl-log-scale" checked>
             <div class="color-bar">
                 <span class="range-val" id="cl-range-min-show">0</span>
+                <input class="range-edit" id="cl-range-min-edit" type="number" step="any">
+                <span class="range-btn" id="cl-range-min-btn" title="Edit min">&#x270E;</span>
                 <canvas id="cl-colorbar-canvas" width="120" height="12" style="cursor:pointer"></canvas>
                 <span class="range-val" id="cl-range-max-show">max</span>
+                <input class="range-edit" id="cl-range-max-edit" type="number" step="any">
+                <span class="range-btn" id="cl-range-max-btn" title="Edit max">&#x270E;</span>
             </div>
             <span style="margin-left:auto;color:var(--dim);font-size:11px" id="cl-summary"></span>
         </div>

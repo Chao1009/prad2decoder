@@ -30,6 +30,7 @@ let activeTab='dq';  // 'dq' or 'cluster'
 let clusterData=null;  // {hits:{}, clusters:[]}
 let selectedCluster=-1;  // -1 = all
 let clusterEvent=-1;  // event number for cached cluster data
+let clRangeMin=null, clRangeMax=null;  // null = auto from data
 
 // default ranges per metric (overridden by hist config)
 const RANGE_DEFAULTS={
@@ -782,11 +783,13 @@ function drawClusterGeo(){
     const clusters=clusterData.clusters||[];
     const useLog=document.getElementById('cl-log-scale').checked;
 
-    // find energy range from hits
-    let emax=0;
-    for(const k in hits) if(hits[k]>emax) emax=hits[k];
-    if(emax<=0) emax=1;
-    document.getElementById('cl-range-min-show').textContent='0';
+    // find energy range from hits (auto range)
+    let autoMax=0;
+    for(const k in hits) if(hits[k]>autoMax) autoMax=hits[k];
+    if(autoMax<=0) autoMax=1;
+    const emin=clRangeMin!==null?clRangeMin:0;
+    const emax=clRangeMax!==null?clRangeMax:autoMax;
+    document.getElementById('cl-range-min-show').textContent=emin.toFixed(0);
     document.getElementById('cl-range-max-show').textContent=emax.toFixed(0);
 
     // build module-index → cluster-index map
@@ -808,8 +811,10 @@ function drawClusterGeo(){
         if(selSet && !selSet.has(i)) dimmed=true;
 
         let fillColor;
+        const span=emax-emin||1;
         if(energy>0 && !dimmed){
-            let t=useLog?Math.log1p(energy)/Math.log1p(emax):energy/emax;
+            const clamped=Math.max(emin,Math.min(emax,energy));
+            let t=useLog?Math.log1p(clamped-emin)/Math.log1p(span):(clamped-emin)/span;
             t=Math.max(0,Math.min(1,t));
             fillColor=colorScale(t);
         } else {
@@ -933,7 +938,7 @@ function init(){
     });
 
     // --- range editing ---
-    function setupRangeEdit(btnId, editId, showId, isMax) {
+    function setupRangeEdit(btnId, editId, showId, getVal, setVal, onApply) {
         const btn=document.getElementById(btnId);
         const edit=document.getElementById(editId);
         const show=document.getElementById(showId);
@@ -942,7 +947,7 @@ function init(){
         function startEdit() {
             editing=true; btn.classList.add('editing'); btn.textContent='✓';
             edit.classList.add('active'); show.style.display='none';
-            edit.value=(isMax?rangeMax:rangeMin)||'';
+            edit.value=getVal()||'';
             edit.focus(); edit.select();
         }
         function applyEdit() {
@@ -950,16 +955,10 @@ function init(){
             editing=false; btn.classList.remove('editing'); btn.textContent='✎';
             edit.classList.remove('active'); show.style.display='';
             const v=parseFloat(edit.value);
-            if(isMax) rangeMax=isNaN(v)?null:v; else rangeMin=isNaN(v)?null:v;
-            if(!isNaN(v)){
-                rangeUserEdited=true;
-                const mt=document.getElementById('color-metric').value;
-                rangeUserOverrides[mt]=[rangeMin,rangeMax];
-            }
-            updateRangeDisplay(); drawGeo();
+            setVal(isNaN(v)?null:v);
+            onApply();
         }
 
-        // prevent button click from blurring the input first
         btn.addEventListener('mousedown', e => e.preventDefault());
         btn.onclick=()=>{ if(editing) applyEdit(); else startEdit(); };
         edit.addEventListener('keydown',e=>{
@@ -968,8 +967,23 @@ function init(){
         });
         edit.addEventListener('blur',()=>{ applyEdit(); });
     }
-    setupRangeEdit('range-min-btn','range-min-edit','range-min-show',false);
-    setupRangeEdit('range-max-btn','range-max-edit','range-max-show',true);
+    // DQ range editors
+    function dqRangeApply(){
+        rangeUserEdited=true;
+        const mt=document.getElementById('color-metric').value;
+        rangeUserOverrides[mt]=[rangeMin,rangeMax];
+        updateRangeDisplay(); drawGeo();
+    }
+    setupRangeEdit('range-min-btn','range-min-edit','range-min-show',
+        ()=>rangeMin, v=>{rangeMin=v;}, dqRangeApply);
+    setupRangeEdit('range-max-btn','range-max-edit','range-max-show',
+        ()=>rangeMax, v=>{rangeMax=v;}, dqRangeApply);
+    // Cluster range editors
+    function clRangeApply(){ drawClusterGeo(); }
+    setupRangeEdit('cl-range-min-btn','cl-range-min-edit','cl-range-min-show',
+        ()=>clRangeMin, v=>{clRangeMin=v;}, clRangeApply);
+    setupRangeEdit('cl-range-max-btn','cl-range-max-edit','cl-range-max-show',
+        ()=>clRangeMax, v=>{clRangeMax=v;}, clRangeApply);
 
     // --- online mode nav ---
     document.getElementById('ring-select').onchange=e=>{
