@@ -66,7 +66,7 @@ static int scanFile(const std::string &path, int start_ev, int num_ev)
                         auto &slot = event.rocs[r].slots[s];
                         if (!slot.present) continue;
                         for (int c = 0; c < fdec::MAX_CHANNELS; ++c)
-                            if (slot.channel_mask & (1u << c)) nchannels++;
+                            if (slot.channel_mask & (1ull << c)) nchannels++;
                     }
                 }
             }

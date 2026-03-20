@@ -14,7 +14,7 @@ namespace fdec
 
 // --- capacity limits (adjust to match your hardware) ------------------------
 static constexpr int MAX_SAMPLES  = 200;   // samples per channel per event
-static constexpr int MAX_CHANNELS = 16;    // channels per FADC250 slot
+static constexpr int MAX_CHANNELS = 64;    // channels per slot (16 for FADC250, 64 for ADC1881M)
 static constexpr int MAX_SLOTS    = 22;    // slot IDs 0..21 (VME slots 3-20 typical)
 static constexpr int MAX_ROCS     = 10;    // number of ROC crates
 
@@ -30,7 +30,7 @@ struct SlotData {
     int32_t  trigger;                      // event number (from composite 'i')
     int64_t  timestamp;                    // 48-bit timestamp (from composite 'l')
     int      nchannels;                    // count of active channels
-    uint32_t channel_mask;                 // bitmask: bit i set = channel i present
+    uint64_t channel_mask;                 // bitmask: bit i set = channel i present
     ChannelData channels[MAX_CHANNELS];    // indexed by channel number
 
     void clear()

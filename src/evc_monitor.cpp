@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include <set>
 #include <deque>
 #include <mutex>
@@ -165,7 +166,7 @@ static std::string encodeEvent(fdec::EventData &event, int seq,
             if (!roc.slots[s].present) continue;
             auto &slot = roc.slots[s];
             for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                if (!(slot.channel_mask & (1u << c))) continue;
+                if (!(slot.channel_mask & (1ull << c))) continue;
                 auto &cd = slot.channels[c];
                 if (cd.nsamples <= 0) continue;
 
@@ -214,7 +215,7 @@ static void fillHist(fdec::EventData &event, fdec::WaveAnalyzer &ana,
             if (!roc.slots[s].present) continue;
             auto &slot = roc.slots[s];
             for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                if (!(slot.channel_mask & (1u << c))) continue;
+                if (!(slot.channel_mask & (1ull << c))) continue;
                 auto &cd = slot.channels[c];
                 if (cd.nsamples <= 0) continue;
 
@@ -279,7 +280,8 @@ static void sleepMs(int ms) {
 static void etReaderThread()
 {
     EtChannel ch;
-    fdec::EventData event;
+    auto event_ptr = std::make_unique<fdec::EventData>();
+    auto &event = *event_ptr;
     fdec::WaveAnalyzer ana;
     ana.cfg.min_peak_ratio = g_hist_cfg.min_peak_ratio;
     fdec::WaveResult wres;

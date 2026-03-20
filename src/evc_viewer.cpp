@@ -1,11 +1,12 @@
 // src/evc_viewer.cpp — HyCal event viewer
 //
 // Usage:
-//   evc_viewer [evio_file] [-p port] [-H] [-c config.json] [-d /path/to/data]
+//   evc_viewer [evio_file] [-p port] [-H] [-c config.json] [-d /path/to/data] [-D daq_config.json]
 //   evc_viewer -d /data/stage6 -H              # browse and pick from GUI
 //   evc_viewer data.evio -H                    # open file directly
 //   evc_viewer data.evio -H -d /data/stage6    # open file + enable browsing
 //   evc_viewer                                 # empty viewer, no file browser
+//   evc_viewer prad.evio -D prad_daq_config.json  # open PRad file with PRad DAQ config
 //
 // -d enables file browsing: the viewer shows a file picker limited to
 // .evio files under that directory tree. Selecting a new file triggers
@@ -16,6 +17,7 @@
 #include "WaveAnalyzer.h"
 #include "HyCalSystem.h"
 #include "HyCalCluster.h"
+#include "load_daq_config.h"
 
 #include <nlohmann/json.hpp>
 
@@ -28,6 +30,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <atomic>
@@ -142,6 +145,8 @@ static std::string g_res_dir;             // resources directory (viewer.html, .
 static json g_base_config;                // config without per-file fields
 static Progress g_progress;
 
+static evc::DaqConfig g_daq_cfg;              // DAQ configuration (default = PRad-II)
+
 static fdec::HyCalSystem g_hycal;
 static fdec::ClusterConfig g_cluster_cfg;
 static float g_adc_to_mev = 1.0f;
@@ -253,6 +258,7 @@ static void buildIndex(const std::string &path, std::vector<EventIndex> &index,
 {
     index.clear();
     EvChannel ch;
+    ch.SetConfig(g_daq_cfg);
     if (ch.Open(path) != status::success) return;
 
     prog.phase = 1;
@@ -286,9 +292,11 @@ static void buildHistograms(const std::string &path,
     events_out = 0;
 
     EvChannel ch;
+    ch.SetConfig(g_daq_cfg);
     if (ch.Open(path) != status::success) return;
 
-    fdec::EventData event;
+    auto event_ptr = std::make_unique<fdec::EventData>();
+    auto &event = *event_ptr;
     fdec::WaveAnalyzer ana;
     ana.cfg.min_peak_ratio = g_hist_cfg.min_peak_ratio;
     fdec::WaveResult wres;
@@ -313,7 +321,7 @@ static void buildHistograms(const std::string &path,
                     if (!roc.slots[s].present) continue;
                     auto &slot = roc.slots[s];
                     for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                        if (!(slot.channel_mask & (1u << c))) continue;
+                        if (!(slot.channel_mask & (1ull << c))) continue;
                         auto &cd = slot.channels[c];
                         if (cd.nsamples <= 0) continue;
 
@@ -418,6 +426,7 @@ static std::string decodeRawEvent(int ev1, fdec::EventData &event)
 
     auto &ei = data->index[idx];
     EvChannel ch;
+    ch.SetConfig(g_daq_cfg);
     if (ch.Open(data->filepath) != status::success) return "cannot open file";
 
     for (int b = 0; b < ei.buffer_num; ++b)
@@ -433,7 +442,8 @@ static std::string decodeRawEvent(int ev1, fdec::EventData &event)
 // -------------------------------------------------------------------------
 static json decodeEvent(int ev1)
 {
-    fdec::EventData event;
+    auto event_ptr = std::make_unique<fdec::EventData>();
+    auto &event = *event_ptr;
     std::string err = decodeRawEvent(ev1, event);
     if (!err.empty()) return {{"error", err}};
 
@@ -449,7 +459,7 @@ static json decodeEvent(int ev1)
             if (!roc.slots[s].present) continue;
             auto &slot = roc.slots[s];
             for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                if (!(slot.channel_mask & (1u << c))) continue;
+                if (!(slot.channel_mask & (1ull << c))) continue;
                 auto &cd = slot.channels[c];
                 if (cd.nsamples <= 0) continue;
 
@@ -490,7 +500,8 @@ static json decodeEvent(int ev1)
 // -------------------------------------------------------------------------
 static json computeClusters(int ev1)
 {
-    fdec::EventData event;
+    auto event_ptr = std::make_unique<fdec::EventData>();
+    auto &event = *event_ptr;
     std::string err = decodeRawEvent(ev1, event);
     if (!err.empty()) return {{"error", err}};
 
@@ -517,7 +528,7 @@ static json computeClusters(int ev1)
             if (!roc.slots[s].present) continue;
             auto &slot = roc.slots[s];
             for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                if (!(slot.channel_mask & (1u << c))) continue;
+                if (!(slot.channel_mask & (1ull << c))) continue;
                 auto &cd = slot.channels[c];
                 if (cd.nsamples <= 0) continue;
 
@@ -770,26 +781,30 @@ int main(int argc, char *argv[])
     std::string evio_file;
     int port = 5050;
     std::string hist_config_file;
+    std::string daq_config_file;
 
     static struct option long_opts[] = {
         {"port",        required_argument, nullptr, 'p'},
         {"hist",        no_argument,       nullptr, 'H'},
         {"hist-config", required_argument, nullptr, 'c'},
         {"data-dir",    required_argument, nullptr, 'd'},
+        {"daq-config",  required_argument, nullptr, 'D'},
         {"help",        no_argument,       nullptr, '?'},
         {nullptr, 0, nullptr, 0},
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "p:Hc:d:", long_opts, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "p:Hc:d:D:", long_opts, nullptr)) != -1) {
         switch (opt) {
         case 'p': port = std::atoi(optarg); break;
         case 'H': g_hist_enabled = true; break;
         case 'c': hist_config_file = optarg; g_hist_enabled = true; break;
         case 'd': g_data_dir = optarg; break;
+        case 'D': daq_config_file = optarg; break;
         default:
             std::cerr << "Usage: " << argv[0]
-                      << " [evio_file] [-p port] [-H] [-c hist_config.json] [-d data_dir]\n";
+                      << " [evio_file] [-p port] [-H] [-c hist_config.json]"
+                      << " [-d data_dir] [-D daq_config.json]\n";
             return 1;
         }
     }
@@ -798,6 +813,15 @@ int main(int argc, char *argv[])
 
     std::string db_dir  = DATABASE_DIR;
     std::string res_dir = RESOURCE_DIR;
+
+    // load DAQ configuration (default = PRad-II, override with --daq-config)
+    if (!daq_config_file.empty()) {
+        if (evc::load_daq_config(daq_config_file, g_daq_cfg))
+            std::cerr << "DAQ config: " << daq_config_file
+                      << " (adc_format=" << g_daq_cfg.adc_format << ")\n";
+        else
+            std::cerr << "Warning: failed to load DAQ config: " << daq_config_file << "\n";
+    }
 
     // always load histogram config (needed if user enables hist via GUI later)
     if (hist_config_file.empty())
@@ -841,11 +865,32 @@ int main(int argc, char *argv[])
     { std::string s = readFile(daq_file);
       if (!s.empty()) daq_j = json::parse(s, nullptr, false); }
 
+    // build crate_roc mapping: from --daq-config roc_tags, or PRad-II defaults
+    json crate_roc_j = json::object();
+    if (!daq_config_file.empty()) {
+        std::string dcfg_str = readFile(daq_config_file);
+        if (!dcfg_str.empty()) {
+            auto dcfg_j = json::parse(dcfg_str, nullptr, false);
+            if (dcfg_j.contains("roc_tags")) {
+                for (auto &entry : dcfg_j["roc_tags"]) {
+                    if (entry.contains("crate") && entry.contains("tag")) {
+                        int crate = entry["crate"].get<int>();
+                        uint32_t tag = evc::parse_hex(entry["tag"]);
+                        crate_roc_j[std::to_string(crate)] = tag;
+                    }
+                }
+            }
+        }
+    }
+    if (crate_roc_j.empty()) {
+        crate_roc_j = {{"0",0x80},{"1",0x82},{"2",0x84},{"3",0x86},{"4",0x88},{"5",0x8a},{"6",0x8c}};
+    }
+
     // base config (file-independent fields)
     g_base_config = {
         {"modules", modules_j},
         {"daq", daq_j},
-        {"crate_roc", {{"0",0x80},{"1",0x82},{"2",0x84},{"3",0x86},{"4",0x88},{"5",0x8a},{"6",0x8c}}},
+        {"crate_roc", crate_roc_j},
         {"mode", "file"},
     };
 

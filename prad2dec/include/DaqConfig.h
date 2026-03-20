@@ -37,10 +37,18 @@ struct DaqConfig
     // EPICS slow control event tag
     uint32_t epics_tag        = 0x1F;
 
+    // --- ADC format selection ------------------------------------------------
+    // "fadc250"  — FADC250 composite format c,i,l,N(c,Ns) (PRad-II, default)
+    // "adc1881m" — Fastbus ADC1881M raw words (PRad)
+    std::string adc_format = "fadc250";
+
     // --- bank tags within physics events ------------------------------------
 
-    // FADC250 composite data bank tag
+    // FADC250 composite data bank tag (used when adc_format == "fadc250")
     uint32_t fadc_composite_tag = 0xE101;
+
+    // ADC1881M raw data bank tag (used when adc_format == "adc1881m")
+    uint32_t adc1881m_bank_tag = 0xE120;
 
     // Trigger Interface (TI) data bank tag (present in every ROC data block)
     uint32_t ti_bank_tag        = 0xE10A;

@@ -57,7 +57,7 @@ int Fadc250Decoder::DecodeRoc(const uint8_t *data, size_t nbytes, RocData &roc)
             std::memcpy(cd.samples, data + pos, bytes);
             pos += bytes;
 
-            s.channel_mask |= (1u << ch);
+            s.channel_mask |= (1ull << ch);
             s.nchannels++;
         }
         nslots++;

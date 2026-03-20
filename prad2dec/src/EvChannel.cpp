@@ -1,5 +1,6 @@
 #include "EvChannel.h"
 #include "Fadc250Decoder.h"
+#include "Adc1881mDecoder.h"
 #include "evio.h"
 #include <cstring>
 #include <iostream>
@@ -398,30 +399,51 @@ bool EvChannel::DecodeEvent(int i, fdec::EventData &evt) const
     if (!decodeTriggerBank(i, evt.info))
         decodeTI(evt.info);
 
-    // find all FADC composite banks matching configured tag
+    // decode ADC data — dispatch based on configured format
     int roc_idx = 0;
-    for (size_t ni = 0; ni < nodes.size() && roc_idx < fdec::MAX_ROCS; ++ni) {
-        auto &n = nodes[ni];
-        if (n.tag != config.fadc_composite_tag || n.type != DATA_COMPOSITE)
-            continue;
 
-        size_t nbytes;
-        auto *payload = GetCompositePayload(n, nbytes);
-        if (!payload) continue;
+    if (config.adc_format == "adc1881m") {
+        // ADC1881M: find raw data banks matching configured tag
+        for (size_t ni = 0; ni < nodes.size() && roc_idx < fdec::MAX_ROCS; ++ni) {
+            auto &n = nodes[ni];
+            if (n.tag != config.adc1881m_bank_tag) continue;
+            if (n.data_words == 0) continue;
 
-        // find parent ROC tag
-        uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+            uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
 
-        fdec::RocData &roc = evt.rocs[roc_idx];
-        // evt.clear() already zeroed everything — just set active fields
-        roc.present = true;
-        roc.tag = roc_tag;
+            fdec::RocData &roc = evt.rocs[roc_idx];
+            roc.present = true;
+            roc.tag = roc_tag;
 
-        fdec::Fadc250Decoder::DecodeRoc(payload, nbytes, roc);
+            fdec::Adc1881mDecoder::DecodeRoc(GetData(n), n.data_words, roc);
 
-        evt.roc_index[roc_idx] = roc_idx;
-        roc_idx++;
+            evt.roc_index[roc_idx] = roc_idx;
+            roc_idx++;
+        }
+    } else {
+        // FADC250 composite: find all composite banks matching configured tag
+        for (size_t ni = 0; ni < nodes.size() && roc_idx < fdec::MAX_ROCS; ++ni) {
+            auto &n = nodes[ni];
+            if (n.tag != config.fadc_composite_tag || n.type != DATA_COMPOSITE)
+                continue;
+
+            size_t nbytes;
+            auto *payload = GetCompositePayload(n, nbytes);
+            if (!payload) continue;
+
+            uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+
+            fdec::RocData &roc = evt.rocs[roc_idx];
+            roc.present = true;
+            roc.tag = roc_tag;
+
+            fdec::Fadc250Decoder::DecodeRoc(payload, nbytes, roc);
+
+            evt.roc_index[roc_idx] = roc_idx;
+            roc_idx++;
+        }
     }
+
     evt.nrocs = roc_idx;
     return roc_idx > 0;
 }

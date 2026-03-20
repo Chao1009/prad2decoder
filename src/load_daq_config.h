@@ -53,10 +53,15 @@ inline bool load_daq_config(const std::string &path, DaqConfig &cfg)
         if (et.contains("epics"))        cfg.epics_tag       = parse_hex(et["epics"]);
     }
 
+    // ADC format
+    if (j.contains("adc_format"))
+        cfg.adc_format = j["adc_format"].get<std::string>();
+
     // bank tags
     if (j.contains("bank_tags")) {
         auto &bt = j["bank_tags"];
         if (bt.contains("fadc_composite")) cfg.fadc_composite_tag = parse_hex(bt["fadc_composite"]);
+        if (bt.contains("adc1881m"))       cfg.adc1881m_bank_tag  = parse_hex(bt["adc1881m"]);
         if (bt.contains("ti_data"))        cfg.ti_bank_tag        = parse_hex(bt["ti_data"]);
         if (bt.contains("trigger_bank"))   cfg.trigger_bank_tag   = parse_hex(bt["trigger_bank"]);
         if (bt.contains("run_info"))       cfg.run_info_tag       = parse_hex(bt["run_info"]);

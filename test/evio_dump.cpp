@@ -312,7 +312,7 @@ static int doEvent(EvChannel &ch, int target)
 
                         int nch = 0;
                         for (int c = 0; c < fdec::MAX_CHANNELS; ++c)
-                            if (slot.channel_mask & (1u << c)) nch++;
+                            if (slot.channel_mask & (1ull << c)) nch++;
 
                         std::cout << "      slot=" << std::setw(2) << s
                                   << " trigger=" << slot.trigger
@@ -320,7 +320,7 @@ static int doEvent(EvChannel &ch, int target)
                                   << " channels=" << nch << " [";
 
                         for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                            if (!(slot.channel_mask & (1u << c))) continue;
+                            if (!(slot.channel_mask & (1ull << c))) continue;
                             std::cout << c << "(" << slot.channels[c].nsamples << ")";
                             if (c < fdec::MAX_CHANNELS - 1) std::cout << " ";
                         }
