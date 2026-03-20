@@ -19,7 +19,25 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
 }
 .header .info { color:var(--dim); font-size:11px; margin-left:auto; }
 
-.main { display:flex; height:calc(100vh - 40px); }
+/* --- tab bar --- */
+.tab-bar {
+    display:flex; gap:0; background:var(--panel); border-bottom:1px solid var(--border);
+    padding:0 16px;
+}
+.tab {
+    background:none; border:none; border-bottom:2px solid transparent;
+    color:var(--dim); padding:6px 16px; cursor:pointer; font-family:inherit; font-size:12px;
+    font-weight:500;
+}
+.tab:hover { color:var(--text); }
+.tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+
+.main { display:flex; height:calc(100vh - 66px); }
+
+/* --- clustering panel --- */
+.cluster-info-wrap { flex:1; overflow-y:auto; }
+.cl-table-row.selected { background:rgba(0,180,216,0.15); }
+.cl-table-row:hover { background:rgba(0,180,216,0.08); cursor:pointer; }
 
 /* --- geo panel (left) --- */
 .geo-panel { flex:none; width:55%; display:flex; flex-direction:column; min-width:300px; }

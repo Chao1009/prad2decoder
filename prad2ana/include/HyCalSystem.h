@@ -120,7 +120,12 @@ struct Module {
     double      cal_non_linear  = 0.;   // non-linear correction coefficient
 
     // convert ADC value (pedestal-subtracted) to energy in MeV
-    double energize(double adc) const { return (adc < 0.) ? 0. : cal_factor * adc; }
+    // includes non-linear correction: E + nl * (E - E_cal) / 1000
+    double energize(double adc) const {
+        if (adc < 0.) return 0.;
+        double E = cal_factor * adc;
+        return E + cal_non_linear * (E - cal_base_energy) / 1000.;
+    }
 
     // pre-computed neighbors (filled by InitLayout)
     int         neighbor_count = 0;

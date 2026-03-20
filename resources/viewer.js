@@ -6,7 +6,8 @@ let eventChannels={};
 let selectedModule=null, hoveredModule=null;
 let geoCanvas, geoCtx, geoWrap, scale=1, offsetX=0, offsetY=0, canvasW, canvasH;
 const PC=['#00b4d8','#ff6b6b','#51cf66','#ffd43b','#cc5de8','#ff922b','#20c997','#f06595'];
-const CRATE_NAME={0x80:'adchycal1',0x82:'adchycal2',0x84:'adchycal3',0x86:'adchycal4',0x88:'adchycal5',0x8a:'adchycal6',0x8c:'adchycal7'};
+const CRATE_NAME={0x80:'adchycal1',0x82:'adchycal2',0x84:'adchycal3',0x86:'adchycal4',0x88:'adchycal5',0x8a:'adchycal6',0x8c:'adchycal7',
+    0x01:'PRadTS',0x04:'PRadROC_1',0x05:'PRadROC_2',0x06:'PRadROC_3',0x07:'PRadSRS_1',0x08:'PRadSRS_2'};
 function crateName(r){return CRATE_NAME[r]||`ROC 0x${r.toString(16)}`;}
 let histEnabled=false, histConfig={};
 let mode='file';    // 'file' or 'online'
@@ -23,6 +24,12 @@ let currentHist={};  // {divId: {x:[], y:[]}} for histogram copy
 let rangeMin=null, rangeMax=null;
 let rangeUserEdited=false;
 const rangeUserOverrides={};  // {metric: [min, max]} — persists user edits per metric
+
+// --- clustering tab state ---
+let activeTab='dq';  // 'dq' or 'cluster'
+let clusterData=null;  // {hits:{}, clusters:[]}
+let selectedCluster=-1;  // -1 = all
+let clusterEvent=-1;  // event number for cached cluster data
 
 // default ranges per metric (overridden by hist config)
 const RANGE_DEFAULTS={
@@ -75,6 +82,12 @@ function drawColorBar(){
     const c=document.getElementById('colorbar-canvas'),x=c.getContext('2d');
     for(let i=0;i<c.width;i++){x.fillStyle=colorScale(i/c.width);x.fillRect(i,0,1,c.height);}
     c.title=PALETTE_NAMES[paletteIdx]+' (click to change)';
+    // also draw cluster colorbar
+    const c2=document.getElementById('cl-colorbar-canvas');
+    if(c2){const x2=c2.getContext('2d');
+        for(let i=0;i<c2.width;i++){x2.fillStyle=colorScale(i/c2.width);x2.fillRect(i,0,1,c2.height);}
+        c2.title=PALETTE_NAMES[paletteIdx]+' (click to change)';
+    }
 }
 
 // sync color range: hist config > defaults. Only called on metric change (not per-event).
@@ -358,7 +371,12 @@ function loadEventData(reqId, data) {
     const npk = Object.values(eventChannels).reduce((s,c) => s + (c.pk||[]).length, 0);
     const modeTag = mode === 'online' ? ' [LIVE]' : '';
     document.getElementById('status-bar').textContent = `Event ${currentEvent}: ${nch} channels, ${npk} peaks${modeTag}`;
-    drawGeo();
+    if(activeTab==='cluster'){
+        clusterEvent=-1; // invalidate cache
+        loadClusterData(currentEvent);
+    } else {
+        drawGeo();
+    }
     if (selectedModule) showWaveform(selectedModule);
 }
 
@@ -642,6 +660,193 @@ function setupDivider(divId, axis, getTarget, getContainer, getOffset, minA, min
 }
 
 // =========================================================================
+// Tab switching
+// =========================================================================
+function switchTab(tab){
+    if(tab===activeTab) return;
+    activeTab=tab;
+    document.querySelectorAll('.tab').forEach(t=>{
+        t.classList.toggle('active', t.dataset.tab===tab);
+    });
+    const isDQ = tab==='dq';
+    document.getElementById('geo-toolbar-dq').style.display = isDQ ? 'flex' : 'none';
+    document.getElementById('geo-toolbar-cl').style.display = isDQ ? 'none' : 'flex';
+    document.getElementById('detail-panel').style.display = isDQ ? 'flex' : 'none';
+    document.getElementById('cluster-panel').style.display = isDQ ? 'none' : 'flex';
+    if(tab==='cluster') {
+        loadClusterData(currentEvent);
+    } else {
+        drawGeo();
+    }
+}
+
+// =========================================================================
+// Clustering
+// =========================================================================
+function loadClusterData(evnum){
+    if(clusterEvent===evnum && clusterData) { drawClusterGeo(); updateClusterTable(); return; }
+    document.getElementById('status-bar').textContent=`Loading clusters for event ${evnum}...`;
+    fetch(`/api/clusters/${evnum}`).then(r=>r.json()).then(data=>{
+        if(data.error){ document.getElementById('status-bar').textContent=data.error; return; }
+        clusterData=data;
+        clusterEvent=evnum;
+        selectedCluster=-1;
+        drawClusterGeo();
+        updateClusterUI();
+        const nc=data.clusters?data.clusters.length:0;
+        const nh=data.hits?Object.keys(data.hits).length:0;
+        document.getElementById('status-bar').textContent=`Event ${evnum}: ${nc} clusters, ${nh} hit modules`;
+    }).catch(err=>{ document.getElementById('status-bar').textContent=`Error: ${err}`; });
+}
+
+function updateClusterUI(){
+    if(!clusterData) return;
+    const clusters=clusterData.clusters||[];
+    // populate cluster selector
+    const sel=document.getElementById('cl-select');
+    sel.innerHTML='<option value="all">All ('+clusters.length+')</option>';
+    clusters.forEach((cl,i)=>{
+        const o=document.createElement('option');
+        o.value=i;
+        o.textContent=`#${i} ${cl.center} — ${cl.energy.toFixed(0)} MeV`;
+        sel.appendChild(o);
+    });
+    // summary
+    const totalE=clusters.reduce((s,c)=>s+c.energy,0);
+    document.getElementById('cl-summary').textContent=
+        `${clusters.length} clusters, ${totalE.toFixed(0)} MeV total`;
+    updateClusterTable();
+}
+
+function updateClusterTable(){
+    if(!clusterData) return;
+    const clusters=clusterData.clusters||[];
+    const tbody=document.getElementById('cl-tbody');
+    let rows='';
+    clusters.forEach((cl,i)=>{
+        const sel=selectedCluster===i;
+        const col=PC[i%PC.length];
+        rows+=`<tr class="cl-table-row${sel?' selected':''}" data-idx="${i}" style="border-left:3px solid ${col}">
+            <td style="text-align:center">${i}</td>
+            <td>${cl.center}</td>
+            <td>${cl.energy.toFixed(1)}</td>
+            <td>${cl.x.toFixed(1)}</td>
+            <td>${cl.y.toFixed(1)}</td>
+            <td style="text-align:center">${cl.nblocks}</td>
+        </tr>`;
+    });
+    if(!clusters.length) rows='<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:8px">No clusters</td></tr>';
+    tbody.innerHTML=rows;
+    // click handlers
+    tbody.querySelectorAll('.cl-table-row').forEach(tr=>{
+        tr.onclick=()=>{
+            const idx=parseInt(tr.dataset.idx);
+            selectedCluster=(selectedCluster===idx)?-1:idx;
+            document.getElementById('cl-select').value=selectedCluster>=0?selectedCluster:'all';
+            drawClusterGeo();
+            updateClusterTable();
+            showClusterDetail();
+        };
+    });
+}
+
+function showClusterDetail(){
+    const hdr=document.getElementById('cl-detail-header');
+    if(selectedCluster<0 || !clusterData || !clusterData.clusters[selectedCluster]){
+        hdr.innerHTML='<div class="empty-msg">Click a module or select a cluster</div>';
+        return;
+    }
+    const cl=clusterData.clusters[selectedCluster];
+    const col=PC[selectedCluster%PC.length];
+    hdr.innerHTML=`<span class="mod-name" style="color:${col}">Cluster #${selectedCluster}</span>
+        <span class="mod-daq">Center: ${cl.center} (ID ${cl.center_id}) &middot;
+        ${cl.energy.toFixed(1)} MeV &middot; (${cl.x.toFixed(1)}, ${cl.y.toFixed(1)}) &middot;
+        ${cl.nblocks} blocks, ${cl.npos} pos</span>`;
+}
+
+// build a set of module indices belonging to a cluster
+function clusterModuleSet(clIdx){
+    if(!clusterData||clIdx<0) return null;
+    const cl=clusterData.clusters[clIdx];
+    if(!cl) return null;
+    return new Set(cl.modules);
+}
+
+function drawClusterGeo(){
+    if(!geoCtx) return;
+    const ctx=geoCtx;
+    ctx.clearRect(0,0,canvasW,canvasH);
+    if(!clusterData){ drawGeo(); return; }
+
+    const hits=clusterData.hits||{};
+    const clusters=clusterData.clusters||[];
+    const useLog=document.getElementById('cl-log-scale').checked;
+
+    // find energy range from hits
+    let emax=0;
+    for(const k in hits) if(hits[k]>emax) emax=hits[k];
+    if(emax<=0) emax=1;
+    document.getElementById('cl-range-min-show').textContent='0';
+    document.getElementById('cl-range-max-show').textContent=emax.toFixed(0);
+
+    // build module-index → cluster-index map
+    const modCluster={};
+    clusters.forEach((cl,ci)=>{
+        (cl.modules||[]).forEach(mi=>{ modCluster[mi]=ci; });
+    });
+
+    // selected cluster module set
+    const selSet=selectedCluster>=0?clusterModuleSet(selectedCluster):null;
+
+    for(let i=0;i<modules.length;i++){
+        const m=modules[i],[cx,cy]=d2c(m.x,m.y),w=m.sx*scale,h=m.sy*scale;
+        const energy=hits[String(i)]||0;
+        const ci=modCluster[i];
+
+        // dim modules not in selected cluster
+        let dimmed=false;
+        if(selSet && !selSet.has(i)) dimmed=true;
+
+        let fillColor;
+        if(energy>0 && !dimmed){
+            let t=useLog?Math.log1p(energy)/Math.log1p(emax):energy/emax;
+            t=Math.max(0,Math.min(1,t));
+            fillColor=colorScale(t);
+        } else {
+            fillColor=dimmed?'#0a0a18':(m.t==='G'?'#1a1a2e':'#12122a');
+        }
+        ctx.fillStyle=fillColor;
+        ctx.fillRect(cx-w/2,cy-h/2,w,h);
+
+        // border: highlight cluster members
+        let strokeColor='#333', lw=0.5;
+        if(ci!==undefined && !dimmed){
+            strokeColor=PC[ci%PC.length];
+            lw=1.5;
+        }
+        if(selectedCluster>=0 && ci===selectedCluster){
+            strokeColor=PC[ci%PC.length];
+            lw=2.5;
+        }
+        if(hoveredModule&&hoveredModule.n===m.n){ strokeColor='#00b4d8'; lw=1.5; }
+        if(selectedModule&&selectedModule.n===m.n){ strokeColor='#fff'; lw=2.5; }
+        ctx.strokeStyle=strokeColor; ctx.lineWidth=lw;
+        ctx.strokeRect(cx-w/2,cy-h/2,w,h);
+    }
+
+    // draw cluster center markers (crosshairs)
+    clusters.forEach((cl,ci)=>{
+        if(selSet && ci!==selectedCluster) return;
+        const [cx,cy]=d2c(cl.x,cl.y);
+        const col=PC[ci%PC.length];
+        ctx.strokeStyle=col; ctx.lineWidth=2;
+        const sz=6;
+        ctx.beginPath(); ctx.moveTo(cx-sz,cy); ctx.lineTo(cx+sz,cy); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx,cy-sz); ctx.lineTo(cx,cy+sz); ctx.stroke();
+    });
+}
+
+// =========================================================================
 // Init
 // =========================================================================
 function init(){
@@ -692,6 +897,22 @@ function init(){
         ()=>document.getElementById('table-wrap'),
         ()=>document.getElementById('bottom-panel'),
         ()=>0, 150, 200, resizeAllPlots);
+
+    // --- tab switching ---
+    document.querySelectorAll('.tab').forEach(t=>{
+        t.onclick=()=>switchTab(t.dataset.tab);
+    });
+
+    // --- cluster controls ---
+    document.getElementById('cl-select').onchange=e=>{
+        selectedCluster=e.target.value==='all'?-1:parseInt(e.target.value);
+        drawClusterGeo(); updateClusterTable(); showClusterDetail();
+    };
+    document.getElementById('cl-log-scale').onchange=()=>{ if(activeTab==='cluster') drawClusterGeo(); };
+    document.getElementById('cl-colorbar-canvas').onclick=()=>{
+        paletteIdx=(paletteIdx+1)%PALETTE_NAMES.length;
+        drawColorBar(); if(activeTab==='cluster') drawClusterGeo(); else drawGeo();
+    };
 
     // --- file mode nav ---
     document.getElementById('btn-prev').onclick=()=>{if(currentEvent>1)loadEvent(currentEvent-1);};
@@ -763,33 +984,70 @@ function init(){
     const tip=document.getElementById('geo-tooltip');
     geoCanvas.addEventListener('mousemove',e=>{
         const r=geoCanvas.getBoundingClientRect(),m=hitTest(e.clientX-r.left,e.clientY-r.top);
-        if(m!==hoveredModule){hoveredModule=m;drawGeo();}
+        if(m!==hoveredModule){
+            hoveredModule=m;
+            if(activeTab==='cluster') drawClusterGeo(); else drawGeo();
+        }
         if(m){
-            const d=eventChannels[`${m.roc}_${m.sl}_${m.ch}`];
-            const key=`${m.roc}_${m.sl}_${m.ch}`;
             let t=`${m.n}  (${m.t==='G'?'PbGlass':'PbWO₄'})\n${crateName(m.roc)}  slot ${m.sl}  ch ${m.ch}`;
-            if(d&&d.pk&&d.pk.length){
-                const pks=peaksInCut(d.pk);
-                const bp=tallest(pks);
-                const tc=isTimeCut();
-                if(bp) t+=`\nPed ${d.pm.toFixed(1)}  H ${bp.h.toFixed(0)}  Int ${bp.i.toFixed(0)}  T ${bp.t.toFixed(0)}ns  Pk ${pks.length}${tc?' (tcut)':''}`;
-                else t+=`\nPed ${d.pm.toFixed(1)}  (no peaks${tc?' in time cut':''})`;
-            }
-            else if(d)t+=`\nPed ${d.pm.toFixed(1)}  (no peaks)`;
-            if(occTotal>0){
-                const tc=isTimeCut();
-                const occ=tc?occTcutData:occData;
-                const pct=100.0*(occ[key]||0)/occTotal;
-                t+=`\nOcc ${pct.toFixed(1)}%  (${occTotal} evts${tc?' tcut':''})`;
-            } else if(histEnabled===false){
-                t+=`\nOcc: not computed (enable histograms)`;
+            if(activeTab==='cluster' && clusterData){
+                const idx=modules.indexOf(m);
+                const energy=clusterData.hits?clusterData.hits[String(idx)]:0;
+                if(energy) t+=`\nEnergy: ${energy.toFixed(1)} MeV`;
+                // find which cluster this module belongs to
+                const clusters=clusterData.clusters||[];
+                for(let ci=0;ci<clusters.length;ci++){
+                    if(clusters[ci].modules&&clusters[ci].modules.includes(idx)){
+                        t+=`\nCluster #${ci} (${clusters[ci].center}, ${clusters[ci].energy.toFixed(0)} MeV)`;
+                        break;
+                    }
+                }
+            } else {
+                const d=eventChannels[`${m.roc}_${m.sl}_${m.ch}`];
+                const key=`${m.roc}_${m.sl}_${m.ch}`;
+                if(d&&d.pk&&d.pk.length){
+                    const pks=peaksInCut(d.pk);
+                    const bp=tallest(pks);
+                    const tc=isTimeCut();
+                    if(bp) t+=`\nPed ${d.pm.toFixed(1)}  H ${bp.h.toFixed(0)}  Int ${bp.i.toFixed(0)}  T ${bp.t.toFixed(0)}ns  Pk ${pks.length}${tc?' (tcut)':''}`;
+                    else t+=`\nPed ${d.pm.toFixed(1)}  (no peaks${tc?' in time cut':''})`;
+                }
+                else if(d)t+=`\nPed ${d.pm.toFixed(1)}  (no peaks)`;
+                if(occTotal>0){
+                    const tc=isTimeCut();
+                    const occ=tc?occTcutData:occData;
+                    const pct=100.0*(occ[key]||0)/occTotal;
+                    t+=`\nOcc ${pct.toFixed(1)}%  (${occTotal} evts${tc?' tcut':''})`;
+                } else if(histEnabled===false){
+                    t+=`\nOcc: not computed (enable histograms)`;
+                }
             }
             tip.textContent=t;tip.style.display='block';
             tip.style.left=(e.clientX-r.left+14)+'px';tip.style.top=(e.clientY-r.top-8)+'px';
         }else tip.style.display='none';
     });
-    geoCanvas.addEventListener('click',e=>{const r=geoCanvas.getBoundingClientRect(),m=hitTest(e.clientX-r.left,e.clientY-r.top);if(m)showWaveform(m);});
-    geoCanvas.addEventListener('mouseleave',()=>{hoveredModule=null;tip.style.display='none';drawGeo();});
+    geoCanvas.addEventListener('click',e=>{
+        const r=geoCanvas.getBoundingClientRect(),m=hitTest(e.clientX-r.left,e.clientY-r.top);
+        if(!m) return;
+        if(activeTab==='cluster' && clusterData){
+            // find cluster for this module
+            const idx=modules.indexOf(m);
+            const clusters=clusterData.clusters||[];
+            let found=-1;
+            for(let ci=0;ci<clusters.length;ci++){
+                if(clusters[ci].modules&&clusters[ci].modules.includes(idx)){ found=ci; break; }
+            }
+            selectedCluster=(selectedCluster===found)?-1:found;
+            document.getElementById('cl-select').value=selectedCluster>=0?selectedCluster:'all';
+            drawClusterGeo(); updateClusterTable(); showClusterDetail();
+        } else {
+            showWaveform(m);
+        }
+    });
+    geoCanvas.addEventListener('mouseleave',()=>{
+        hoveredModule=null;tip.style.display='none';
+        if(activeTab==='cluster') drawClusterGeo(); else drawGeo();
+    });
     document.addEventListener('keydown',e=>{
         if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
         if(mode==='file'){
