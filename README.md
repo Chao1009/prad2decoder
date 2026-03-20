@@ -72,7 +72,9 @@ Events arrive via a background reader thread. The browser gets WebSocket push no
 A lightweight Qt5 WebEngine wrapper — just a dedicated browser window for the viewer or monitor.
 
 ```bash
-prad2_monitor [url]          # default: http://localhost:8080
+prad2_monitor                        # http://localhost:5050
+prad2_monitor -H clonpc19            # http://clonpc19:5050
+prad2_monitor -H clonpc19 -p 8080   # http://clonpc19:8080
 ```
 
 Requires Qt5 Widgets and WebEngineWidgets. Only built when `-DBUILD_GUI=ON` is set.

@@ -1,49 +1,68 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// prad2_monitor – Lightweight Qt WebEngine client for PRad2 event viewer/monitor
+//
+// Usage:
+//   prad2_monitor                        # http://localhost:5050
+//   prad2_monitor -H clonpc19            # http://clonpc19:5050
+//   prad2_monitor -H clonpc19 -p 8080   # http://clonpc19:8080
+// ─────────────────────────────────────────────────────────────────────────────
+
 #include <QApplication>
 #include <QWebEngineView>
 #include <QWebEnginePage>
-#include <QCommandLineParser>
 #include <QUrl>
-#include <QMessageBox>
+
+#include <iostream>
+#include <string>
+#include <unistd.h>
+
+static void printUsage(const char *prog)
+{
+    std::cerr
+        << "Usage:\n"
+        << "  " << prog << " [-H host] [-p port]\n"
+        << "\nOptions:\n"
+        << "  -H <host>   Server hostname (default: localhost)\n"
+        << "  -p <port>   Server port (default: 5050)\n"
+        << "  -h          Show this help\n";
+}
 
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-    app.setApplicationName("prad2_monitor");
+    app.setApplicationName("PRad2 Monitor");
     app.setApplicationVersion("1.0.0");
 
-    QCommandLineParser parser;
-    parser.setApplicationDescription("Lightweight Qt WebEngine client for PRad2 event monitor");
-    parser.addHelpOption();
-    parser.addVersionOption();
-    parser.addPositionalArgument("url", "URL to load (default: http://localhost:5050)",
-                                "[url]");
+    std::string host = "localhost";
+    std::string port = "5050";
 
-    parser.process(app);
-
-    QString url = "http://localhost:5050";
-    const QStringList args = parser.positionalArguments();
-    if (!args.isEmpty()) {
-        url = args.first();
+    optind = 1;
+    int opt;
+    while ((opt = getopt(argc, argv, "H:p:h")) != -1) {
+        switch (opt) {
+        case 'H': host = optarg; break;
+        case 'p': port = optarg; break;
+        case 'h': printUsage(argv[0]); return 0;
+        default:  printUsage(argv[0]); return 1;
+        }
     }
 
-    QWebEngineView view;
-    view.setWindowTitle("PRad2 Monitor - " + url);
-    view.resize(1280, 800);
+    QUrl url(QString("http://%1:%2")
+        .arg(QString::fromStdString(host), QString::fromStdString(port)));
 
-    // show connection error instead of blank white page
+    std::cout << "Loading: " << url.toString().toStdString() << "\n";
+
+    QWebEngineView view;
+    view.setWindowTitle("PRad2 Monitor — " + url.toString());
+    view.resize(1280, 800);
+    // log load errors to console
     QObject::connect(view.page(), &QWebEnginePage::loadFinished,
-                     [&view, &url](bool ok) {
-        if (!ok) {
-            view.setHtml(QString(
-                "<html><body style='font-family:sans-serif;padding:40px;color:#555;'>"
-                "<h2>Could not connect</h2>"
-                "<p>Failed to load <b>%1</b></p>"
-                "<p>Make sure the server (evc_viewer or evc_monitor) is running.</p>"
-                "</body></html>").arg(url));
-        }
+                     [&url](bool ok) {
+        if (!ok)
+            std::cerr << "Failed to load: " << url.toString().toStdString() << "\n";
     });
 
-    view.load(QUrl(url));
+    view.setUrl(url);
     view.show();
 
     return app.exec();
