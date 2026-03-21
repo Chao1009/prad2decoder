@@ -334,7 +334,7 @@ static json decodeEvent(int ev1) {
 }
 
 // -------------------------------------------------------------------------
-// Compute clusters for one event
+// Compute clusters for one event (delegates to AppState)
 // -------------------------------------------------------------------------
 static json computeClusters(int ev1) {
     auto event_ptr = std::make_unique<fdec::EventData>();
@@ -342,92 +342,10 @@ static json computeClusters(int ev1) {
     std::string err = decodeRawEvent(ev1, event);
     if (!err.empty()) return {{"error", err}};
 
-    bool is_adc1881m = (g_app.daq_cfg.adc_format == "adc1881m");
-
-    // check trigger filter
-    if (g_app.cluster_skip_mask != 0 &&
-        (event.info.trigger_bits & g_app.cluster_skip_mask)) {
-        return {{"event", ev1}, {"hits", json::object()}, {"clusters", json::array()},
-                {"info", "trigger filtered"}};
-    }
-
     fdec::WaveAnalyzer ana;
     ana.cfg.min_peak_ratio = g_app.hist_cfg.min_peak_ratio;
     fdec::WaveResult wres;
-
-    fdec::HyCalCluster clusterer(g_app.hycal);
-    clusterer.SetConfig(g_app.cluster_cfg);
-
-    int nmod = g_app.hycal.module_count();
-    std::vector<float> mod_energy(nmod, 0.f);
-
-    for (int r = 0; r < event.nrocs; ++r) {
-        auto &roc = event.rocs[r];
-        if (!roc.present) continue;
-        auto cit = g_app.roc_to_crate.find(roc.tag);
-        if (cit == g_app.roc_to_crate.end()) continue;
-        int crate = cit->second;
-
-        for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
-            if (!roc.slots[s].present) continue;
-            auto &slot = roc.slots[s];
-            for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                if (!(slot.channel_mask & (1ull << c))) continue;
-                auto &cd = slot.channels[c];
-                if (cd.nsamples <= 0) continue;
-
-                const auto *mod = g_app.hycal.module_by_daq(crate, s, c);
-                if (!mod || !mod->is_hycal()) continue;
-
-                float adc_val = 0;
-                if (is_adc1881m) {
-                    adc_val = cd.samples[0];
-                } else {
-                    ana.Analyze(cd.samples, cd.nsamples, wres);
-                    adc_val = bestPeakInWindow(wres, g_app.hist_cfg.threshold,
-                                               g_app.hist_cfg.time_min, g_app.hist_cfg.time_max);
-                }
-                if (adc_val <= 0) continue;
-
-                float energy = (mod->cal_factor > 0.)
-                    ? static_cast<float>(mod->energize(adc_val))
-                    : adc_val * g_app.adc_to_mev;
-
-                mod_energy[mod->index] = energy;
-                clusterer.AddHit(mod->index, energy);
-            }
-        }
-    }
-
-    clusterer.FormClusters();
-
-    // build hits map
-    json hits_j = json::object();
-    for (int i = 0; i < nmod; ++i)
-        if (mod_energy[i] > 0.f)
-            hits_j[std::to_string(i)] = std::round(mod_energy[i] * 100) / 100;
-
-    // build cluster array via ReconstructMatched
-    std::vector<fdec::HyCalCluster::RecoResult> reco;
-    clusterer.ReconstructMatched(reco);
-
-    json cl_arr = json::array();
-    for (auto &r : reco) {
-        auto &cmod = g_app.hycal.module(r.cluster->center.index);
-        json indices = json::array();
-        for (auto &h : r.cluster->hits) indices.push_back(h.index);
-        cl_arr.push_back({
-            {"id", static_cast<int>(cl_arr.size())},
-            {"center", cmod.name}, {"center_id", cmod.id},
-            {"x", std::round(r.hit.x * 10) / 10},
-            {"y", std::round(r.hit.y * 10) / 10},
-            {"energy", std::round(r.hit.energy * 10) / 10},
-            {"nblocks", r.hit.nblocks}, {"npos", r.hit.npos},
-            {"modules", indices},
-        });
-    }
-
-    return {{"event", ev1}, {"hits", hits_j}, {"clusters", cl_arr}};
+    return g_app.computeClustersJson(event, ev1, ana, wres);
 }
 
 // -------------------------------------------------------------------------

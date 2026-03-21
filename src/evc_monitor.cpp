@@ -57,7 +57,11 @@ static EtConfig g_et_cfg;
 static int      g_ring_size = 20;
 
 // ring buffer: decoded event JSON strings, newest at back
-struct RingEntry { int seq; std::string json_str; };
+struct RingEntry {
+    int seq;
+    std::string json_str;      // encoded event (channels + waveforms)
+    std::string cluster_str;   // clustering result JSON
+};
 static std::deque<RingEntry> g_ring;
 static std::mutex g_ring_mtx;
 
@@ -231,8 +235,9 @@ static void etReaderThread()
 
                 int seq = g_app.events_processed.load() + 1;
 
-                // encode event for ring buffer
+                // encode event + clusters for ring buffer
                 std::string evjson = encodeEvent(event, seq, ana, wres);
+                std::string cljson = g_app.computeClustersJson(event, seq, ana, wres).dump();
 
                 // process: histograms + clustering + LMS (thread-safe)
                 g_app.processEvent(event, ana, wres);
@@ -246,7 +251,7 @@ static void etReaderThread()
                 // push to ring buffer
                 {
                     std::lock_guard<std::mutex> lk(g_ring_mtx);
-                    g_ring.push_back({seq, std::move(evjson)});
+                    g_ring.push_back({seq, std::move(evjson), std::move(cljson)});
                     while ((int)g_ring.size() > g_ring_size) g_ring.pop_front();
                 }
 
@@ -331,6 +336,16 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         std::lock_guard<std::mutex> lk(g_ring_mtx);
         for (auto &e : g_ring) {
             if (e.seq == seq) { reply(e.json_str); return; }
+        }
+        reply("{\"error\":\"event not in ring buffer\"}"); return;
+    }
+
+    // /api/clusters/<seq> — fetch pre-computed clusters from ring buffer
+    if (uri.rfind("/api/clusters/", 0) == 0) {
+        int seq = std::atoi(uri.c_str() + 14);
+        std::lock_guard<std::mutex> lk(g_ring_mtx);
+        for (auto &e : g_ring) {
+            if (e.seq == seq) { reply(e.cluster_str); return; }
         }
         reply("{\"error\":\"event not in ring buffer\"}"); return;
     }

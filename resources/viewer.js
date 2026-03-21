@@ -826,7 +826,10 @@ function switchTab(tab){
 function loadClusterData(evnum){
     if(clusterEvent===evnum && clusterData) { drawClusterGeo(); updateClusterTable(); return; }
     document.getElementById('status-bar').textContent=`Loading clusters for event ${evnum}...`;
-    fetch(`/api/clusters/${evnum}`).then(r=>r.json()).then(data=>{
+    fetch(`/api/clusters/${evnum}`).then(r=>{
+        if(!r.ok) throw new Error('not available');
+        return r.json();
+    }).then(data=>{
         if(data.error){ document.getElementById('status-bar').textContent=data.error; return; }
         clusterData=data;
         clusterEvent=evnum;

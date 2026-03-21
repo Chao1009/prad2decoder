@@ -339,6 +339,87 @@ void AppState::processLms(fdec::EventData &event,
     lms_events++;
 }
 
+json AppState::computeClustersJson(fdec::EventData &event, int ev_id,
+                                   fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
+{
+    if (cluster_skip_mask != 0 &&
+        (event.info.trigger_bits & cluster_skip_mask))
+        return {{"event", ev_id}, {"hits", json::object()}, {"clusters", json::array()},
+                {"info", "trigger filtered"}};
+
+    bool is_adc1881m = (daq_cfg.adc_format == "adc1881m");
+    fdec::HyCalCluster clusterer(hycal);
+    clusterer.SetConfig(cluster_cfg);
+
+    int nmod = hycal.module_count();
+    std::vector<float> mod_energy(nmod, 0.f);
+
+    for (int r = 0; r < event.nrocs; ++r) {
+        auto &roc = event.rocs[r];
+        if (!roc.present) continue;
+        auto cit = roc_to_crate.find(roc.tag);
+        if (cit == roc_to_crate.end()) continue;
+        int crate = cit->second;
+
+        for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
+            if (!roc.slots[s].present) continue;
+            auto &slot = roc.slots[s];
+            for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
+                if (!(slot.channel_mask & (1ull << c))) continue;
+                auto &cd = slot.channels[c];
+                if (cd.nsamples <= 0) continue;
+
+                const auto *mod = hycal.module_by_daq(crate, s, c);
+                if (!mod || !mod->is_hycal()) continue;
+
+                float adc_val = 0;
+                if (is_adc1881m) {
+                    adc_val = cd.samples[0];
+                } else {
+                    ana.Analyze(cd.samples, cd.nsamples, wres);
+                    adc_val = bestPeakInWindow(wres, hist_cfg.threshold,
+                                               hist_cfg.time_min, hist_cfg.time_max);
+                }
+                if (adc_val <= 0) continue;
+
+                float energy = (mod->cal_factor > 0.)
+                    ? static_cast<float>(mod->energize(adc_val))
+                    : adc_val * adc_to_mev;
+                mod_energy[mod->index] = energy;
+                clusterer.AddHit(mod->index, energy);
+            }
+        }
+    }
+
+    clusterer.FormClusters();
+
+    json hits_j = json::object();
+    for (int i = 0; i < nmod; ++i)
+        if (mod_energy[i] > 0.f)
+            hits_j[std::to_string(i)] = std::round(mod_energy[i] * 100) / 100;
+
+    std::vector<fdec::HyCalCluster::RecoResult> reco;
+    clusterer.ReconstructMatched(reco);
+
+    json cl_arr = json::array();
+    for (auto &r : reco) {
+        auto &cmod = hycal.module(r.cluster->center.index);
+        json indices = json::array();
+        for (auto &h : r.cluster->hits) indices.push_back(h.index);
+        cl_arr.push_back({
+            {"id", static_cast<int>(cl_arr.size())},
+            {"center", cmod.name}, {"center_id", cmod.id},
+            {"x", std::round(r.hit.x * 10) / 10},
+            {"y", std::round(r.hit.y * 10) / 10},
+            {"energy", std::round(r.hit.energy * 10) / 10},
+            {"nblocks", r.hit.nblocks}, {"npos", r.hit.npos},
+            {"modules", indices},
+        });
+    }
+
+    return {{"event", ev_id}, {"hits", hits_j}, {"clusters", cl_arr}};
+}
+
 void AppState::recordSyncTime(uint32_t unix_time, uint64_t last_ti_ts)
 {
     if (unix_time == 0) return;

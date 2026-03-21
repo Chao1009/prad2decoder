@@ -105,6 +105,10 @@ struct AppState {
     void processEvent(fdec::EventData &event,
                       fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
 
+    // Compute clusters for one decoded event, return JSON response.
+    nlohmann::json computeClustersJson(fdec::EventData &event, int ev_id,
+                                       fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
+
     // Record a sync event's absolute time. Call when a Sync event is scanned.
     // last_ti_ts is the TI timestamp of the most recent physics event.
     void recordSyncTime(uint32_t unix_time, uint64_t last_ti_ts);
