@@ -89,10 +89,12 @@ function drawColorBar(){
     for(let i=0;i<c.width;i++){x.fillStyle=colorScale(i/c.width);x.fillRect(i,0,1,c.height);}
     c.title=PALETTE_NAMES[paletteIdx]+' (click to change)';
     // also draw cluster colorbar
-    const c2=document.getElementById('cl-colorbar-canvas');
-    if(c2){const x2=c2.getContext('2d');
-        for(let i=0;i<c2.width;i++){x2.fillStyle=colorScale(i/c2.width);x2.fillRect(i,0,1,c2.height);}
-        c2.title=PALETTE_NAMES[paletteIdx]+' (click to change)';
+    for(const cid of ['cl-colorbar-canvas','lms-colorbar-canvas']){
+        const c2=document.getElementById(cid);
+        if(c2){const x2=c2.getContext('2d');
+            for(let i=0;i<c2.width;i++){x2.fillStyle=colorScale(i/c2.width);x2.fillRect(i,0,1,c2.height);}
+            c2.title=PALETTE_NAMES[paletteIdx]+' (click to change)';
+        }
     }
 }
 
@@ -1045,6 +1047,7 @@ function plotClHist(){
 // =========================================================================
 let g_lmsWarnThresh=0.1;
 let g_lmsRefIndex=-1;  // -1 = None (no normalization)
+let lmsRangeMin=null, lmsRangeMax=null;  // null = auto
 let lmsSummaryData=null;  // {modules:{idx:{name,mean,rms,count,warn}}, events}
 let lmsSelectedModule=-1;
 
@@ -1148,16 +1151,21 @@ function drawLmsGeo(){
     const useLog=document.getElementById('lms-log-scale').checked;
     const mods=lmsSummaryData?lmsSummaryData.modules:{};
 
-    // compute value range
-    let vmax=0;
+    // compute auto range
+    let autoMax=0;
     for(const k in mods){
         let v=0;
         if(metric==='mean') v=mods[k].mean;
         else if(metric==='rms_frac') v=mods[k].mean>0?mods[k].rms/mods[k].mean:0;
         else v=mods[k].warn?1:0;
-        if(v>vmax) vmax=v;
+        if(v>autoMax) autoMax=v;
     }
-    if(vmax<=0) vmax=1;
+    if(autoMax<=0) autoMax=1;
+    const vmin=lmsRangeMin!==null?lmsRangeMin:0;
+    const vmax=lmsRangeMax!==null?lmsRangeMax:autoMax;
+    const vspan=vmax-vmin||1;
+    document.getElementById('lms-range-min-show').textContent=vmin.toFixed(metric==='rms_frac'?3:0);
+    document.getElementById('lms-range-max-show').textContent=vmax.toFixed(metric==='rms_frac'?3:0);
 
     for(let i=0;i<modules.length;i++){
         const m=modules[i],[cx,cy]=d2c(m.x,m.y),w=m.sx*scale,h=m.sy*scale;
@@ -1174,7 +1182,8 @@ function drawLmsGeo(){
             if(metric==='warn'){
                 fillColor=md.warn?'#f66':'#51cf66';
             } else {
-                let t=useLog?Math.log1p(val)/Math.log1p(vmax):val/vmax;
+                const clamped=Math.max(vmin,Math.min(vmax,val));
+                let t=useLog?Math.log1p(clamped-vmin)/Math.log1p(vspan):(clamped-vmin)/vspan;
                 t=Math.max(0,Math.min(1,t));
                 fillColor=colorScale(t);
             }
@@ -1257,7 +1266,11 @@ function init(){
     document.getElementById('cl-log-scale').onchange=()=>{ if(activeTab==='cluster') drawClusterGeo(); };
     document.getElementById('cl-colorbar-canvas').onclick=()=>{
         paletteIdx=(paletteIdx+1)%PALETTE_NAMES.length;
-        drawColorBar(); if(activeTab==='cluster') drawClusterGeo(); else drawGeo();
+        drawColorBar(); redrawGeo();
+    };
+    document.getElementById('lms-colorbar-canvas').onclick=()=>{
+        paletteIdx=(paletteIdx+1)%PALETTE_NAMES.length;
+        drawColorBar(); redrawGeo();
     };
 
     // cluster energy histogram
@@ -1278,8 +1291,14 @@ function init(){
         ()=>document.getElementById('lms-panel'),
         ()=>0,
         80, 80, ()=>{try{Plotly.Plots.resize('lms-plot');}catch(e){}});
-    document.getElementById('lms-color-metric').onchange=drawLmsGeo;
+    document.getElementById('lms-color-metric').onchange=()=>{lmsRangeMin=null;lmsRangeMax=null;drawLmsGeo();};
     document.getElementById('lms-log-scale').onchange=drawLmsGeo;
+
+    // LMS range editors
+    setupRangeEdit('lms-range-min-btn','lms-range-min-edit','lms-range-min-show',
+        ()=>lmsRangeMin, v=>{lmsRangeMin=v;}, drawLmsGeo);
+    setupRangeEdit('lms-range-max-btn','lms-range-max-edit','lms-range-max-show',
+        ()=>lmsRangeMax, v=>{lmsRangeMax=v;}, drawLmsGeo);
     document.getElementById('lms-ref-select').onchange=e=>{
         g_lmsRefIndex=parseInt(e.target.value);
         fetchLmsSummary();

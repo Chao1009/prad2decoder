@@ -113,6 +113,15 @@
             </select>
             <label>Log</label>
             <input type="checkbox" id="lms-log-scale">
+            <div class="color-bar">
+                <span class="range-val" id="lms-range-min-show">0</span>
+                <input class="range-edit" id="lms-range-min-edit" type="number" step="any">
+                <span class="range-btn" id="lms-range-min-btn" title="Edit min">&#x270E;</span>
+                <canvas id="lms-colorbar-canvas" width="120" height="12" style="cursor:pointer"></canvas>
+                <span class="range-val" id="lms-range-max-show">max</span>
+                <input class="range-edit" id="lms-range-max-edit" type="number" step="any">
+                <span class="range-btn" id="lms-range-max-btn" title="Edit max">&#x270E;</span>
+            </div>
             <span style="margin-left:auto;color:var(--dim);font-size:11px" id="lms-summary-text"></span>
             <button class="geo-reset-btn" onclick="resetGeoView()" title="Reset view">Reset</button>
         </div>

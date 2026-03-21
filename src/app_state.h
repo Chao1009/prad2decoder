@@ -39,6 +39,7 @@ struct AppState {
     // LMS config
     int      lms_trigger_bit  = 16;
     float    lms_warn_thresh  = 0.1f;
+    float    lms_warn_min_mean = 100.f;  // warn if mean below this
     int      lms_max_history  = 5000;
     uint32_t lms_trigger_mask = 0;
 

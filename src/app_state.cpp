@@ -147,8 +147,9 @@ void AppState::init(const std::string &db_dir,
         if (rcfg.contains("lms_monitor")) {
             auto &lm = rcfg["lms_monitor"];
             if (lm.contains("trigger_bit"))    lms_trigger_bit   = lm["trigger_bit"];
-            if (lm.contains("warn_threshold")) lms_warn_thresh   = lm["warn_threshold"];
-            if (lm.contains("max_history"))    lms_max_history   = lm["max_history"];
+            if (lm.contains("warn_threshold")) lms_warn_thresh     = lm["warn_threshold"];
+            if (lm.contains("warn_min_mean"))  lms_warn_min_mean  = lm["warn_min_mean"];
+            if (lm.contains("max_history"))    lms_max_history    = lm["max_history"];
             lms_trigger_mask = (1u << lms_trigger_bit);
             if (lm.contains("reference_channels")) {
                 for (auto &name : lm["reference_channels"]) {
@@ -489,7 +490,8 @@ json AppState::apiLmsSummary(int ref_index) const
         double mean = sum / count;
         double var = sum2 / count - mean * mean;
         double rms = var > 0 ? std::sqrt(var) : 0;
-        bool warn = (mean > 0 && rms / mean > lms_warn_thresh);
+        bool warn = (mean > 0 && rms / mean > lms_warn_thresh) ||
+                    (mean < lms_warn_min_mean);
         if (idx >= 0 && idx < hycal.module_count()) {
             auto &mod = hycal.module(idx);
             mods[std::to_string(idx)] = {
