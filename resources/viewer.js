@@ -20,22 +20,41 @@ let occData={}, occTcutData={}, occTotal=0;
 let currentWaveform=null;  // {x:[], y:[]} for copy button
 let currentHist={};  // {divId: {x:[], y:[]}} for histogram copy
 
-// color range: null = auto from data, number = user-set or hist-synced
-let rangeMin=null, rangeMax=null;
-let rangeUserEdited=false;
-const rangeUserOverrides={};  // {metric: [min, max]} — persists user edits per metric
+// color range: per-tab user overrides, keyed by "tab:metric"
+// Each entry is [min, max] where null = auto
+const geoRangeOverrides={};
+function geoRangeKey(tab, metric){ return tab+':'+metric; }
+function getGeoRange(tab, metric){
+    const k=geoRangeKey(tab, metric);
+    return geoRangeOverrides[k] || [null, null];
+}
+function setGeoRange(tab, metric, min, max){
+    geoRangeOverrides[geoRangeKey(tab, metric)] = [min, max];
+}
+
+// convenience: current tab's range
+function curRange(){
+    const tab=activeTab;
+    let metric='default';
+    if(tab==='dq') metric=document.getElementById('color-metric').value;
+    else if(tab==='cluster') metric='energy';
+    else if(tab==='lms') metric=document.getElementById('lms-color-metric').value;
+    return getGeoRange(tab, metric);
+}
 
 // --- clustering tab state ---
 let activeTab='dq';  // 'dq' or 'cluster'
 let clusterData=null;  // {hits:{}, clusters:[]}
 let selectedCluster=-1;  // -1 = all
 let clusterEvent=-1;  // event number for cached cluster data
-let clRangeMin=null, clRangeMax=null;  // null = auto from data
 
 // cluster energy histogram (accumulated on frontend)
 let clHistBins=null, clHistEvents=0;
 let clHistMin=0, clHistMax=3000, clHistStep=10;
 let currentClHist=null;  // {x:[], y:[]} for copy button
+
+// DQ tab working range (set by syncRangeFromHist, used by drawGeo)
+let rangeMin=null, rangeMax=null;
 
 // default ranges per metric (overridden by hist config)
 const RANGE_DEFAULTS={
@@ -101,15 +120,12 @@ function drawColorBar(){
 // sync color range: hist config > defaults. Only called on metric change (not per-event).
 function syncRangeFromHist(){
     const mt=document.getElementById('color-metric').value;
-    // restore user edits for this metric if they exist
-    if(rangeUserOverrides[mt]){
-        rangeMin=rangeUserOverrides[mt][0];
-        rangeMax=rangeUserOverrides[mt][1];
-        rangeUserEdited=true;
+    const r=getGeoRange('dq', mt);
+    if(r[0]!==null || r[1]!==null){
+        rangeMin=r[0]; rangeMax=r[1];
         updateRangeDisplay();
         return;
     }
-    rangeUserEdited=false;
     const h=histConfig;
     if(mt==='integral' && h.bin_min!==undefined){
         rangeMin=h.bin_min; rangeMax=h.bin_max;
@@ -919,8 +935,9 @@ function drawClusterGeo(){
     let autoMax=0;
     for(const k in hits) if(hits[k]>autoMax) autoMax=hits[k];
     if(autoMax<=0) autoMax=1;
-    const emin=clRangeMin!==null?clRangeMin:0;
-    const emax=clRangeMax!==null?clRangeMax:autoMax;
+    const clr=getGeoRange('cluster','energy');
+    const emin=clr[0]!==null?clr[0]:0;
+    const emax=clr[1]!==null?clr[1]:autoMax;
     document.getElementById('cl-range-min-show').textContent=emin.toFixed(0);
     document.getElementById('cl-range-max-show').textContent=emax.toFixed(0);
 
@@ -1047,7 +1064,7 @@ function plotClHist(){
 // =========================================================================
 let g_lmsWarnThresh=0.1;
 let g_lmsRefIndex=-1;  // -1 = None (no normalization)
-let lmsRangeMin=null, lmsRangeMax=null;  // null = auto
+let currentLmsData=null;  // {x:[], y:[]} for copy button
 let lmsSummaryData=null;  // {modules:{idx:{name,mean,rms,count,warn}}, events}
 let lmsSelectedModule=-1;
 
@@ -1066,10 +1083,12 @@ function fetchLmsHistory(modIdx, modName){
     const refQ=g_lmsRefIndex>=0?`?ref=${g_lmsRefIndex}`:'';
     fetch(`/api/lms/${modIdx}${refQ}`).then(r=>r.json()).then(data=>{
         if(!data.time||!data.time.length){
+            currentLmsData=null;
             Plotly.react('lms-plot',[],{...PL,
                 title:{text:`${modName} — No LMS data`,font:{size:10,color:'#555'}}},PC2);
             return;
         }
+        currentLmsData={x:Array.from(data.time), y:Array.from(data.integral)};
         const vals=data.integral;
         const mean=vals.reduce((a,b)=>a+b,0)/vals.length;
         const warnHi=mean*(1+g_lmsWarnThresh);
@@ -1161,8 +1180,9 @@ function drawLmsGeo(){
         if(v>autoMax) autoMax=v;
     }
     if(autoMax<=0) autoMax=1;
-    const vmin=lmsRangeMin!==null?lmsRangeMin:0;
-    const vmax=lmsRangeMax!==null?lmsRangeMax:autoMax;
+    const lmsr=getGeoRange('lms', metric);
+    const vmin=lmsr[0]!==null?lmsr[0]:0;
+    const vmax=lmsr[1]!==null?lmsr[1]:autoMax;
     const vspan=vmax-vmin||1;
     document.getElementById('lms-range-min-show').textContent=vmin.toFixed(metric==='rms_frac'?3:0);
     document.getElementById('lms-range-max-show').textContent=vmax.toFixed(metric==='rms_frac'?3:0);
@@ -1276,6 +1296,7 @@ function init(){
     // cluster energy histogram
     Plotly.newPlot('cl-energy-hist',[],{...PL,title:{text:'Cluster Energy',font:{size:10,color:'#555'}}},PC2);
     setupCopyBtn('btn-copy-cl-hist', ()=>currentClHist);
+    setupCopyBtn('btn-copy-lms', ()=>currentLmsData);
 
     // cluster panel divider: histogram ↔ table
     setupDivider('div-cl-ht','y',
@@ -1291,14 +1312,24 @@ function init(){
         ()=>document.getElementById('lms-panel'),
         ()=>0,
         80, 80, ()=>{try{Plotly.Plots.resize('lms-plot');}catch(e){}});
-    document.getElementById('lms-color-metric').onchange=()=>{lmsRangeMin=null;lmsRangeMax=null;drawLmsGeo();};
+    document.getElementById('lms-color-metric').onchange=drawLmsGeo;
     document.getElementById('lms-log-scale').onchange=drawLmsGeo;
 
     // LMS range editors
+    function lmsRangeGet(isMax){
+        const mt=document.getElementById('lms-color-metric').value;
+        return getGeoRange('lms',mt)[isMax?1:0];
+    }
+    function lmsRangeSet(isMax, v){
+        const mt=document.getElementById('lms-color-metric').value;
+        const r=getGeoRange('lms',mt);
+        if(isMax) setGeoRange('lms',mt,r[0],v);
+        else setGeoRange('lms',mt,v,r[1]);
+    }
     setupRangeEdit('lms-range-min-btn','lms-range-min-edit','lms-range-min-show',
-        ()=>lmsRangeMin, v=>{lmsRangeMin=v;}, drawLmsGeo);
+        ()=>lmsRangeGet(false), v=>lmsRangeSet(false,v), drawLmsGeo);
     setupRangeEdit('lms-range-max-btn','lms-range-max-edit','lms-range-max-show',
-        ()=>lmsRangeMax, v=>{lmsRangeMax=v;}, drawLmsGeo);
+        ()=>lmsRangeGet(true), v=>lmsRangeSet(true,v), drawLmsGeo);
     document.getElementById('lms-ref-select').onchange=e=>{
         g_lmsRefIndex=parseInt(e.target.value);
         fetchLmsSummary();
@@ -1359,9 +1390,8 @@ function init(){
     }
     // DQ range editors
     function dqRangeApply(){
-        rangeUserEdited=true;
         const mt=document.getElementById('color-metric').value;
-        rangeUserOverrides[mt]=[rangeMin,rangeMax];
+        setGeoRange('dq', mt, rangeMin, rangeMax);
         updateRangeDisplay(); drawGeo();
     }
     setupRangeEdit('range-min-btn','range-min-edit','range-min-show',
@@ -1371,9 +1401,13 @@ function init(){
     // Cluster range editors
     function clRangeApply(){ drawClusterGeo(); }
     setupRangeEdit('cl-range-min-btn','cl-range-min-edit','cl-range-min-show',
-        ()=>clRangeMin, v=>{clRangeMin=v;}, clRangeApply);
+        ()=>getGeoRange('cluster','energy')[0],
+        v=>{const r=getGeoRange('cluster','energy');setGeoRange('cluster','energy',v,r[1]);},
+        clRangeApply);
     setupRangeEdit('cl-range-max-btn','cl-range-max-edit','cl-range-max-show',
-        ()=>clRangeMax, v=>{clRangeMax=v;}, clRangeApply);
+        ()=>getGeoRange('cluster','energy')[1],
+        v=>{const r=getGeoRange('cluster','energy');setGeoRange('cluster','energy',r[0],v);},
+        clRangeApply);
 
     // --- online mode nav ---
     document.getElementById('ring-select').onchange=e=>{
