@@ -164,6 +164,14 @@ void AppState::init(const std::string &db_dir,
                       << " refs=" << lms_ref_channels.size() << "\n";
         }
 
+        if (rcfg.contains("color_ranges")) {
+            for (auto &[key, val] : rcfg["color_ranges"].items()) {
+                if (val.is_array() && val.size() == 2)
+                    color_range_defaults[key] = {val[0].get<float>(), val[1].get<float>()};
+            }
+            std::cerr << "Color ranges: " << color_range_defaults.size() << " entries\n";
+        }
+
         if (rcfg.contains("calibration")) {
             auto &cal = rcfg["calibration"];
             if (cal.contains("adc_to_mev")) adc_to_mev = cal["adc_to_mev"];
@@ -475,6 +483,14 @@ void AppState::clearLms()
 //=============================================================================
 // API response builders
 //=============================================================================
+
+json AppState::apiColorRanges() const
+{
+    json obj = json::object();
+    for (auto &[k, v] : color_range_defaults)
+        obj[k] = {v.first, v.second};
+    return obj;
+}
 
 json AppState::apiHist(bool integral, const std::string &key) const
 {

@@ -372,6 +372,7 @@ static json buildConfig() {
     cfg["cluster_hist"] = {
         {"min", g_app.cl_hist_min}, {"max", g_app.cl_hist_max}, {"step", g_app.cl_hist_step},
     };
+    cfg["color_ranges"] = g_app.apiColorRanges();
     cfg["lms"] = {
         {"trigger_bit", g_app.lms_trigger_bit},
         {"warn_threshold", g_app.lms_warn_thresh},

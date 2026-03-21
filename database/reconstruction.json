@@ -22,6 +22,17 @@
         "max_history": 5000,
         "reference_channels": ["LMS1", "LMS2", "LMS3"]
     },
+    "color_ranges": {
+        "dq:integral":  [0, 10000],
+        "dq:height":    [0, 1000],
+        "dq:count":     [0, 10],
+        "dq:time":      [0, 400],
+        "dq:pedestal":  [0, 500],
+        "dq:occupancy": [0, 100],
+        "cluster:energy": [0, 1000],
+        "lms:mean":     [0, 5000],
+        "lms:rms_frac": [0, 0.2]
+    },
     "calibration": {
         "adc_to_mev": 0.078,
         "calibration_file": "prad1/prad_calibration.json"

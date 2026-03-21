@@ -50,6 +50,9 @@ struct AppState {
     };
     std::vector<LmsRefChannel> lms_ref_channels;
 
+    // color range defaults: key "tab:metric" → [min, max]
+    std::map<std::string, std::pair<float, float>> color_range_defaults;
+
     // cluster config
     uint32_t cluster_skip_mask = 0;
     float    adc_to_mev        = 1.0f;
@@ -121,6 +124,7 @@ struct AppState {
     nlohmann::json apiHist(bool integral, const std::string &key) const;
     nlohmann::json apiClusterHist() const;
     nlohmann::json apiOccupancy() const;
+    nlohmann::json apiColorRanges() const;
     nlohmann::json apiLmsSummary(int ref_index = -1) const;
     nlohmann::json apiLmsModule(int module_index, int ref_index = -1) const;
     nlohmann::json apiLmsRefChannels() const;

@@ -53,18 +53,8 @@ let clHistBins=null, clHistEvents=0;
 let clHistMin=0, clHistMax=3000, clHistStep=10;
 let currentClHist=null;  // {x:[], y:[]} for copy button
 
-// DQ tab working range (set by syncRangeFromHist, used by drawGeo)
+// DQ tab working range (set by syncDqRange, used by drawGeo)
 let rangeMin=null, rangeMax=null;
-
-// default ranges per metric (overridden by hist config)
-const RANGE_DEFAULTS={
-    integral:  [0, 10000],
-    height:    [0, 1000],
-    count:     [0, 10],
-    time:      [0, 400],
-    pedestal:  [0, 500],
-    occupancy: [0, 100],
-};
 
 // =========================================================================
 // Color scale — click the colorbar to cycle palettes
@@ -117,24 +107,11 @@ function drawColorBar(){
     }
 }
 
-// sync color range: hist config > defaults. Only called on metric change (not per-event).
-function syncRangeFromHist(){
+// load DQ color range for current metric from overrides.
+function syncDqRange(){
     const mt=document.getElementById('color-metric').value;
     const r=getGeoRange('dq', mt);
-    if(r[0]!==null || r[1]!==null){
-        rangeMin=r[0]; rangeMax=r[1];
-        updateRangeDisplay();
-        return;
-    }
-    const h=histConfig;
-    if(mt==='integral' && h.bin_min!==undefined){
-        rangeMin=h.bin_min; rangeMax=h.bin_max;
-    } else if(mt==='time' && h.pos_min!==undefined){
-        rangeMin=h.pos_min; rangeMax=h.pos_max;
-    } else {
-        const def=RANGE_DEFAULTS[mt]||[null,null];
-        rangeMin=def[0]; rangeMax=def[1];
-    }
+    rangeMin=r[0]; rangeMax=r[1];
     updateRangeDisplay();
 }
 
@@ -724,7 +701,7 @@ function pollProgress() {
                 document.getElementById('ev-total').textContent = `/ ${totalEvents}`;
                 updateHeaderInfo(cfg);
                 if (histEnabled) { fetchOccupancy(); fetchClHist(); }
-                syncRangeFromHist();
+                syncDqRange();
                 drawGeo();
                 if (totalEvents > 0) loadEvent(1);
             });
@@ -747,7 +724,7 @@ function fetchOccupancy() {
         // redraw if currently showing occupancy
         const mt = document.getElementById('color-metric').value;
         if (mt === 'occupancy') {
-            syncRangeFromHist();
+            syncDqRange();
             drawGeo();
         }
     }).catch(() => {});
@@ -1351,7 +1328,7 @@ function init(){
     document.getElementById('btn-prev').onclick=()=>{if(currentEvent>1)loadEvent(currentEvent-1);};
     document.getElementById('btn-next').onclick=()=>{if(currentEvent<totalEvents)loadEvent(currentEvent+1);};
     document.getElementById('ev-input').onchange=e=>{const v=parseInt(e.target.value);if(v>=1&&v<=totalEvents)loadEvent(v);};
-    document.getElementById('color-metric').onchange=()=>{syncRangeFromHist();drawGeo();};
+    document.getElementById('color-metric').onchange=()=>{syncDqRange();drawGeo();};
     document.getElementById('log-scale').onchange=drawGeo;
     document.getElementById('time-cut').onchange=drawGeo;
 
@@ -1554,6 +1531,13 @@ function init(){
                 }
             }
         }
+        // load color range defaults from server config
+        if(data.color_ranges){
+            for(const [k,v] of Object.entries(data.color_ranges)){
+                if(Array.isArray(v) && v.length===2 && !geoRangeOverrides[k])
+                    geoRangeOverrides[k]=v;
+            }
+        }
         updateTimeCutLabel();
         mode=data.mode||'file';
         g_currentFile=data.current_file||'';
@@ -1576,14 +1560,14 @@ function init(){
             document.getElementById('ev-total').textContent=`/ ${totalEvents}`;
             updateHeaderInfo(data);
             if(histEnabled) { fetchOccupancy(); fetchClHist(); }
-            syncRangeFromHist();
+            syncDqRange();
             geoViewInit=false; resizeGeo();
             if(totalEvents>0)loadEvent(1);
         } else {
             setEtStatus(data.et_connected||false);
             document.getElementById('header-info').textContent=
                 `${modules.length} modules · ONLINE · ring ${data.ring_buffer_size||20}`;
-            syncRangeFromHist();
+            syncDqRange();
             fetchOccupancy();
             resizeGeo();
             connectWebSocket();
