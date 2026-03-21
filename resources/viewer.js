@@ -140,24 +140,70 @@ function updateRangeDisplay(){
 // =========================================================================
 // Geo canvas
 // =========================================================================
+let geoViewInit=false;  // has fitView been called at least once?
+let geoDragging=false, geoDragX=0, geoDragY=0;
+
 function initGeo(){
     geoWrap=document.getElementById('geo-wrap');
     geoCanvas=document.getElementById('geo-canvas');
     geoCtx=geoCanvas.getContext('2d');
     resizeGeo();
     new ResizeObserver(resizeGeo).observe(geoWrap);
+
+    // zoom with mouse wheel
+    geoCanvas.addEventListener('wheel',e=>{
+        e.preventDefault();
+        const r=geoCanvas.getBoundingClientRect();
+        const cx=e.clientX-r.left, cy=e.clientY-r.top;
+        const factor=e.deltaY<0?1.15:1/1.15;
+        // zoom around cursor position
+        offsetX=cx-(cx-offsetX)*factor;
+        offsetY=cy-(cy-offsetY)*factor;
+        scale*=factor;
+        redrawGeo();
+    },{passive:false});
+
+    // pan with mouse drag
+    geoCanvas.addEventListener('mousedown',e=>{
+        if(e.button===1||(e.button===0&&e.shiftKey)){
+            // middle-click or shift+left-click to pan
+            geoDragging=true; geoDragX=e.clientX; geoDragY=e.clientY;
+            geoCanvas.style.cursor='grabbing';
+            e.preventDefault();
+        }
+    });
+    window.addEventListener('mousemove',e=>{
+        if(!geoDragging) return;
+        offsetX+=e.clientX-geoDragX;
+        offsetY+=e.clientY-geoDragY;
+        geoDragX=e.clientX; geoDragY=e.clientY;
+        redrawGeo();
+    });
+    window.addEventListener('mouseup',e=>{
+        if(geoDragging){ geoDragging=false; geoCanvas.style.cursor=''; }
+    });
+
+    // double-click to reset view
+    geoCanvas.addEventListener('dblclick',e=>{
+        if(modules.length) fitView();
+        redrawGeo();
+    });
 }
 function resizeGeo(){
     canvasW=geoWrap.clientWidth; canvasH=geoWrap.clientHeight;
     if(canvasW<10||canvasH<10)return;
     geoCanvas.width=canvasW; geoCanvas.height=canvasH;
-    if(modules.length)fitView(); drawGeo();
+    if(modules.length && !geoViewInit){ fitView(); geoViewInit=true; }
+    redrawGeo();
 }
 function fitView(){
     const m=15;let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
     for(const d of modules){x0=Math.min(x0,d.x-d.sx/2);x1=Math.max(x1,d.x+d.sx/2);y0=Math.min(y0,d.y-d.sy/2);y1=Math.max(y1,d.y+d.sy/2);}
     scale=Math.min((canvasW-2*m)/(x1-x0),(canvasH-2*m)/(y1-y0));
     offsetX=canvasW/2-(x0+x1)/2*scale; offsetY=canvasH/2+(y0+y1)/2*scale;
+}
+function redrawGeo(){
+    if(activeTab==='cluster') drawClusterGeo(); else drawGeo();
 }
 function d2c(x,y){return[x*scale+offsetX,-y*scale+offsetY];}
 function c2d(cx,cy){return[(cx-offsetX)/scale,-(cy-offsetY)/scale];}
@@ -1228,7 +1274,7 @@ function init(){
             updateHeaderInfo(data);
             if(histEnabled) { fetchOccupancy(); fetchClHist(); }
             syncRangeFromHist();
-            resizeGeo();
+            geoViewInit=false; resizeGeo();
             if(totalEvents>0)loadEvent(1);
         } else {
             setEtStatus(data.et_connected||false);
