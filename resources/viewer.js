@@ -1053,7 +1053,7 @@ function init(){
     setupDivider('div-cl-ht','y',
         ()=>document.getElementById('cl-hist-panel'),
         ()=>document.getElementById('cluster-panel'),
-        ()=>document.getElementById('cl-detail-header').offsetHeight,
+        ()=>0,
         80, 80, ()=>{try{Plotly.Plots.resize('cl-energy-hist');}catch(e){}});
 
     // --- file mode nav ---
