@@ -586,6 +586,7 @@ function connectWebSocket() {
         try {
             const msg = JSON.parse(evt.data);
             if (msg.type === 'new_event') {
+                setEtStatus(true);  // receiving events means ET is connected
                 const now = Date.now();
                 // throttle event display to ~5 Hz
                 if (autoFollow && now - lastEventFetch > 200) {

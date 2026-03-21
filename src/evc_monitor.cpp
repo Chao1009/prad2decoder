@@ -419,7 +419,7 @@ int main(int argc, char *argv[])
     }
 
     // initialize shared state (DAQ config, HyCal, histograms, clustering, LMS)
-    g_app.init(db_dir, daq_config_file, "");
+    g_app.init(db_dir, daq_config_file, config_file);
 
     // build base_config JSON for /api/config
     json modules_j = json::array(), daq_j = json::array();

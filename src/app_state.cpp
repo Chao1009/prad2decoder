@@ -13,8 +13,13 @@ using json = nlohmann::json;
 
 void AppState::init(const std::string &db_dir,
                     const std::string &daq_config_file,
-                    const std::string &hist_config_file)
+                    const std::string &config_file)
 {
+    // resolve main config file: -c override > config.json > reconstruction.json
+    std::string main_config = config_file;
+    if (main_config.empty()) main_config = findFile("config.json", db_dir);
+    if (main_config.empty()) main_config = findFile("reconstruction.json", db_dir);
+
     // --- DAQ config + pedestals ---
     if (!daq_config_file.empty()) {
         if (evc::load_daq_config(daq_config_file, daq_cfg)) {
@@ -80,31 +85,20 @@ void AppState::init(const std::string &db_dir,
         }
     };
 
-    // first try config.json for "waveform" section
-    std::string reco_file_pre = findFile("config.json", db_dir);
-    if (reco_file_pre.empty()) reco_file_pre = findFile("reconstruction.json", db_dir);
+    // load waveform config from main config, or legacy hist_config.json
     bool waveform_loaded = false;
-    if (!reco_file_pre.empty()) {
-        std::string s = readFile(reco_file_pre);
+    if (!main_config.empty()) {
+        std::string s = readFile(main_config);
         if (!s.empty()) {
             auto j = json::parse(s, nullptr, false);
             if (j.contains("waveform")) { loadWaveformConfig(j["waveform"]); waveform_loaded = true; }
+            // legacy "hist" section
+            else if (j.contains("hist")) { loadLegacyHistConfig(j); waveform_loaded = true; }
         }
     }
-
-    // fall back to hist_config.json or -H override
     if (!waveform_loaded) {
-        std::string hcfg_path = hist_config_file.empty()
-            ? findFile("hist_config.json", db_dir) : hist_config_file;
+        std::string hcfg_path = findFile("hist_config.json", db_dir);
         std::string hcfg_str = readFile(hcfg_path);
-        if (!hcfg_str.empty()) {
-            loadLegacyHistConfig(json::parse(hcfg_str, nullptr, false));
-            std::cerr << "Hist config: " << hcfg_path << "\n";
-        }
-    }
-    // -H override always wins (if provided)
-    if (!hist_config_file.empty()) {
-        std::string hcfg_str = readFile(hist_config_file);
         if (!hcfg_str.empty())
             loadLegacyHistConfig(json::parse(hcfg_str, nullptr, false));
     }
@@ -161,11 +155,8 @@ void AppState::init(const std::string &db_dir,
     for (auto &[k, v] : crate_roc_json.items())
         roc_to_crate[v.get<int>()] = std::stoi(k);
 
-    // --- Reconstruction config ---
-    // try config.json first, fall back to reconstruction.json
-    std::string reco_file = findFile("config.json", db_dir);
-    if (reco_file.empty()) reco_file = findFile("reconstruction.json", db_dir);
-    std::string reco_str = readFile(reco_file);
+    // --- Reconstruction config (from same main config file) ---
+    std::string reco_str = readFile(main_config);
     if (!reco_str.empty()) {
         auto rcfg = json::parse(reco_str, nullptr, false);
 
@@ -239,7 +230,7 @@ void AppState::init(const std::string &db_dir,
                     std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
             }
         }
-        std::cerr << "Reco      : " << reco_file
+        std::cerr << "Reco      : " << main_config
                   << " (adc_to_mev=" << adc_to_mev << ")\n";
     }
 

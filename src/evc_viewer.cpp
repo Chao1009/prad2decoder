@@ -464,13 +464,13 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl) {
 int main(int argc, char *argv[]) {
     std::string evio_file;
     int port = 5050;
-    std::string hist_config_file;
+    std::string config_file;
     std::string daq_config_file;
 
     static struct option long_opts[] = {
         {"port",        required_argument, nullptr, 'p'},
         {"hist",        no_argument,       nullptr, 'H'},
-        {"hist-config", required_argument, nullptr, 'c'},
+        {"config",      required_argument, nullptr, 'c'},
         {"data-dir",    required_argument, nullptr, 'd'},
         {"daq-config",  required_argument, nullptr, 'D'},
         {"help",        no_argument,       nullptr, '?'},
@@ -482,12 +482,12 @@ int main(int argc, char *argv[]) {
         switch (opt) {
         case 'p': port = std::atoi(optarg); break;
         case 'H': g_hist_enabled = true; break;
-        case 'c': hist_config_file = optarg; g_hist_enabled = true; break;
+        case 'c': config_file = optarg; break;
         case 'd': g_data_dir = optarg; break;
         case 'D': daq_config_file = optarg; break;
         default:
             std::cerr << "Usage: " << argv[0]
-                      << " [evio_file] [-p port] [-H] [-c hist_config.json]"
+                      << " [evio_file] [-p port] [-H] [-c config.json]"
                       << " [-d data_dir] [-D daq_config.json]\n";
             return 1;
         }
@@ -498,7 +498,7 @@ int main(int argc, char *argv[]) {
     std::string res_dir = RESOURCE_DIR;
 
     // initialize shared state
-    g_app.init(db_dir, daq_config_file, hist_config_file);
+    g_app.init(db_dir, daq_config_file, config_file);
 
     // build base_config for /api/config
     std::string mod_file = findFile("hycal_modules.json", db_dir);
