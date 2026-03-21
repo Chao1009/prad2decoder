@@ -569,10 +569,11 @@ function connectWebSocket() {
                     lastRingFetch = now;
                     updateRingSelector();
                 }
-                // throttle occupancy refresh to ~0.5 Hz
+                // throttle occupancy + cluster hist refresh to ~0.5 Hz
                 if (now - lastOccFetch > 2000) {
                     lastOccFetch = now;
                     fetchOccupancy();
+                    fetchClHist();
                 }
             } else if (msg.type === 'status') {
                 setEtStatus(msg.connected, msg.waiting, msg.retries);
@@ -815,8 +816,8 @@ function loadClusterData(evnum){
         selectedCluster=-1;
         drawClusterGeo();
         updateClusterUI();
-        // accumulate energy histogram (only if no prebuilt data)
-        if(!histEnabled && data.clusters && data.clusters.length>0){
+        // accumulate energy histogram from per-event cluster data
+        if(data.clusters && data.clusters.length>0){
             fillClHist(data.clusters);
             plotClHist();
         }
