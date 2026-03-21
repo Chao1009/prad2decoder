@@ -14,7 +14,8 @@ let histEnabled=false, histConfig={};
 let mode='file';    // 'file' or 'online'
 let ws=null;        // WebSocket connection (online mode)
 let autoFollow=true; // auto-load latest event
-let lastEventFetch=0, lastHistFetch=0, lastRingFetch=0, lastOccFetch=0;  // throttle timestamps
+let lastEventFetch=0, lastHistFetch=0, lastRingFetch=0, lastOccFetch=0, lastLmsFetch=0;
+let refreshEventMs=200, refreshRingMs=500, refreshHistMs=2000, refreshLmsMs=2000;
 
 // occupancy data (fetched once per file load when histograms enabled)
 let occData={}, occTcutData={}, occTotal=0;
@@ -445,7 +446,7 @@ function showHistograms(mod){
     // in online mode, throttle histogram fetches to ~1 Hz
     if (mode === 'online') {
         const now = Date.now();
-        if (now - lastHistFetch < 1000) return;
+        if (now - lastHistFetch < refreshHistMs) return;
         lastHistFetch = now;
     }
     const key=`${mod.roc}_${mod.sl}_${mod.ch}`;
@@ -589,17 +590,17 @@ function connectWebSocket() {
                 setEtStatus(true);  // receiving events means ET is connected
                 const now = Date.now();
                 // throttle event display to ~5 Hz
-                if (autoFollow && now - lastEventFetch > 200) {
+                if (autoFollow && now - lastEventFetch > refreshEventMs) {
                     lastEventFetch = now;
                     loadLatestEvent();
                 }
                 // throttle ring selector update to ~2 Hz
-                if (now - lastRingFetch > 500) {
+                if (now - lastRingFetch > refreshRingMs) {
                     lastRingFetch = now;
                     updateRingSelector();
                 }
                 // throttle occupancy + cluster hist refresh to ~0.5 Hz
-                if (now - lastOccFetch > 2000) {
+                if (now - lastOccFetch > refreshHistMs) {
                     lastOccFetch = now;
                     fetchOccupancy();
                     fetchClHist();
@@ -611,6 +612,20 @@ function connectWebSocket() {
                 initClHist(); plotClHist();
                 if (selectedModule) showHistograms(selectedModule);
                 drawGeo();
+            } else if (msg.type === 'lms_event') {
+                // throttle LMS refresh to ~0.5 Hz
+                const now2 = Date.now();
+                if (!lastLmsFetch) lastLmsFetch = 0;
+                if (now2 - lastLmsFetch > refreshLmsMs) {
+                    lastLmsFetch = now2;
+                    if(activeTab==='lms') fetchLmsSummary();
+                    // also refresh selected module's history
+                    if(activeTab==='lms' && lmsSelectedModule>=0){
+                        const name=lmsSummaryData&&lmsSummaryData.modules&&lmsSummaryData.modules[String(lmsSelectedModule)]
+                            ?lmsSummaryData.modules[String(lmsSelectedModule)].name:'';
+                        fetchLmsHistory(lmsSelectedModule, name);
+                    }
+                }
             } else if (msg.type === 'lms_cleared') {
                 lmsSummaryData=null; lmsSelectedModule=-1; currentLmsData=null;
                 if(activeTab==='lms'){ drawLmsGeo(); updateLmsTable(); }
@@ -1577,6 +1592,12 @@ function init(){
                 if(Array.isArray(v) && v.length===2 && !geoRangeOverrides[k])
                     geoRangeOverrides[k]=v;
             }
+        }
+        if(data.refresh_ms){
+            refreshEventMs=data.refresh_ms.event||200;
+            refreshRingMs=data.refresh_ms.ring||500;
+            refreshHistMs=data.refresh_ms.histogram||2000;
+            refreshLmsMs=data.refresh_ms.lms||2000;
         }
         updateTimeCutLabel();
         mode=data.mode||'file';

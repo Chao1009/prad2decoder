@@ -333,6 +333,8 @@ static json buildConfig() {
         {"min", g_app.cl_hist_min}, {"max", g_app.cl_hist_max}, {"step", g_app.cl_hist_step},
     };
     cfg["color_ranges"] = g_app.apiColorRanges();
+    cfg["refresh_ms"] = {{"event", g_app.refresh_event_ms}, {"ring", g_app.refresh_ring_ms},
+                         {"histogram", g_app.refresh_hist_ms}, {"lms", g_app.refresh_lms_ms}};
     cfg["lms"] = {
         {"trigger_bit", g_app.lms_trigger_bit},
         {"warn_threshold", g_app.lms_warn_thresh},

@@ -160,6 +160,17 @@ void AppState::init(const std::string &db_dir,
     if (!reco_str.empty()) {
         auto rcfg = json::parse(reco_str, nullptr, false);
 
+        if (rcfg.contains("online")) {
+            auto &on = rcfg["online"];
+            if (on.contains("refresh_ms")) {
+                auto &r = on["refresh_ms"];
+                if (r.contains("event"))     refresh_event_ms = r["event"];
+                if (r.contains("ring"))      refresh_ring_ms  = r["ring"];
+                if (r.contains("histogram")) refresh_hist_ms  = r["histogram"];
+                if (r.contains("lms"))       refresh_lms_ms   = r["lms"];
+            }
+        }
+
         if (rcfg.contains("clustering")) {
             auto &cc = rcfg["clustering"];
             auto loadCfg = [](const json &j, fdec::ClusterConfig &cfg) {
@@ -349,16 +360,6 @@ void AppState::clusterEvent(fdec::EventData &event,
 void AppState::processLms(fdec::EventData &event,
                           fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
-    // debug: log first few trigger bits seen
-    static int dbg_count = 0;
-    if (dbg_count < 20) {
-        std::cerr << "LMS check: trig_bits=0x" << std::hex << event.info.trigger_bits
-                  << " mask=0x" << lms_trigger_mask << std::dec
-                  << " match=" << ((event.info.trigger_bits & lms_trigger_mask) ? "YES" : "NO")
-                  << "\n";
-        dbg_count++;
-    }
-
     if (lms_trigger_mask == 0 ||
         !(event.info.trigger_bits & lms_trigger_mask)) return;
 

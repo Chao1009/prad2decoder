@@ -50,6 +50,12 @@ struct AppState {
     };
     std::vector<LmsRefChannel> lms_ref_channels;
 
+    // online refresh rates (ms), served to frontend
+    int refresh_event_ms = 200;
+    int refresh_ring_ms  = 500;
+    int refresh_hist_ms  = 2000;
+    int refresh_lms_ms   = 2000;
+
     // color range defaults: key "tab:metric" → [min, max]
     std::map<std::string, std::pair<float, float>> color_range_defaults;
 

@@ -4,7 +4,13 @@
         "et_port": 11111,
         "et_file": "/et/clasprod",
         "et_station": "prad2_monitor",
-        "ring_buffer_size": 20
+        "ring_buffer_size": 20,
+        "refresh_ms": {
+            "event": 200,
+            "ring": 500,
+            "histogram": 2000,
+            "lms": 2000
+        }
     },
     "waveform": {
         "time_cut": {"min": 160, "max": 220},
