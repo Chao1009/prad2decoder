@@ -2,6 +2,7 @@
 // State
 // =========================================================================
 let modules=[], totalEvents=0, currentEvent=1;
+let currentEventNumber=0, currentTriggerBits=0;  // DAQ event number + trigger from last loaded event
 let eventChannels={};
 let selectedModule=null, hoveredModule=null;
 let geoCanvas, geoCtx, geoWrap, scale=1, offsetX=0, offsetY=0, canvasW, canvasH;
@@ -458,6 +459,32 @@ function showHistograms(mod){
 // =========================================================================
 let eventRequestId = 0;  // increments on each fetch, stale responses ignored
 
+// Build sample label: "Sample 100 (Evt. 99)"
+function sampleLabel(){
+    const evn=currentEventNumber?` (Evt. ${currentEventNumber})`:'';
+    return `Sample ${currentEvent}${evn}`;
+}
+
+// Update status bar based on active tab
+function updateStatusBar(){
+    const modeTag = mode === 'online' ? ' [LIVE]' : '';
+    const trig = currentTriggerBits ? ` trig=0x${currentTriggerBits.toString(16)}` : '';
+    const label = sampleLabel();
+
+    if(activeTab==='cluster'){
+        const nc=clusterData?clusterData.clusters?clusterData.clusters.length:0:0;
+        const nh=clusterData?clusterData.hits?Object.keys(clusterData.hits).length:0:0;
+        document.getElementById('status-bar').textContent=`${label}: ${nc} clusters, ${nh} hit modules${trig}${modeTag}`;
+    } else if(activeTab==='lms'){
+        const lmsN=lmsSummaryData?lmsSummaryData.events||0:0;
+        document.getElementById('status-bar').textContent=`${label} | LMS: ${lmsN} events${modeTag}`;
+    } else {
+        const nch = Object.keys(eventChannels).length;
+        const npk = Object.values(eventChannels).reduce((s,c) => s + (c.pk||[]).length, 0);
+        document.getElementById('status-bar').textContent=`${label}: ${nch} channels, ${npk} peaks${trig}${modeTag}`;
+    }
+}
+
 function loadEventData(reqId, data) {
     if (reqId !== eventRequestId) return;  // stale response, discard
     if (data.error) {
@@ -467,13 +494,10 @@ function loadEventData(reqId, data) {
         return;
     }
     currentEvent = data.event;
+    currentEventNumber = data.event_number || 0;
+    currentTriggerBits = data.trigger_bits || 0;
     eventChannels = data.channels || {};
-    const nch = Object.keys(eventChannels).length;
-    const npk = Object.values(eventChannels).reduce((s,c) => s + (c.pk||[]).length, 0);
-    const modeTag = mode === 'online' ? ' [LIVE]' : '';
-    const evNum = data.event_number !== undefined ? ` (DAQ #${data.event_number})` : '';
-    const trigBits = data.trigger_bits !== undefined ? ` trig=0x${data.trigger_bits.toString(16)}` : '';
-    document.getElementById('status-bar').textContent = `Event ${currentEvent}${evNum}: ${nch} channels, ${npk} peaks${trigBits}${modeTag}`;
+    updateStatusBar();
     if(activeTab==='cluster'){
         clusterEvent=-1; // invalidate cache
         loadClusterData(currentEvent);
@@ -489,7 +513,7 @@ function loadEvent(evnum) {
     currentEvent = evnum;
     const reqId = ++eventRequestId;
     if (mode === 'file') document.getElementById('ev-input').value = evnum;
-    document.getElementById('status-bar').textContent = `Loading event ${evnum}...`;
+    document.getElementById('status-bar').textContent = `Loading sample ${evnum}...`;
     fetch(`/api/event/${evnum}`).then(r => r.json()).then(d => loadEventData(reqId, d))
         .catch(err => { document.getElementById('status-bar').textContent = `Error: ${err}`; });
 }
@@ -512,7 +536,7 @@ function updateRingSelector() {
         for (let i = ring.length - 1; i >= 0; i--) {
             const o = document.createElement('option');
             o.value = ring[i];
-            o.textContent = `Event ${ring[i]}` + (i === ring.length - 1 ? ' (latest)' : '');
+            o.textContent = `Sample ${ring[i]}` + (i === ring.length - 1 ? ' (latest)' : '');
             sel.appendChild(o);
         }
         // keep selection if not auto-following
@@ -541,7 +565,7 @@ function updateFollowStatus() {
     if (autoFollow) {
         el.style.display = 'none';
     } else {
-        el.textContent = `⏸ Paused at event ${currentEvent} — click or press F to resume`;
+        el.textContent = `⏸ Paused at ${sampleLabel()} — click or press F to resume`;
         el.style.display = '';
     }
 }
@@ -798,6 +822,7 @@ function switchTab(tab){
     } else {
         drawGeo();
     }
+    updateStatusBar();
 }
 
 // =========================================================================
@@ -805,7 +830,7 @@ function switchTab(tab){
 // =========================================================================
 function loadClusterData(evnum){
     if(clusterEvent===evnum && clusterData) { drawClusterGeo(); updateClusterTable(); return; }
-    document.getElementById('status-bar').textContent=`Loading clusters for event ${evnum}...`;
+    document.getElementById('status-bar').textContent=`Loading clusters for sample ${evnum}...`;
     fetch(`/api/clusters/${evnum}`).then(r=>{
         if(!r.ok) throw new Error('not available');
         return r.json();
@@ -821,9 +846,7 @@ function loadClusterData(evnum){
             fillClHist(data.clusters);
             plotClHist();
         }
-        const nc=data.clusters?data.clusters.length:0;
-        const nh=data.hits?Object.keys(data.hits).length:0;
-        document.getElementById('status-bar').textContent=`Event ${evnum}: ${nc} clusters, ${nh} hit modules`;
+        updateStatusBar();
     }).catch(err=>{ document.getElementById('status-bar').textContent=`Error: ${err}`; });
 }
 
