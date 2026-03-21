@@ -60,7 +60,7 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
 
 /* reset view button — overlay inside geo canvas */
 .geo-view-reset {
-    position:absolute; top:6px; right:6px; z-index:5;
+    position:absolute; top:6px; left:6px; z-index:5;
     background:rgba(15,52,96,0.8); border:1px solid var(--border); color:var(--dim);
     padding:2px 8px; border-radius:3px; cursor:pointer; font-family:inherit; font-size:11px;
 }
