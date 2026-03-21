@@ -490,6 +490,25 @@ bool EvChannel::DecodeEvent(int i, fdec::EventData &evt) const
     return roc_idx > 0;
 }
 
+// === Control event time extraction ==========================================
+
+uint32_t EvChannel::GetControlTime() const
+{
+    if (evtype != EventType::Sync) return 0;
+
+    // Control event layout (after 2-word bank header):
+    //   word[0]: [Event Type | 0x01 | 0]  (data word header)
+    //   word[1]: unix timestamp
+    //   word[2]: A (run number / event counts)
+    //   word[3]: B (run type / event counts)
+    BankHeader evh(&buffer[0]);
+    size_t data_off = BankHeader::size();
+    size_t data_words = evh.data_words();
+    if (data_words >= 2)
+        return buffer[data_off + 1];  // second data word is time
+    return 0;
+}
+
 // === EPICS text extraction ==================================================
 
 std::string EvChannel::ExtractEpicsText() const

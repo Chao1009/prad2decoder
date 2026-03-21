@@ -72,7 +72,11 @@ struct AppState {
     std::map<int, std::vector<LmsEntry>> lms_history;
     std::atomic<int> lms_events{0};
     uint64_t lms_first_ts = 0;
-    uint32_t lms_start_unix = 0;   // unix time of first LMS event (from event info)
+
+    // Sync reference point for absolute time display
+    // sync_unix = absolute time, sync_rel_sec = relative time on LMS axis
+    uint32_t sync_unix    = 0;
+    double   sync_rel_sec = 0.;
 
     // ---- Initialization (call once at startup) -----------------------------
 
@@ -99,6 +103,10 @@ struct AppState {
     // Thread-safe (locks internally).
     void processEvent(fdec::EventData &event,
                       fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
+
+    // Record a sync event's absolute time. Call when a Sync event is scanned.
+    // last_ti_ts is the TI timestamp of the most recent physics event.
+    void recordSyncTime(uint32_t unix_time, uint64_t last_ti_ts);
 
     // ---- Clearing ----------------------------------------------------------
     void clearHistograms();   // locks data_mtx

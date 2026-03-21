@@ -204,12 +204,19 @@ static void buildHistograms(const std::string &path, Progress &prog) {
 
     prog.phase = 2; prog.current = 0;
     int buf = 0;
+    uint64_t last_ti_ts = 0;
     while (ch.Read() == status::success) {
         ++buf;
         if (!ch.Scan()) continue;
+        // capture sync time reference
+        if (g_app.sync_unix == 0) {
+            uint32_t ct = ch.GetControlTime();
+            if (ct != 0) g_app.recordSyncTime(ct, last_ti_ts);
+        }
         for (int i = 0; i < ch.GetNEvents(); ++i) {
             if (!ch.DecodeEvent(i, event)) continue;
             prog.current = g_app.events_processed.load() + 1;
+            last_ti_ts = event.info.timestamp;
 
             // process: histograms + clustering + LMS (single-threaded, no locks needed)
             g_app.fillHist(event, ana, wres);

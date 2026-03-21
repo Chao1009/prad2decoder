@@ -164,6 +164,7 @@ static void etReaderThread()
     fdec::WaveAnalyzer ana;
     ana.cfg.min_peak_ratio = g_app.hist_cfg.min_peak_ratio;
     fdec::WaveResult wres;
+    uint64_t last_ti_ts = 0;
 
     int retry_ms = 3000;
     const int max_retry = 30000;
@@ -218,8 +219,15 @@ static void etReaderThread()
             }
             if (!ch.Scan()) continue;
 
+            // capture sync time reference
+            if (g_app.sync_unix == 0) {
+                uint32_t ct = ch.GetControlTime();
+                if (ct != 0) g_app.recordSyncTime(ct, last_ti_ts);
+            }
+
             for (int i = 0; i < ch.GetNEvents(); ++i) {
                 if (!ch.DecodeEvent(i, event)) continue;
+                last_ti_ts = event.info.timestamp;
 
                 int seq = g_app.events_processed.load() + 1;
 

@@ -295,10 +295,8 @@ void AppState::processLms(fdec::EventData &event,
     if (lms_trigger_mask == 0 ||
         !(event.info.trigger_bits & lms_trigger_mask)) return;
 
-    if (lms_first_ts == 0) {
+    if (lms_first_ts == 0)
         lms_first_ts = event.info.timestamp;
-        lms_start_unix = event.info.unix_time;
-    }
     double time_sec = static_cast<double>(event.info.timestamp - lms_first_ts) * TI_TICK_SEC;
 
     bool is_adc1881m = (daq_cfg.adc_format == "adc1881m");
@@ -340,10 +338,20 @@ void AppState::processLms(fdec::EventData &event,
     lms_events++;
 }
 
+void AppState::recordSyncTime(uint32_t unix_time, uint64_t last_ti_ts)
+{
+    if (unix_time == 0) return;
+    std::lock_guard<std::mutex> lk(lms_mtx);
+    if (sync_unix != 0) return;   // only record first sync after LMS starts
+    if (lms_first_ts == 0) return; // no LMS events yet — ignore this sync
+    if (last_ti_ts == 0) return;   // no TI reference available
+    sync_unix = unix_time;
+    sync_rel_sec = static_cast<double>(last_ti_ts - lms_first_ts) * TI_TICK_SEC;
+}
+
 void AppState::processEvent(fdec::EventData &event,
                             fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
-    {
         std::lock_guard<std::mutex> lk(data_mtx);
         fillHist(event, ana, wres);
         clusterEvent(event, ana, wres);
@@ -377,7 +385,8 @@ void AppState::clearLms()
     lms_history.clear();
     lms_events = 0;
     lms_first_ts = 0;
-    lms_start_unix = 0;
+    sync_unix = 0;
+    sync_rel_sec = 0.;
 }
 
 //=============================================================================
@@ -492,7 +501,7 @@ json AppState::apiLmsSummary(int ref_index) const
             {"trigger_bit", lms_trigger_bit},
             {"ref_index", ref_index},
             {"ref_mean", rc.ref_mean},
-            {"start_unix", lms_start_unix}};
+            {"sync_unix", sync_unix}, {"sync_rel_sec", sync_rel_sec}};
 }
 
 json AppState::apiLmsModule(int mod_idx, int ref_index) const
@@ -517,7 +526,7 @@ json AppState::apiLmsModule(int mod_idx, int ref_index) const
     return {{"name", name}, {"time", t_arr}, {"integral", v_arr},
             {"events", (int)t_arr.size()},
             {"ref_index", ref_index},
-            {"start_unix", lms_start_unix}};
+            {"sync_unix", sync_unix}, {"sync_rel_sec", sync_rel_sec}};
 }
 
 json AppState::apiLmsRefChannels() const

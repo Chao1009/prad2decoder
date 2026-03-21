@@ -87,6 +87,13 @@ public:
     // Returns true on success.
     bool DecodeEvent(int i, fdec::EventData &evt) const;
 
+    // --- Control event extraction (Prestart/Go/End) -------------------------
+
+    // Extract unix timestamp from PRESTART or GO event.
+    // CODA2 format: data words [time, run_number, run_type]
+    // Returns 0 if not a control event or no time found.
+    uint32_t GetControlTime() const;
+
     // --- EPICS extraction (call when GetEventType() == Epics) ---------------
 
     // Extract raw EPICS text from the current event buffer.
