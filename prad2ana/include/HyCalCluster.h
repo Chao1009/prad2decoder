@@ -141,6 +141,14 @@ public:
     void FormClusters();
     void ReconstructHits(std::vector<ClusterHit> &out) const;
 
+    // Reconstruct and return paired (cluster, hit) for clusters passing thresholds.
+    // This avoids fragile parallel iteration between GetClusters() and ReconstructHits().
+    struct RecoResult {
+        const ModuleCluster *cluster;
+        ClusterHit hit;
+    };
+    void ReconstructMatched(std::vector<RecoResult> &out) const;
+
     // access results
     const std::vector<ModuleCluster> &GetClusters() const { return clusters_; }
 

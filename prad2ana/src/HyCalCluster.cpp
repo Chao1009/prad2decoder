@@ -53,6 +53,7 @@ void HyCalCluster::Clear()
 
 void HyCalCluster::AddHit(int module_index, float energy)
 {
+    if (module_index < 0 || module_index >= sys_.module_count()) return;
     if (energy > config_.min_module_energy)
         hits_.push_back({module_index, energy});
 }
@@ -79,6 +80,18 @@ void HyCalCluster::ReconstructHits(std::vector<ClusterHit> &out) const
         if (cl.energy < config_.min_cluster_energy) continue;
         if (static_cast<int>(cl.hits.size()) < config_.min_cluster_size) continue;
         out.push_back(reconstruct_pos(cl));
+    }
+}
+
+void HyCalCluster::ReconstructMatched(std::vector<RecoResult> &out) const
+{
+    out.clear();
+    out.reserve(clusters_.size());
+
+    for (auto &cl : clusters_) {
+        if (cl.energy < config_.min_cluster_energy) continue;
+        if (static_cast<int>(cl.hits.size()) < config_.min_cluster_size) continue;
+        out.push_back({&cl, reconstruct_pos(cl)});
     }
 }
 
@@ -179,7 +192,7 @@ std::vector<int> HyCalCluster::find_maxima(const std::vector<int> &group) const
 void HyCalCluster::split_hits(const std::vector<int> &maxima,
                                const std::vector<int> &group)
 {
-    static SplitContainer split;
+    SplitContainer split;  // ~4KB on stack, safe per-call
 
     int nmax  = static_cast<int>(maxima.size());
     int nhits = static_cast<int>(group.size());

@@ -724,37 +724,27 @@ static json computeClusters(int ev1)
             hits_j[std::to_string(i)] = std::round(mod_energy[i] * 100) / 100;
     }
 
-    // build cluster array (only clusters that pass reconstruction thresholds)
-    // ReconstructHits iterates clusters_ in order and skips those below threshold.
-    // We mirror that iteration to pair each reco_hit with its source cluster.
-    std::vector<fdec::ClusterHit> reco_hits;
-    clusterer.ReconstructHits(reco_hits);
-    auto &clusters = clusterer.GetClusters();
+    // build cluster array — use ReconstructMatched for safe pairing
+    std::vector<fdec::HyCalCluster::RecoResult> reco;
+    clusterer.ReconstructMatched(reco);
 
     json cl_arr = json::array();
-    size_t rhi = 0;
-    for (auto &cl : clusters) {
-        // skip same clusters that ReconstructHits skips
-        if (cl.energy < g_cluster_cfg.min_cluster_energy) continue;
-        if (static_cast<int>(cl.hits.size()) < g_cluster_cfg.min_cluster_size) continue;
-        if (rhi >= reco_hits.size()) break;
-
-        auto &rh = reco_hits[rhi++];
-        auto &cmod = g_hycal.module(cl.center.index);
+    for (auto &r : reco) {
+        auto &cmod = g_hycal.module(r.cluster->center.index);
 
         json indices = json::array();
-        for (auto &h : cl.hits)
+        for (auto &h : r.cluster->hits)
             indices.push_back(h.index);
 
         cl_arr.push_back({
             {"id", static_cast<int>(cl_arr.size())},
             {"center", cmod.name},
             {"center_id", cmod.id},
-            {"x", std::round(rh.x * 10) / 10},
-            {"y", std::round(rh.y * 10) / 10},
-            {"energy", std::round(rh.energy * 10) / 10},
-            {"nblocks", rh.nblocks},
-            {"npos", rh.npos},
+            {"x", std::round(r.hit.x * 10) / 10},
+            {"y", std::round(r.hit.y * 10) / 10},
+            {"energy", std::round(r.hit.energy * 10) / 10},
+            {"nblocks", r.hit.nblocks},
+            {"npos", r.hit.npos},
             {"modules", indices},
         });
     }
