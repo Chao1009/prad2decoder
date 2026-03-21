@@ -1083,11 +1083,13 @@ function fetchLmsHistory(modIdx, modName){
             {x:tRange, y:[warnLo,warnLo],
              type:'scatter', mode:'lines', line:{color:'#f66',width:1,dash:'dot'}, showlegend:false},
         ],{...PL,
-            title:{text:`LMS — ${modName} (${data.events} pts)${g_lmsRefIndex>=0?' [ref corrected]':''}`,font:{size:10,color:'#ccc'}},
+            title:{text:`LMS — ${modName} (${data.events} pts)${g_lmsRefIndex>=0?' [ref corrected]':''}`
+                + (data.start_unix?`<br><span style="font-size:9px;color:#888">Start: ${new Date(data.start_unix*1000).toISOString().replace('T',' ').slice(0,19)} UTC</span>`:''),
+                font:{size:10,color:'#ccc'}},
             xaxis:{...PL.xaxis,title:'Time (s)'},
             yaxis:{...PL.yaxis,title:g_lmsRefIndex>=0?'Corrected Integral':'Integral'},
             legend:{x:1,y:1,xanchor:'right',bgcolor:'rgba(0,0,0,0.6)',font:{size:9}},
-            margin:{...PL.margin,t:28,b:28},
+            margin:{...PL.margin,t:36,b:28},
         },PC2);
 
         document.getElementById('lms-info-text').innerHTML=

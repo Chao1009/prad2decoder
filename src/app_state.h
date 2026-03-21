@@ -72,6 +72,7 @@ struct AppState {
     std::map<int, std::vector<LmsEntry>> lms_history;
     std::atomic<int> lms_events{0};
     uint64_t lms_first_ts = 0;
+    uint32_t lms_start_unix = 0;   // unix time of first LMS event (from event info)
 
     // ---- Initialization (call once at startup) -----------------------------
 

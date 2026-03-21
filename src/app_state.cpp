@@ -295,7 +295,10 @@ void AppState::processLms(fdec::EventData &event,
     if (lms_trigger_mask == 0 ||
         !(event.info.trigger_bits & lms_trigger_mask)) return;
 
-    if (lms_first_ts == 0) lms_first_ts = event.info.timestamp;
+    if (lms_first_ts == 0) {
+        lms_first_ts = event.info.timestamp;
+        lms_start_unix = event.info.unix_time;
+    }
     double time_sec = static_cast<double>(event.info.timestamp - lms_first_ts) * TI_TICK_SEC;
 
     bool is_adc1881m = (daq_cfg.adc_format == "adc1881m");
@@ -374,6 +377,7 @@ void AppState::clearLms()
     lms_history.clear();
     lms_events = 0;
     lms_first_ts = 0;
+    lms_start_unix = 0;
 }
 
 //=============================================================================
@@ -487,7 +491,8 @@ json AppState::apiLmsSummary(int ref_index) const
     return {{"modules", mods}, {"events", lms_events.load()},
             {"trigger_bit", lms_trigger_bit},
             {"ref_index", ref_index},
-            {"ref_mean", rc.ref_mean}};
+            {"ref_mean", rc.ref_mean},
+            {"start_unix", lms_start_unix}};
 }
 
 json AppState::apiLmsModule(int mod_idx, int ref_index) const
@@ -511,7 +516,8 @@ json AppState::apiLmsModule(int mod_idx, int ref_index) const
         ? hycal.module(mod_idx).name : "";
     return {{"name", name}, {"time", t_arr}, {"integral", v_arr},
             {"events", (int)t_arr.size()},
-            {"ref_index", ref_index}};
+            {"ref_index", ref_index},
+            {"start_unix", lms_start_unix}};
 }
 
 json AppState::apiLmsRefChannels() const
