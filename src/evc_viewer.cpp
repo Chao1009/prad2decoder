@@ -406,11 +406,56 @@ static void loadFileAsync(const std::string &filepath)
         std::lock_guard<std::mutex> lk(g_data_mtx);
         g_data = data;
     }
+    // invalidate cached reader (new file)
+    { std::lock_guard<std::mutex> lk(g_reader.mtx); g_reader.invalidate(); }
 
     g_progress.loading = false;
     g_progress.phase = 0;
     std::cerr << "  Ready\n";
 }
+
+// -------------------------------------------------------------------------
+// Cached file reader — keeps the EvChannel open between requests
+// -------------------------------------------------------------------------
+static struct CachedReader {
+    EvChannel ch;
+    std::string filepath;
+    int current_buf = 0;   // number of buffers read so far
+    std::mutex mtx;
+
+    // Seek to buffer buf_num (1-based). Reuses current position if possible.
+    // Returns empty string on success, error message on failure.
+    std::string seekTo(const std::string &path, int buf_num)
+    {
+        // reopen if different file or need to go backwards
+        if (path != filepath || buf_num < current_buf) {
+            ch.Close();
+            ch.SetConfig(g_daq_cfg);
+            if (ch.Open(path) != status::success) {
+                filepath.clear(); current_buf = 0;
+                return "cannot open file";
+            }
+            filepath = path;
+            current_buf = 0;
+        }
+
+        // read forward to target buffer
+        while (current_buf < buf_num) {
+            if (ch.Read() != status::success) {
+                ch.Close(); filepath.clear(); current_buf = 0;
+                return "read error";
+            }
+            current_buf++;
+        }
+        return "";
+    }
+
+    void invalidate() {
+        ch.Close();
+        filepath.clear();
+        current_buf = 0;
+    }
+} g_reader;
 
 // -------------------------------------------------------------------------
 // Decode raw event from file (shared by decodeEvent and computeClusters)
@@ -426,15 +471,13 @@ static std::string decodeRawEvent(int ev1, fdec::EventData &event)
     if (idx < 0 || idx >= (int)data->index.size()) return "event out of range";
 
     auto &ei = data->index[idx];
-    EvChannel ch;
-    ch.SetConfig(g_daq_cfg);
-    if (ch.Open(data->filepath) != status::success) return "cannot open file";
+    std::lock_guard<std::mutex> lk(g_reader.mtx);
 
-    for (int b = 0; b < ei.buffer_num; ++b)
-        if (ch.Read() != status::success) { ch.Close(); return "read error"; }
-    if (!ch.Scan()) { ch.Close(); return "scan error"; }
-    if (!ch.DecodeEvent(ei.sub_event, event)) { ch.Close(); return "decode error"; }
-    ch.Close();
+    std::string err = g_reader.seekTo(data->filepath, ei.buffer_num);
+    if (!err.empty()) return err;
+
+    if (!g_reader.ch.Scan()) return "scan error";
+    if (!g_reader.ch.DecodeEvent(ei.sub_event, event)) return "decode error";
     return "";
 }
 
