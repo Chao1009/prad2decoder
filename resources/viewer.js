@@ -599,21 +599,17 @@ function connectWebSocket() {
                 setEtStatus(msg.connected, msg.waiting, msg.retries);
             } else if (msg.type === 'hist_cleared') {
                 occData={}; occTcutData={}; occTotal=0;
+                initClHist(); plotClHist();
                 if (selectedModule) showHistograms(selectedModule);
                 drawGeo();
+            } else if (msg.type === 'lms_cleared') {
+                lmsSummaryData=null; lmsSelectedModule=-1; currentLmsData=null;
+                if(activeTab==='lms'){ drawLmsGeo(); updateLmsTable(); }
             }
         } catch (e) {}
     };
 }
 
-function clearHistograms() {
-    fetch('/api/hist/clear').then(r => r.json()).then(data => {
-        occData={}; occTcutData={}; occTotal=0;
-        document.getElementById('status-bar').textContent = 'Entries cleared';
-        if (selectedModule) showHistograms(selectedModule);
-        drawGeo();
-    });
-}
 
 // =========================================================================
 // File browser
@@ -1313,6 +1309,16 @@ function init(){
         ()=>0,
         80, 80, ()=>{try{Plotly.Plots.resize('lms-plot');}catch(e){}});
     document.getElementById('lms-color-metric').onchange=drawLmsGeo;
+    document.getElementById('btn-clear-lms').onclick=()=>{
+        fetch('/api/lms/clear').then(r=>r.json()).then(()=>{
+            lmsSummaryData=null; lmsSelectedModule=-1; currentLmsData=null;
+            Plotly.react('lms-plot',[],{...PL,title:{text:'LMS History',font:{size:10,color:'#555'}}},PC2);
+            drawLmsGeo(); updateLmsTable();
+            document.getElementById('lms-detail-header').innerHTML=
+                '<span class="cl-info-text">Click a module to view LMS history</span>';
+            document.getElementById('status-bar').textContent='LMS data cleared';
+        });
+    };
     document.getElementById('lms-log-scale').onchange=drawLmsGeo;
 
     // LMS range editors
@@ -1416,7 +1422,22 @@ function init(){
     };
     document.getElementById('ring-select').onfocus=()=>{ updateRingSelector(); };
     document.getElementById('follow-status').onclick=()=>{ autoFollow=true; updateFollowStatus(); loadLatestEvent(); };
-    document.getElementById('btn-clear-hist').onclick=clearHistograms;
+    // per-tab clear buttons
+    document.getElementById('btn-clear-dq').onclick=()=>{
+        fetch('/api/hist/clear').then(r=>r.json()).then(()=>{
+            occData={}; occTcutData={}; occTotal=0;
+            if(selectedModule) showHistograms(selectedModule);
+            drawGeo();
+            document.getElementById('status-bar').textContent='DQ histograms cleared';
+        });
+    };
+    document.getElementById('btn-clear-cl').onclick=()=>{
+        initClHist(); plotClHist();
+        fetch('/api/hist/clear').then(r=>r.json()).then(()=>{
+            fetchClHist();
+            document.getElementById('status-bar').textContent='Cluster histogram cleared';
+        });
+    };
 
     // geo mouse
     const tip=document.getElementById('geo-tooltip');
