@@ -143,3 +143,7 @@ src/
 test/                           Diagnostic tools (see test/README.md)
 prad2qtmon/                     Qt5 WebEngine client (optional)
 ```
+
+## Contributors
+Chao Peng -- Argonne National Laboratory
+Yuan Li -- Shandong University
