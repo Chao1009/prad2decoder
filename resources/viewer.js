@@ -376,6 +376,9 @@ const PL={paper_bgcolor:'#1a1a2e',plot_bgcolor:'#11112a',font:{family:'Consolas,
     margin:{l:45,r:10,t:24,b:32},xaxis:{gridcolor:'#1a1a3a',zerolinecolor:'#222'},
     yaxis:{gridcolor:'#1a1a3a',zerolinecolor:'#222'}};
 const PC2={responsive:true,displayModeBar:false};
+const PC_EPICS={responsive:true,displayModeBar:true,
+    modeBarButtonsToRemove:['sendDataToCloud','lasso2d','select2d'],
+    displaylogo:false};
 
 function resizeAllPlots(){
     for(const id of['waveform-div','inthist-div','poshist-div','cl-energy-hist','cl-nclust-hist','cl-nblocks-hist','lms-plot'])
@@ -1412,7 +1415,7 @@ function fetchEpicsChannels(){
 function fetchAndPlotEpicsSlot(slot){
     const names=epicsSlots[slot];
     if(!names.length){
-        Plotly.react('epics-plot-'+slot,[],{...PL},PC2);
+        Plotly.react('epics-plot-'+slot,[],{...PL},PC_EPICS);
         return;
     }
     // fetch all channels for this slot in parallel
@@ -1434,7 +1437,7 @@ function fetchAndPlotEpicsSlot(slot){
             yaxis:{...PL.yaxis},
             showlegend:traces.length>1,
             legend:{font:{size:9,color:'#aaa'},bgcolor:'rgba(0,0,0,0)',x:0,y:1},
-        },PC2);
+        },PC_EPICS);
     });
 }
 
