@@ -73,6 +73,7 @@
         "url": "https://logbooks.jlab.org",
         "logbook": "PRADLOG",
         "author": "clasrun",
-        "tags": ["AutoReport", "PRad2"]
+        "tags": ["AutoReport", "PRad2"],
+        "credentials": ""
     }
 }

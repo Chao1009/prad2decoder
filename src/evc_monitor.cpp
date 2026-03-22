@@ -381,8 +381,12 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         std::string tmp = "/tmp/prad2_elog_" + std::to_string(std::time(nullptr)) + ".xml";
         { std::ofstream f(tmp); f << xml_body; }
         // curl it to elog server
-        std::string cmd = "curl -s -o /dev/null -w '%{http_code}' --upload-file '"
-                        + tmp + "' '" + g_app.elog_url + "/incoming/prad2_report.xml' 2>&1";
+        std::string auth_flag;
+        if (!g_app.elog_credentials.empty())
+            auth_flag = " -u '" + g_app.elog_credentials + "'";
+        std::string cmd = "curl -s -o /dev/null -w '%{http_code}'" + auth_flag
+                        + " --upload-file '" + tmp + "' '"
+                        + g_app.elog_url + "/incoming/prad2_report.xml' 2>&1";
         std::string http_code;
         FILE *p = popen(cmd.c_str(), "r");
         if (p) {
