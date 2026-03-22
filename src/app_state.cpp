@@ -253,6 +253,17 @@ void AppState::init(const std::string &db_dir,
                     std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
             }
         }
+        if (rcfg.contains("elog")) {
+            auto &el = rcfg["elog"];
+            if (el.contains("url"))      elog_url      = el["url"];
+            if (el.contains("logbook"))  elog_logbook   = el["logbook"];
+            if (el.contains("author"))   elog_author    = el["author"];
+            if (el.contains("tags"))
+                for (auto &t : el["tags"]) elog_tags.push_back(t);
+            std::cerr << "Elog      : " << elog_url
+                      << " logbook=" << elog_logbook << "\n";
+        }
+
         std::cerr << "Reco      : " << main_config
                   << " (adc_to_mev=" << adc_to_mev << ")\n";
     }

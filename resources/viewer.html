@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PRad2 HyCal Event Viewer</title>
 <script src="plotly-2.35.0.min.js"></script>
+<script src="html2pdf.bundle.min.js"></script>
 <link rel="stylesheet" href="viewer.css">
 </head>
 <body>
@@ -24,7 +25,34 @@
         <button id="follow-status" style="font-size:11px;color:#ffd43b;background:none;border:1px solid #ffd43b;padding:2px 8px;border-radius:3px;display:none;cursor:pointer"></button>
     </div>
     <span class="header-stats" id="header-stats"></span>
+    <div class="report-dropdown" id="report-dropdown">
+        <button id="btn-report" class="report-btn" title="Generate report">Report &#x25BE;</button>
+        <div class="report-menu" id="report-menu">
+            <button id="btn-report-pdf">Download PDF</button>
+            <button id="btn-report-elog">Post to Elog</button>
+        </div>
+    </div>
     <button id="btn-clear-all" class="clear-all-btn" title="Clear all data (new run)">Clear All</button>
+</div>
+
+<!-- elog dialog -->
+<div class="backdrop" id="elog-backdrop"></div>
+<div class="file-dialog" id="elog-dialog">
+    <div class="file-dialog-header">
+        <span>Post to Elog</span>
+        <button id="elog-dialog-close">&times;</button>
+    </div>
+    <div class="elog-form">
+        <label>Title<input type="text" id="elog-title" value="PRad2 Monitor Report"></label>
+        <label>Logbook<input type="text" id="elog-logbook" placeholder="e.g. PRAD"></label>
+        <label>Author<input type="text" id="elog-author" placeholder="username"></label>
+        <label>Tags<input type="text" id="elog-tags" placeholder="comma-separated"></label>
+        <div class="elog-form-actions">
+            <button id="elog-cancel">Cancel</button>
+            <button id="elog-submit" class="report-btn">Post</button>
+        </div>
+        <div class="elog-status" id="elog-status"></div>
+    </div>
 </div>
 
 <!-- file browser dialog -->

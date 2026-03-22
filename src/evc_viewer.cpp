@@ -347,6 +347,10 @@ static json buildConfig() {
         {"events", g_app.lms_events.load()},
         {"ref_channels", g_app.apiLmsRefChannels()},
     };
+    cfg["elog"] = {
+        {"url", g_app.elog_url}, {"logbook", g_app.elog_logbook},
+        {"author", g_app.elog_author}, {"tags", g_app.elog_tags},
+    };
     return cfg;
 }
 

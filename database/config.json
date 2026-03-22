@@ -68,5 +68,11 @@
     "calibration": {
         "adc_to_mev": 0.078,
         "calibration_file": "prad1/prad_calibration.json"
+    },
+    "elog": {
+        "url": "https://logbooks.jlab.org",
+        "logbook": "PRAD",
+        "author": "",
+        "tags": ["AutoReport", "PRad2"]
     }
 }

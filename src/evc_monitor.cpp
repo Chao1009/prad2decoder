@@ -24,6 +24,8 @@
 #include <thread>
 #include <atomic>
 #include <cstdlib>
+#include <cstdio>
+#include <ctime>
 #include <chrono>
 #include <csignal>
 #include <getopt.h>
@@ -272,6 +274,10 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
             {"events", g_app.lms_events.load()},
             {"ref_channels", g_app.apiLmsRefChannels()},
         };
+        cfg["elog"] = {
+            {"url", g_app.elog_url}, {"logbook", g_app.elog_logbook},
+            {"author", g_app.elog_author}, {"tags", g_app.elog_tags},
+        };
         reply(cfg.dump()); return;
     }
 
@@ -356,6 +362,41 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         }
         if (path_part == "summary") { reply(g_app.apiLmsSummary(ref).dump()); return; }
         reply(g_app.apiLmsModule(std::atoi(path_part.c_str()), ref).dump()); return;
+    }
+
+    // /api/elog/post — proxy elog submission via curl
+    if (uri == "/api/elog/post") {
+        std::string xml_body = con->get_request_body();
+        if (xml_body.empty()) {
+            con->set_status(websocketpp::http::status_code::bad_request);
+            con->set_body("{\"ok\":false,\"error\":\"Empty body\"}");
+            con->append_header("Content-Type", "application/json");
+            return;
+        }
+        if (g_app.elog_url.empty()) {
+            reply("{\"ok\":false,\"error\":\"No elog URL configured\"}");
+            return;
+        }
+        // write XML to temp file
+        std::string tmp = "/tmp/prad2_elog_" + std::to_string(std::time(nullptr)) + ".xml";
+        { std::ofstream f(tmp); f << xml_body; }
+        // curl it to elog server
+        std::string cmd = "curl -s -o /dev/null -w '%{http_code}' --upload-file '"
+                        + tmp + "' '" + g_app.elog_url + "/incoming/prad2_report.xml' 2>&1";
+        std::string http_code;
+        FILE *p = popen(cmd.c_str(), "r");
+        if (p) {
+            char buf[256] = {};
+            if (fgets(buf, sizeof(buf), p)) http_code = buf;
+            pclose(p);
+        }
+        std::remove(tmp.c_str());
+        bool ok = (http_code.find("200") != std::string::npos ||
+                   http_code.find("201") != std::string::npos);
+        std::cerr << "Elog post: " << g_app.elog_url << " -> HTTP " << http_code
+                  << (ok ? " OK" : " FAIL") << "\n";
+        reply(json({{"ok", ok}, {"status", http_code}}).dump());
+        return;
     }
 
     con->set_status(websocketpp::http::status_code::not_found);
