@@ -1944,6 +1944,9 @@ function init(){
         initEpicsSearch();
         updateTimeCutLabel();
         mode=data.mode||'file';
+        const appTitle=mode==='online'?'PRad2 HyCal Monitor':'PRad2 HyCal Event Viewer';
+        document.title=appTitle;
+        document.getElementById('app-title').textContent=appTitle;
         g_currentFile=data.current_file||'';
         g_dataDirEnabled=data.data_dir_enabled||false;
         g_dataDir=data.data_dir||'';
