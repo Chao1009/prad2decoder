@@ -23,15 +23,17 @@ function registerReportSection(section){
 // Capture helpers
 // =========================================================================
 
-// Capture the geo canvas for a given tab at fixed high resolution.
+// Capture the geo canvas for a given tab at fixed high resolution with light theme.
 async function captureGeoForTab(tab){
     const prev={tab:activeTab,w:geoCanvas.width,h:geoCanvas.height,
                 s:scale,ox:offsetX,oy:offsetY};
     geoCanvas.width=1200; geoCanvas.height=900;
     canvasW=1200; canvasH=900;
     activeTab=tab;
+    geoLightTheme=true;
     fitView(); redrawGeo();
     const url=geoCanvas.toDataURL('image/png');
+    geoLightTheme=false;
     geoCanvas.width=prev.w; geoCanvas.height=prev.h;
     canvasW=prev.w; canvasH=prev.h;
     scale=prev.s; offsetX=prev.ox; offsetY=prev.oy;
@@ -317,17 +319,15 @@ async function downloadReportPdf(){
     const statusBar=document.getElementById('status-bar');
     statusBar.textContent='Rendering PDF...';
     try{
-        const wrapper=document.createElement('div');
-        const bodyMatch=html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-        wrapper.innerHTML=bodyMatch?bodyMatch[1]:html;
-        wrapper.style.cssText='font-family:Helvetica,Arial,sans-serif;color:#222;max-width:1100px';
-        const styleMatch=html.match(/<style>([\s\S]*?)<\/style>/i);
-        if(styleMatch){
-            const s=document.createElement('style');
-            s.textContent=styleMatch[1];
-            wrapper.prepend(s);
-        }
-        document.body.appendChild(wrapper);
+        // Render in a hidden iframe for CSS isolation from the monitor's styles
+        const iframe=document.createElement('iframe');
+        iframe.style.cssText='position:fixed;left:-9999px;top:0;width:1100px;height:900px;border:none';
+        document.body.appendChild(iframe);
+        const idoc=iframe.contentDocument||iframe.contentWindow.document;
+        idoc.open(); idoc.write(html); idoc.close();
+        // Wait for images to load
+        await new Promise(r=>setTimeout(r,200));
+
         const ts=new Date().toISOString().slice(0,19).replace(/[T:]/g,'-');
         await html2pdf().set({
             margin:[10,10,10,10],
@@ -336,8 +336,8 @@ async function downloadReportPdf(){
             html2canvas:{scale:2,useCORS:true,logging:false},
             jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
             pagebreak:{mode:['css','legacy'],avoid:'.section'}
-        }).from(wrapper).save();
-        wrapper.remove();
+        }).from(idoc.body).save();
+        iframe.remove();
         statusBar.textContent='PDF saved';
         setTimeout(()=>{statusBar.textContent='Ready';},3000);
     }catch(err){

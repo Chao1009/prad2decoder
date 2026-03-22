@@ -64,6 +64,12 @@ let nblocksMin=0, nblocksMax=40, nblocksStep=1;
 // DQ tab working range (set by syncDqRange, used by drawGeo)
 let rangeMin=null, rangeMax=null;
 
+// Light theme flag — set by report.js captureGeoForTab for print-friendly rendering
+let geoLightTheme=false;
+function geoEmptyColor(type){ return geoLightTheme?(type==='G'?'#e8e8f0':'#dde'):(type==='G'?'#1a1a2e':'#12122a'); }
+function geoDimColor(){ return geoLightTheme?'#d0d0dd':'#0a0a18'; }
+function geoStrokeColor(){ return geoLightTheme?'#aaa':'#333'; }
+
 // =========================================================================
 // Color scale — click the colorbar to cycle palettes
 // =========================================================================
@@ -306,7 +312,9 @@ function modVal(m){
     return bp.i;
 }
 function drawGeo(){
-    if(!geoCtx)return;const ctx=geoCtx;ctx.clearRect(0,0,canvasW,canvasH);
+    if(!geoCtx)return;const ctx=geoCtx;
+    if(geoLightTheme){ctx.fillStyle='#fff';ctx.fillRect(0,0,canvasW,canvasH);}
+    else ctx.clearRect(0,0,canvasW,canvasH);
     const useLog=document.getElementById('log-scale').checked;
     const vals=modules.map(modVal);
     const vmin=rangeMin!==null?rangeMin:0;
@@ -321,10 +329,10 @@ function drawGeo(){
             if(useLog) t=Math.log1p(clamped-vmin)/Math.log1p(span);
             else t=(clamped-vmin)/span;
         }
-        ctx.fillStyle=(v!==null)?colorScale(t):(m.t==='G'?'#1a1a2e':'#12122a');
+        ctx.fillStyle=(v!==null)?colorScale(t):geoEmptyColor(m.t);
         ctx.fillRect(cx-w/2,cy-h/2,w,h);
         const sel=selectedModule&&selectedModule.n===m.n,hov=hoveredModule&&hoveredModule.n===m.n;
-        ctx.strokeStyle=sel?'#fff':hov?'#00b4d8':'#333';ctx.lineWidth=sel?2.5:hov?1.5:0.5;
+        ctx.strokeStyle=sel?'#fff':hov?'#00b4d8':geoStrokeColor();ctx.lineWidth=sel?2.5:hov?1.5:0.5;
         ctx.strokeRect(cx-w/2,cy-h/2,w,h);
     }
 }
@@ -972,7 +980,8 @@ function clusterModuleSet(clIdx){
 function drawClusterGeo(){
     if(!geoCtx) return;
     const ctx=geoCtx;
-    ctx.clearRect(0,0,canvasW,canvasH);
+    if(geoLightTheme){ctx.fillStyle='#fff';ctx.fillRect(0,0,canvasW,canvasH);}
+    else ctx.clearRect(0,0,canvasW,canvasH);
     if(!clusterData){ drawGeo(); return; }
 
     const hits=clusterData.hits||{};
@@ -1015,13 +1024,13 @@ function drawClusterGeo(){
             t=Math.max(0,Math.min(1,t));
             fillColor=colorScale(t);
         } else {
-            fillColor=dimmed?'#0a0a18':(m.t==='G'?'#1a1a2e':'#12122a');
+            fillColor=dimmed?geoDimColor():geoEmptyColor(m.t);
         }
         ctx.fillStyle=fillColor;
         ctx.fillRect(cx-w/2,cy-h/2,w,h);
 
         // border: highlight cluster members
-        let strokeColor='#333', lw=0.5;
+        let strokeColor=geoStrokeColor(), lw=0.5;
         if(ci!==undefined && !dimmed){
             strokeColor=PC[ci%PC.length];
             lw=1.5;
@@ -1254,7 +1263,8 @@ function updateLmsTable(){
 function drawLmsGeo(){
     if(!geoCtx) return;
     const ctx=geoCtx;
-    ctx.clearRect(0,0,canvasW,canvasH);
+    if(geoLightTheme){ctx.fillStyle='#fff';ctx.fillRect(0,0,canvasW,canvasH);}
+    else ctx.clearRect(0,0,canvasW,canvasH);
 
     const metric=document.getElementById('lms-color-metric').value;
     const useLog=document.getElementById('lms-log-scale').checked;
@@ -1298,12 +1308,12 @@ function drawLmsGeo(){
                 fillColor=colorScale(t);
             }
         } else {
-            fillColor=m.t==='G'?'#1a1a2e':'#12122a';
+            fillColor=geoEmptyColor(m.t);
         }
         ctx.fillStyle=fillColor;
         ctx.fillRect(cx-w/2,cy-h/2,w,h);
 
-        let strokeColor='#333', lw=0.5;
+        let strokeColor=geoStrokeColor(), lw=0.5;
         if(md&&md.warn){ strokeColor='#f66'; lw=1.5; }
         if(lmsSelectedModule===i){ strokeColor='#fff'; lw=2.5; }
         if(hoveredModule&&hoveredModule.n===m.n){ strokeColor='#00b4d8'; lw=1.5; }
