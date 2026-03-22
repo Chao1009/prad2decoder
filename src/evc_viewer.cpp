@@ -328,43 +328,7 @@ static json buildConfig() {
     cfg["data_dir"] = g_data_dir;
     cfg["hist_enabled"] = g_hist_enabled;
     cfg["mode"] = "file";
-    cfg["hist"] = {
-        {"time_min", g_app.hist_cfg.time_min}, {"time_max", g_app.hist_cfg.time_max},
-        {"bin_min", g_app.hist_cfg.bin_min}, {"bin_max", g_app.hist_cfg.bin_max},
-        {"bin_step", g_app.hist_cfg.bin_step}, {"threshold", g_app.hist_cfg.threshold},
-        {"pos_min", g_app.hist_cfg.pos_min}, {"pos_max", g_app.hist_cfg.pos_max},
-        {"pos_step", g_app.hist_cfg.pos_step},
-    };
-    cfg["cluster_hist"] = {
-        {"min", g_app.cl_hist_min}, {"max", g_app.cl_hist_max}, {"step", g_app.cl_hist_step},
-    };
-    cfg["nclusters_hist"] = {
-        {"min", g_app.nclusters_hist_min}, {"max", g_app.nclusters_hist_max}, {"step", g_app.nclusters_hist_step},
-    };
-    cfg["nblocks_hist"] = {
-        {"min", g_app.nblocks_hist_min}, {"max", g_app.nblocks_hist_max}, {"step", g_app.nblocks_hist_step},
-    };
-    cfg["color_ranges"] = g_app.apiColorRanges();
-    cfg["refresh_ms"] = {{"event", g_app.refresh_event_ms}, {"ring", g_app.refresh_ring_ms},
-                         {"histogram", g_app.refresh_hist_ms}, {"lms", g_app.refresh_lms_ms}};
-    cfg["lms"] = {
-        {"trigger_bit", g_app.lms_trigger_bit},
-        {"warn_threshold", g_app.lms_warn_thresh},
-        {"events", g_app.lms_events.load()},
-        {"ref_channels", g_app.apiLmsRefChannels()},
-    };
-    cfg["elog"] = {
-        {"url", g_app.elog_url}, {"logbook", g_app.elog_logbook},
-        {"author", g_app.elog_author}, {"tags", g_app.elog_tags},
-    };
-    cfg["epics"] = {
-        {"max_history", g_app.epics_max_history},
-        {"warn_threshold", g_app.epics_warn_thresh},
-        {"alert_threshold", g_app.epics_alert_thresh},
-        {"min_avg_points", g_app.epics_min_avg_pts},
-        {"mean_window", g_app.epics_mean_window},
-        {"slots", g_app.epics_default_slots},
-    };
+    g_app.fillConfigJson(cfg);
     return cfg;
 }
 
@@ -400,48 +364,9 @@ static void onHttp(WsServer *srv, websocketpp::connection_hdl hdl) {
     // /api/progress
     if (uri == "/api/progress") { reply(g_progress.toJson().dump()); return; }
 
-    // /api/hist/<key>
-    if (uri.rfind("/api/hist/", 0) == 0) {
-        reply(g_app.apiHist(true, uri.substr(10)).dump()); return;
-    }
-
-    // /api/poshist/<key>
-    if (uri.rfind("/api/poshist/", 0) == 0) {
-        reply(g_app.apiHist(false, uri.substr(13)).dump()); return;
-    }
-
-    // /api/cluster_hist
-    if (uri == "/api/cluster_hist") { reply(g_app.apiClusterHist().dump()); return; }
-
-    // /api/occupancy
-    if (uri == "/api/occupancy") { reply(g_app.apiOccupancy().dump()); return; }
-
-    // /api/lms/refs — list reference channels
-    if (uri == "/api/lms/refs") { reply(g_app.apiLmsRefChannels().dump()); return; }
-
-    // /api/lms/summary?ref=N or /api/lms/<idx>?ref=N
-    if (uri.rfind("/api/lms/", 0) == 0) {
-        // parse ref= query param
-        int ref = -1;
-        auto qpos = uri.find('?');
-        std::string path_part = (qpos != std::string::npos) ? uri.substr(9, qpos - 9) : uri.substr(9);
-        if (qpos != std::string::npos) {
-            std::string q = uri.substr(qpos + 1);
-            if (q.rfind("ref=", 0) == 0) ref = std::atoi(q.c_str() + 4);
-        }
-        if (path_part == "summary") { reply(g_app.apiLmsSummary(ref).dump()); return; }
-        reply(g_app.apiLmsModule(std::atoi(path_part.c_str()), ref).dump()); return;
-    }
-
-    // /api/epics/*
-    if (uri.rfind("/api/epics/", 0) == 0) {
-        std::string path_part = uri.substr(11);
-        if (path_part == "channels") { reply(g_app.apiEpicsChannels().dump()); return; }
-        if (path_part == "latest")   { reply(g_app.apiEpicsLatest().dump()); return; }
-        if (path_part.rfind("channel/", 0) == 0) {
-            reply(g_app.apiEpicsChannel(path_part.substr(8)).dump()); return;
-        }
-    }
+    // shared read-only API routes
+    auto result = g_app.handleReadApi(uri);
+    if (result.handled) { reply(result.body); return; }
 
     // /api/files
     if (uri == "/api/files") { reply(json({{"files", listFiles(g_data_dir)}}).dump()); return; }

@@ -893,3 +893,73 @@ json AppState::apiEpicsLatest() const
     }
     return {{"channels", channels}, {"events", epics_events.load()}};
 }
+
+//=============================================================================
+// Shared config + API routing (used by both viewer and monitor)
+//=============================================================================
+
+void AppState::fillConfigJson(json &cfg) const
+{
+    cfg["hist"] = {
+        {"time_min", hist_cfg.time_min}, {"time_max", hist_cfg.time_max},
+        {"bin_min", hist_cfg.bin_min}, {"bin_max", hist_cfg.bin_max},
+        {"bin_step", hist_cfg.bin_step}, {"threshold", hist_cfg.threshold},
+        {"pos_min", hist_cfg.pos_min}, {"pos_max", hist_cfg.pos_max},
+        {"pos_step", hist_cfg.pos_step},
+    };
+    cfg["cluster_hist"] = {{"min", cl_hist_min}, {"max", cl_hist_max}, {"step", cl_hist_step}};
+    cfg["nclusters_hist"] = {{"min", nclusters_hist_min}, {"max", nclusters_hist_max}, {"step", nclusters_hist_step}};
+    cfg["nblocks_hist"] = {{"min", nblocks_hist_min}, {"max", nblocks_hist_max}, {"step", nblocks_hist_step}};
+    cfg["color_ranges"] = apiColorRanges();
+    cfg["refresh_ms"] = {{"event", refresh_event_ms}, {"ring", refresh_ring_ms},
+                         {"histogram", refresh_hist_ms}, {"lms", refresh_lms_ms}};
+    cfg["lms"] = {
+        {"trigger_bit", lms_trigger_bit}, {"warn_threshold", lms_warn_thresh},
+        {"events", lms_events.load()}, {"ref_channels", apiLmsRefChannels()},
+    };
+    cfg["elog"] = {
+        {"url", elog_url}, {"logbook", elog_logbook},
+        {"author", elog_author}, {"tags", elog_tags},
+    };
+    cfg["epics"] = {
+        {"max_history", epics_max_history},
+        {"warn_threshold", epics_warn_thresh}, {"alert_threshold", epics_alert_thresh},
+        {"min_avg_points", epics_min_avg_pts}, {"mean_window", epics_mean_window},
+        {"slots", epics_default_slots},
+    };
+}
+
+AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
+{
+    if (uri == "/api/occupancy")
+        return {true, apiOccupancy().dump()};
+    if (uri == "/api/cluster_hist")
+        return {true, apiClusterHist().dump()};
+    if (uri.rfind("/api/hist/", 0) == 0)
+        return {true, apiHist(true, uri.substr(10)).dump()};
+    if (uri.rfind("/api/poshist/", 0) == 0)
+        return {true, apiHist(false, uri.substr(13)).dump()};
+    if (uri == "/api/lms/refs")
+        return {true, apiLmsRefChannels().dump()};
+    if (uri.rfind("/api/lms/", 0) == 0) {
+        int ref = -1;
+        auto qpos = uri.find('?');
+        std::string path = (qpos != std::string::npos) ? uri.substr(9, qpos - 9) : uri.substr(9);
+        if (qpos != std::string::npos) {
+            std::string q = uri.substr(qpos + 1);
+            if (q.rfind("ref=", 0) == 0) ref = std::atoi(q.c_str() + 4);
+        }
+        if (path == "summary") return {true, apiLmsSummary(ref).dump()};
+        if (path == "clear")   return {false, ""};  // clear handled by caller
+        return {true, apiLmsModule(std::atoi(path.c_str()), ref).dump()};
+    }
+    if (uri.rfind("/api/epics/", 0) == 0) {
+        std::string path = uri.substr(11);
+        if (path == "channels") return {true, apiEpicsChannels().dump()};
+        if (path == "latest")   return {true, apiEpicsLatest().dump()};
+        if (path == "clear")    return {false, ""};  // clear handled by caller
+        if (path.rfind("channel/", 0) == 0)
+            return {true, apiEpicsChannel(path.substr(8)).dump()};
+    }
+    return {false, ""};
+}

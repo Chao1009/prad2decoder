@@ -176,4 +176,12 @@ struct AppState {
     nlohmann::json apiEpicsChannels() const;
     nlohmann::json apiEpicsChannel(const std::string &name) const;
     nlohmann::json apiEpicsLatest() const;
+
+    // Fill common config fields into a JSON object (used by both viewer and monitor).
+    void fillConfigJson(nlohmann::json &cfg) const;
+
+    // Handle a read-only API route. Returns {handled, response_json}.
+    // Does NOT handle /api/config, clear endpoints, or mode-specific routes.
+    struct ApiResult { bool handled; std::string body; };
+    ApiResult handleReadApi(const std::string &uri) const;
 };
