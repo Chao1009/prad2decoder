@@ -8,6 +8,7 @@
 
 #include "HyCalSystem.h"
 #include "HyCalCluster.h"
+#include "EpicsStore.h"
 #include "DaqConfig.h"
 #include "Fadc250Data.h"
 #include "WaveAnalyzer.h"
@@ -55,6 +56,14 @@ struct AppState {
     int refresh_ring_ms  = 500;
     int refresh_hist_ms  = 2000;
     int refresh_lms_ms   = 2000;
+
+    // EPICS config
+    int   epics_max_history = 5000;
+    float epics_warn_thresh  = 0.1f;
+    float epics_alert_thresh = 0.2f;
+    int   epics_min_avg_pts  = 10;
+    int   epics_mean_window  = 20;   // compute mean from most recent N snapshots
+    std::vector<std::vector<std::string>> epics_default_slots;  // per-slot channel lists
 
     // Elog config
     std::string elog_url;
@@ -104,6 +113,11 @@ struct AppState {
     uint32_t sync_unix    = 0;
     double   sync_rel_sec = 0.;
 
+    // ---- EPICS data (guarded by epics_mtx) ----------------------------------
+    mutable std::mutex epics_mtx;
+    fdec::EpicsStore epics;
+    std::atomic<int> epics_events{0};
+
     // ---- Initialization (call once at startup) -----------------------------
 
     // Load all configs from db_dir. daq_config_file may be empty (PRad-II defaults).
@@ -143,6 +157,10 @@ struct AppState {
     // last_ti_ts is the TI timestamp of the most recent physics event.
     void recordSyncTime(uint32_t unix_time, uint64_t last_ti_ts);
 
+    // ---- EPICS processing ---------------------------------------------------
+    void processEpics(const std::string &text, int32_t event_number, uint64_t timestamp);
+    void clearEpics();        // locks epics_mtx
+
     // ---- Clearing ----------------------------------------------------------
     void clearHistograms();   // locks data_mtx
     void clearLms();          // locks lms_mtx
@@ -155,4 +173,15 @@ struct AppState {
     nlohmann::json apiLmsSummary(int ref_index = -1) const;
     nlohmann::json apiLmsModule(int module_index, int ref_index = -1) const;
     nlohmann::json apiLmsRefChannels() const;
+    nlohmann::json apiEpicsChannels() const;
+    nlohmann::json apiEpicsChannel(const std::string &name) const;
+    nlohmann::json apiEpicsLatest() const;
+
+    // Fill common config fields into a JSON object (used by both viewer and monitor).
+    void fillConfigJson(nlohmann::json &cfg) const;
+
+    // Handle a read-only API route. Returns {handled, response_json}.
+    // Does NOT handle /api/config, clear endpoints, or mode-specific routes.
+    struct ApiResult { bool handled; std::string body; };
+    ApiResult handleReadApi(const std::string &uri) const;
 };

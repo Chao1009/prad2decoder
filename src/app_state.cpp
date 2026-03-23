@@ -268,6 +268,24 @@ void AppState::init(const std::string &db_dir,
                       << "\n";
         }
 
+        if (rcfg.contains("epics")) {
+            auto &ep = rcfg["epics"];
+            if (ep.contains("max_history"))     epics_max_history  = ep["max_history"];
+            if (ep.contains("warn_threshold"))  epics_warn_thresh  = ep["warn_threshold"];
+            if (ep.contains("alert_threshold")) epics_alert_thresh = ep["alert_threshold"];
+            if (ep.contains("min_avg_points"))  epics_min_avg_pts  = ep["min_avg_points"];
+            if (ep.contains("mean_window"))     epics_mean_window  = ep["mean_window"];
+            if (ep.contains("slots")) {
+                for (auto &slot : ep["slots"]) {
+                    std::vector<std::string> names;
+                    for (auto &ch : slot) names.push_back(ch);
+                    epics_default_slots.push_back(std::move(names));
+                }
+            }
+            std::cerr << "EPICS     : max_history=" << epics_max_history
+                      << " slots=" << epics_default_slots.size() << "\n";
+        }
+
         std::cerr << "Reco      : " << main_config
                   << " (adc_to_mev=" << adc_to_mev << ")\n";
     }
@@ -786,4 +804,176 @@ json AppState::apiLmsRefChannels() const
         });
     }
     return arr;
+}
+
+//=============================================================================
+// EPICS
+//=============================================================================
+
+void AppState::processEpics(const std::string &text, int32_t event_number, uint64_t timestamp)
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    epics.Feed(event_number, timestamp, text);
+    epics.Trim(epics_max_history);
+    epics_events++;
+}
+
+void AppState::clearEpics()
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    epics.Clear();
+    epics_events = 0;
+}
+
+json AppState::apiEpicsChannels() const
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    json names = json::array();
+    for (auto &n : epics.GetChannelNames()) names.push_back(n);
+    json slots = json::array();
+    for (auto &s : epics_default_slots) slots.push_back(s);
+    return {{"channels", names}, {"slots", slots},
+            {"events", epics_events.load()}};
+}
+
+json AppState::apiEpicsChannel(const std::string &name) const
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    int id = epics.GetChannelId(name);
+    if (id < 0)
+        return {{"name", name}, {"time", json::array()}, {"value", json::array()}, {"count", 0}};
+
+    int nsnap = epics.GetSnapshotCount();
+    json t_arr = json::array(), v_arr = json::array();
+
+    // time relative to first snapshot's timestamp
+    uint64_t t0 = (nsnap > 0) ? epics.GetSnapshot(0).timestamp : 0;
+    for (int i = 0; i < nsnap; ++i) {
+        auto &snap = epics.GetSnapshot(i);
+        double t_sec = static_cast<double>(snap.timestamp - t0) * TI_TICK_SEC;
+        float val = (id < (int)snap.values.size()) ? snap.values[id] : 0.f;
+        t_arr.push_back(std::round(t_sec * 100) / 100);
+        v_arr.push_back(val);
+    }
+    return {{"name", name}, {"time", t_arr}, {"value", v_arr}, {"count", nsnap}};
+}
+
+json AppState::apiEpicsLatest() const
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    json channels = json::array();
+    int nsnap = epics.GetSnapshotCount();
+    int nch = epics.GetChannelCount();
+    if (nsnap == 0 || nch == 0)
+        return {{"channels", channels}, {"events", epics_events.load()}};
+
+    auto &latest = epics.GetSnapshot(nsnap - 1);
+
+    // compute per-channel mean from most recent mean_window snapshots
+    int win_start = std::max(0, nsnap - epics_mean_window);
+    std::vector<double> sums(nch, 0.0);
+    std::vector<int> counts(nch, 0);
+    for (int i = win_start; i < nsnap; ++i) {
+        auto &snap = epics.GetSnapshot(i);
+        for (int ch = 0; ch < std::min(nch, (int)snap.values.size()); ++ch) {
+            sums[ch] += snap.values[ch];
+            counts[ch]++;
+        }
+    }
+
+    for (int ch = 0; ch < nch; ++ch) {
+        float val = (ch < (int)latest.values.size()) ? latest.values[ch] : 0.f;
+        float mean = (counts[ch] > 0) ? static_cast<float>(sums[ch] / counts[ch]) : val;
+        channels.push_back({
+            {"name", epics.GetChannelName(ch)},
+            {"value", std::round(val * 1000) / 1000},
+            {"mean", std::round(mean * 1000) / 1000},
+            {"count", counts[ch]},
+        });
+    }
+    return {{"channels", channels}, {"events", epics_events.load()}};
+}
+
+//=============================================================================
+// Shared config + API routing (used by both viewer and monitor)
+//=============================================================================
+
+void AppState::fillConfigJson(json &cfg) const
+{
+    cfg["hist"] = {
+        {"time_min", hist_cfg.time_min}, {"time_max", hist_cfg.time_max},
+        {"bin_min", hist_cfg.bin_min}, {"bin_max", hist_cfg.bin_max},
+        {"bin_step", hist_cfg.bin_step}, {"threshold", hist_cfg.threshold},
+        {"pos_min", hist_cfg.pos_min}, {"pos_max", hist_cfg.pos_max},
+        {"pos_step", hist_cfg.pos_step},
+    };
+    cfg["cluster_hist"] = {{"min", cl_hist_min}, {"max", cl_hist_max}, {"step", cl_hist_step}};
+    cfg["nclusters_hist"] = {{"min", nclusters_hist_min}, {"max", nclusters_hist_max}, {"step", nclusters_hist_step}};
+    cfg["nblocks_hist"] = {{"min", nblocks_hist_min}, {"max", nblocks_hist_max}, {"step", nblocks_hist_step}};
+    cfg["color_ranges"] = apiColorRanges();
+    cfg["refresh_ms"] = {{"event", refresh_event_ms}, {"ring", refresh_ring_ms},
+                         {"histogram", refresh_hist_ms}, {"lms", refresh_lms_ms}};
+    cfg["lms"] = {
+        {"trigger_bit", lms_trigger_bit}, {"warn_threshold", lms_warn_thresh},
+        {"events", lms_events.load()}, {"ref_channels", apiLmsRefChannels()},
+    };
+    cfg["elog"] = {
+        {"url", elog_url}, {"logbook", elog_logbook},
+        {"author", elog_author}, {"tags", elog_tags},
+    };
+    cfg["epics"] = {
+        {"max_history", epics_max_history},
+        {"warn_threshold", epics_warn_thresh}, {"alert_threshold", epics_alert_thresh},
+        {"min_avg_points", epics_min_avg_pts}, {"mean_window", epics_mean_window},
+        {"slots", epics_default_slots},
+    };
+}
+
+AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
+{
+    if (uri == "/api/occupancy")
+        return {true, apiOccupancy().dump()};
+    if (uri == "/api/cluster_hist")
+        return {true, apiClusterHist().dump()};
+    if (uri.rfind("/api/hist/", 0) == 0)
+        return {true, apiHist(true, uri.substr(10)).dump()};
+    if (uri.rfind("/api/poshist/", 0) == 0)
+        return {true, apiHist(false, uri.substr(13)).dump()};
+    if (uri == "/api/lms/refs")
+        return {true, apiLmsRefChannels().dump()};
+    if (uri.rfind("/api/lms/", 0) == 0) {
+        int ref = -1;
+        auto qpos = uri.find('?');
+        std::string path = (qpos != std::string::npos) ? uri.substr(9, qpos - 9) : uri.substr(9);
+        if (qpos != std::string::npos) {
+            std::string q = uri.substr(qpos + 1);
+            if (q.rfind("ref=", 0) == 0) ref = std::atoi(q.c_str() + 4);
+        }
+        if (path == "summary") return {true, apiLmsSummary(ref).dump()};
+        if (path == "clear")   return {false, ""};  // clear handled by caller
+        return {true, apiLmsModule(std::atoi(path.c_str()), ref).dump()};
+    }
+    if (uri.rfind("/api/epics/", 0) == 0) {
+        std::string path = uri.substr(11);
+        if (path == "channels") return {true, apiEpicsChannels().dump()};
+        if (path == "latest")   return {true, apiEpicsLatest().dump()};
+        if (path == "clear")    return {false, ""};  // clear handled by caller
+        if (path.rfind("channel/", 0) == 0) {
+            // URL-decode the channel name (e.g. %3A → :)
+            std::string raw = path.substr(8), name;
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '%' && i + 2 < raw.size()) {
+                    int hi = 0, lo = 0;
+                    if (std::sscanf(raw.c_str() + i + 1, "%1x%1x", &hi, &lo) == 2) {
+                        name += static_cast<char>((hi << 4) | lo);
+                        i += 2;
+                        continue;
+                    }
+                }
+                name += raw[i];
+            }
+            return {true, apiEpicsChannel(name).dump()};
+        }
+    }
+    return {false, ""};
 }

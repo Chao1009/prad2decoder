@@ -376,6 +376,9 @@ const PL={paper_bgcolor:'#1a1a2e',plot_bgcolor:'#11112a',font:{family:'Consolas,
     margin:{l:45,r:10,t:24,b:32},xaxis:{gridcolor:'#1a1a3a',zerolinecolor:'#222'},
     yaxis:{gridcolor:'#1a1a3a',zerolinecolor:'#222'}};
 const PC2={responsive:true,displayModeBar:false};
+const PC_EPICS={responsive:true,displayModeBar:true,
+    modeBarButtonsToRemove:['sendDataToCloud','lasso2d','select2d'],
+    displaylogo:false};
 
 function resizeAllPlots(){
     for(const id of['waveform-div','inthist-div','poshist-div','cl-energy-hist','cl-nclust-hist','cl-nblocks-hist','lms-plot'])
@@ -673,6 +676,18 @@ function connectWebSocket() {
             } else if (msg.type === 'lms_cleared') {
                 lmsSummaryData=null; lmsSelectedModule=-1; currentLmsData=null;
                 if(activeTab==='lms'){ drawLmsGeo(); updateLmsTable(); }
+            } else if (msg.type === 'epics_event') {
+                const now3 = Date.now();
+                if (now3 - lastEpicsFetch > refreshEpicsMs) {
+                    lastEpicsFetch = now3;
+                    if(activeTab==='epics'){
+                        fetchEpicsChannels();
+                        fetchEpicsLatest();
+                        fetchAllEpicsSlots();
+                    }
+                }
+            } else if (msg.type === 'epics_cleared') {
+                clearEpicsFrontend();
             }
         } catch (e) {}
     };
@@ -803,6 +818,8 @@ function pollProgress() {
                 updateHeaderInfo(cfg);
                 updateHeaderStats();
                 if (histEnabled) { fetchOccupancy(); fetchClHist(); }
+                fetchEpicsChannels(); fetchEpicsLatest();
+                if(activeTab==='epics') fetchAllEpicsSlots();
                 syncDqRange();
                 drawGeo();
                 if (totalEvents > 0) loadEvent(1);
@@ -879,15 +896,22 @@ function switchTab(tab){
     if(tab===activeTab) return;
     activeTab=tab;
     selectedModule=null;
+    // clear notification dot on the tab being opened
+    if(tab==='lms') document.getElementById('lms-dot').className='tab-dot';
+    if(tab==='epics') document.getElementById('epics-dot').className='tab-dot';
     document.querySelectorAll('.tab').forEach(t=>{
         t.classList.toggle('active', t.dataset.tab===tab);
     });
-    document.getElementById('geo-toolbar-dq').style.display  = tab==='dq' ? 'flex' : 'none';
+    const isEpics=tab==='epics';
+    document.getElementById('geo-panel').style.display        = isEpics ? 'none' : '';
+    document.getElementById('div-main').style.display         = isEpics ? 'none' : '';
+    document.getElementById('geo-toolbar-dq').style.display   = tab==='dq' ? 'flex' : 'none';
     document.getElementById('geo-toolbar-cl').style.display   = tab==='cluster' ? 'flex' : 'none';
     document.getElementById('geo-toolbar-lms').style.display  = tab==='lms' ? 'flex' : 'none';
     document.getElementById('detail-panel').style.display     = tab==='dq' ? 'flex' : 'none';
     document.getElementById('cluster-panel').style.display    = tab==='cluster' ? 'flex' : 'none';
     document.getElementById('lms-panel').style.display        = tab==='lms' ? 'flex' : 'none';
+    document.getElementById('epics-outer').style.display      = isEpics ? 'flex' : 'none';
 
     if(tab==='cluster') {
         loadClusterData(currentEvent);
@@ -901,6 +925,13 @@ function switchTab(tab){
         fetchLmsSummary();
         setTimeout(()=>{
             try{Plotly.Plots.resize('lms-plot');}catch(e){}
+        }, 50);
+    } else if(tab==='epics') {
+        fetchEpicsChannels();
+        fetchEpicsLatest();
+        fetchAllEpicsSlots();
+        setTimeout(()=>{
+            for(let i=0;i<EPICS_NUM_SLOTS;i++) try{Plotly.Plots.resize('epics-plot-'+i);}catch(e){}
         }, 50);
     } else {
         drawGeo();
@@ -1213,9 +1244,17 @@ function fetchLmsSummary(){
         lmsSummaryData=data;
         drawLmsGeo();
         updateLmsTable();
-        // refresh tooltip if hovering a module (data changed under cursor)
         if(hoveredModule) updateGeoTooltip();
+        // update tab dot if not currently on LMS tab
+        if(activeTab!=='lms') updateLmsDot();
     }).catch(()=>{});
+}
+
+function updateLmsDot(){
+    const dot=document.getElementById('lms-dot');
+    if(!lmsSummaryData||!lmsSummaryData.modules){dot.className='tab-dot';return;}
+    const hasWarn=Object.values(lmsSummaryData.modules).some(m=>m.warn);
+    dot.className='tab-dot'+(hasWarn?' alert':'');
 }
 
 function fetchLmsHistory(modIdx, modName){
@@ -1605,6 +1644,9 @@ function init(){
                 '<span class="cl-info-text">Click a module to view LMS history</span>';
             document.getElementById('lms-tbody').innerHTML='';
 
+            // EPICS: clear
+            clearEpicsFrontend();
+
             // Reset counters
             sampleCount=0;
             updateHeaderStats();
@@ -1617,6 +1659,7 @@ function init(){
             Promise.all([
                 fetch('/api/hist/clear').then(r=>r.json()),
                 fetch('/api/lms/clear').then(r=>r.json()),
+                fetch('/api/epics/clear').then(r=>r.json()),
             ]).then(clearFrontend).catch(()=>{
                 document.getElementById('status-bar').textContent='Error clearing data';
             });
@@ -1771,8 +1814,12 @@ function init(){
             refreshLmsMs=data.refresh_ms.lms||2000;
         }
         initReport(data);  // report.js: wire buttons + load elog defaults
+        initEpics(data);  // epics.js: config + search + drag-drop
         updateTimeCutLabel();
         mode=data.mode||'file';
+        const appTitle=mode==='online'?'PRad2 HyCal Monitor':'PRad2 HyCal Event Viewer';
+        document.title=appTitle;
+        document.getElementById('app-title').textContent=appTitle;
         g_currentFile=data.current_file||'';
         g_dataDirEnabled=data.data_dir_enabled||false;
         g_dataDir=data.data_dir||'';
@@ -1794,6 +1841,8 @@ function init(){
             updateHeaderInfo(data);
             updateHeaderStats();
             if(histEnabled) { fetchOccupancy(); fetchClHist(); }
+            fetchEpicsChannels(); fetchEpicsLatest();
+            if(activeTab==='epics') fetchAllEpicsSlots();
             syncDqRange();
             geoViewInit=false; resizeGeo();
             if(totalEvents>0)loadEvent(1);
@@ -1801,6 +1850,7 @@ function init(){
             setEtStatus(data.et_connected||false);
             syncDqRange();
             fetchOccupancy();
+            fetchEpicsChannels(); fetchEpicsLatest();
             resizeGeo();
             connectWebSocket();
             updateRingSelector();

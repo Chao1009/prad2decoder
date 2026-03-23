@@ -153,6 +153,90 @@ registerReportSection({id:'occupancy',title:'Occupancy',order:10,
     }
 });
 
+// --- EPICS ---
+// Capture all EPICS plot slots into a single combined image.
+async function captureEpicsPlots(){
+    const slotW=500, slotH=250;
+    const cols=2, rows=3;
+    const canvas=document.createElement('canvas');
+    canvas.width=cols*slotW; canvas.height=rows*slotH;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    for(let s=0;s<EPICS_NUM_SLOTS;s++){
+        const divId='epics-plot-'+s;
+        const col=s%cols, row=Math.floor(s/cols);
+        try{
+            // re-plot into a temp div with light theme for the report
+            const names=epicsSlots[s];
+            if(!names||!names.length) continue;
+            const results=await Promise.all(names.map(n=>
+                fetch(`/api/epics/channel/${encodeURIComponent(n)}`).then(r=>r.json()).catch(()=>null)
+            ));
+            const traces=[];
+            results.forEach((data,i)=>{
+                if(!data||!data.time||!data.time.length) return;
+                traces.push({
+                    x:data.time,y:data.value,type:'scatter',mode:'lines+markers',
+                    name:data.name,
+                    line:{color:EPICS_COLORS[i%EPICS_COLORS.length],width:1.5},
+                    marker:{size:3,color:EPICS_COLORS[i%EPICS_COLORS.length]},
+                });
+            });
+            if(!traces.length) continue;
+            const imgUrl=await plotToImage(async div=>{
+                await Plotly.newPlot(div,traces,{...RPL,
+                    xaxis:{...RPL.xaxis,title:'Time (s)'},
+                    yaxis:{...RPL.yaxis},
+                    showlegend:traces.length>1,
+                    legend:{font:{size:9,color:'#222'},bgcolor:'rgba(255,255,255,0.8)',x:0,y:1},
+                });
+            },slotW,slotH);
+            const img=new Image();
+            await new Promise((resolve,reject)=>{
+                img.onload=resolve; img.onerror=reject;
+                img.src=imgUrl;
+            });
+            ctx.drawImage(img,col*slotW,row*slotH,slotW,slotH);
+        }catch(e){}
+    }
+    return canvas.toDataURL('image/png');
+}
+
+registerReportSection({id:'epics',title:'EPICS Slow Control',order:15,
+    generate:async()=>{
+        let data;
+        try{ data=await fetch('/api/epics/latest').then(r=>r.json()); }catch(e){ return null; }
+        if(!data||!data.channels||!data.channels.length) return null;
+        let md='## EPICS Slow Control\n\n';
+        md+=`EPICS events: ${data.events||0}\n\n`;
+
+        // capture all plot slots as one combined image
+        const hasSlots=epicsSlots.some(s=>s.length>0);
+        if(hasSlots){
+            try{
+                const img=await captureEpicsPlots();
+                addAttachment(img,'epics_plots.png','EPICS Plots');
+                md+=`![EPICS Plots](epics_plots.png)\n\n`;
+            }catch(e){}
+        }
+
+        md+=mdTable(
+            ['Channel','Latest','Mean','Status'],
+            data.channels.map(ch=>{
+                let status='OK';
+                if(ch.count>=epicsMinAvgPts && ch.mean!==0){
+                    const dev=Math.abs(ch.value-ch.mean)/Math.abs(ch.mean);
+                    if(dev>=epicsAlertThresh) status='**JUMPING**';
+                    else if(dev>=epicsWarnThresh) status='**CHANGING**';
+                }else if(ch.count<epicsMinAvgPts){ status='--'; }
+                return [ch.name,ch.value,ch.mean,status];
+            }),['l','r','r','l']
+        );
+        return md;
+    }
+});
+
 // --- Clustering ---
 registerReportSection({id:'cluster',title:'Clustering',order:20,
     generate:async()=>{
