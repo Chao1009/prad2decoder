@@ -846,13 +846,11 @@ json AppState::apiEpicsChannel(const std::string &name) const
     int nsnap = epics.GetSnapshotCount();
     json t_arr = json::array(), v_arr = json::array();
 
-    // time relative to first snapshot's timestamp
-    uint64_t t0 = (nsnap > 0) ? epics.GetSnapshot(0).timestamp : 0;
+    // use event_number as x-axis (reliable ordering for EPICS snapshots)
     for (int i = 0; i < nsnap; ++i) {
         auto &snap = epics.GetSnapshot(i);
-        double t_sec = static_cast<double>(snap.timestamp - t0) * TI_TICK_SEC;
         float val = (id < (int)snap.values.size()) ? snap.values[id] : 0.f;
-        t_arr.push_back(std::round(t_sec * 100) / 100);
+        t_arr.push_back(snap.event_number);
         v_arr.push_back(val);
     }
     return {{"name", name}, {"time", t_arr}, {"value", v_arr}, {"count", nsnap}};
@@ -958,8 +956,22 @@ AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
         if (path == "channels") return {true, apiEpicsChannels().dump()};
         if (path == "latest")   return {true, apiEpicsLatest().dump()};
         if (path == "clear")    return {false, ""};  // clear handled by caller
-        if (path.rfind("channel/", 0) == 0)
-            return {true, apiEpicsChannel(path.substr(8)).dump()};
+        if (path.rfind("channel/", 0) == 0) {
+            // URL-decode the channel name (e.g. %3A → :)
+            std::string raw = path.substr(8), name;
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '%' && i + 2 < raw.size()) {
+                    int hi = 0, lo = 0;
+                    if (std::sscanf(raw.c_str() + i + 1, "%1x%1x", &hi, &lo) == 2) {
+                        name += static_cast<char>((hi << 4) | lo);
+                        i += 2;
+                        continue;
+                    }
+                }
+                name += raw[i];
+            }
+            return {true, apiEpicsChannel(name).dump()};
+        }
     }
     return {false, ""};
 }
