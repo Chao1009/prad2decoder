@@ -258,29 +258,66 @@ registerReportSection({id:'cluster',title:'Clustering',order:20,
 // --- Physics ---
 registerReportSection({id:'physics',title:'Physics',order:25,
     generate:async()=>{
-        let data;
-        try{ data=await fetch('/api/physics/energy_angle').then(r=>r.json()); }catch(e){ return null; }
-        if(!data||!data.bins||!data.bins.length||!data.events) return null;
+        let data,posData;
+        try{ data=await fetch('/api/physics/energy_angle').then(r=>r.json()); }catch(e){}
+        try{ posData=await fetch('/api/physics/position_xy').then(r=>r.json()); }catch(e){}
+        if((!data||!data.events)&&(!posData||!posData.events)) return null;
 
         let md='## Physics\n\n';
-        md+=`Events: ${data.events} | HyCal z: ${(data.hycal_z||5800)/1000}m\n\n`;
+        const evts=data?.events||posData?.events||0;
+        md+=`Events: ${evts}`;
+        if(data?.beam_energy) md+=` | Beam: ${data.beam_energy} MeV`;
+        if(data?.hycal_z) md+=` | HyCal z: ${data.hycal_z/1000}m`;
+        md+='\n\n';
 
-        // capture heatmap as image
-        try{
-            const img=await plotToImage(async div=>{
-                const z=[];
-                for(let iy=0;iy<data.ny;iy++)
-                    z.push(data.bins.slice(iy*data.nx,(iy+1)*data.nx).map(v=>v>0?Math.log10(v):null));
-                const x=[];for(let i=0;i<data.nx;i++) x.push(data.angle_min+(i+0.5)*data.angle_step);
-                const y=[];for(let i=0;i<data.ny;i++) y.push(data.energy_min+(i+0.5)*data.energy_step);
-                await Plotly.newPlot(div,[{z,x,y,type:'heatmap',colorscale:'Hot',
-                    colorbar:{title:'log₁₀(counts)',titleside:'right'}}],
-                    {...RPL,xaxis:{...RPL.xaxis,title:'Scattering Angle (deg)'},
-                     yaxis:{...RPL.yaxis,title:'Energy (MeV)'},margin:{l:55,r:80,t:10,b:40}});
-            },800,500);
-            addAttachment(img,'energy_vs_angle.png','Energy vs Angle');
-            md+=`![Energy vs Angle](energy_vs_angle.png)\n\n`;
-        }catch(e){}
+        // energy vs angle heatmap + elastic line
+        if(data&&data.bins&&data.bins.length&&data.nx){
+            try{
+                const img=await plotToImage(async div=>{
+                    const z=[];
+                    for(let iy=0;iy<data.ny;iy++)
+                        z.push(data.bins.slice(iy*data.nx,(iy+1)*data.nx).map(v=>v>0?Math.log10(v):null));
+                    const x=[];for(let i=0;i<data.nx;i++) x.push(data.angle_min+(i+0.5)*data.angle_step);
+                    const y=[];for(let i=0;i<data.ny;i++) y.push(data.energy_min+(i+0.5)*data.energy_step);
+                    const traces=[{z,x,y,type:'heatmap',colorscale:'Hot',
+                        colorbar:{title:'log₁₀(counts)',titleside:'right'}}];
+                    if(data.beam_energy>0){
+                        const ex=[],ey=[];
+                        for(let th=data.angle_min+0.1;th<=data.angle_max;th+=0.05){
+                            const e=data.beam_energy/(1+(data.beam_energy/938.272)*(1-Math.cos(th*Math.PI/180)));
+                            if(e>=data.energy_min&&e<=data.energy_max){ex.push(th);ey.push(e);}
+                        }
+                        traces.push({x:ex,y:ey,mode:'lines',line:{color:'#00ff88',width:2,dash:'dot'},
+                            name:'ep elastic'});
+                    }
+                    await Plotly.newPlot(div,traces,
+                        {...RPL,xaxis:{...RPL.xaxis,title:'Scattering Angle (deg)'},
+                         yaxis:{...RPL.yaxis,title:'Energy (MeV)'},margin:{l:55,r:80,t:10,b:40},
+                         showlegend:!!data.beam_energy,legend:{x:0.7,y:0.95,font:{size:10,color:'#aaa'}}});
+                },800,500);
+                addAttachment(img,'energy_vs_angle.png','Energy vs Angle');
+                md+=`![Energy vs Angle](energy_vs_angle.png)\n\n`;
+            }catch(e){}
+        }
+
+        // XY position heatmap
+        if(posData&&posData.bins&&posData.bins.length&&posData.nx){
+            try{
+                const img=await plotToImage(async div=>{
+                    const z=[];
+                    for(let iy=0;iy<posData.ny;iy++)
+                        z.push(posData.bins.slice(iy*posData.nx,(iy+1)*posData.nx).map(v=>v>0?Math.log10(v):null));
+                    const x=[];for(let i=0;i<posData.nx;i++) x.push(posData.x_min+(i+0.5)*posData.x_step);
+                    const y=[];for(let i=0;i<posData.ny;i++) y.push(posData.y_min+(i+0.5)*posData.y_step);
+                    await Plotly.newPlot(div,[{z,x,y,type:'heatmap',colorscale:'Hot',
+                        colorbar:{title:'log₁₀(counts)',titleside:'right'}}],
+                        {...RPL,xaxis:{...RPL.xaxis,title:'X (mm)',scaleanchor:'y',scaleratio:1},
+                         yaxis:{...RPL.yaxis,title:'Y (mm)'},margin:{l:55,r:80,t:10,b:40}});
+                },600,600);
+                addAttachment(img,'position_xy.png','Cluster XY Position');
+                md+=`![Cluster Position](position_xy.png)\n\n`;
+            }catch(e){}
+        }
         return md;
     }
 });

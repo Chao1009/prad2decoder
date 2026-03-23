@@ -286,6 +286,7 @@ void AppState::init(const std::string &db_dir,
                     hycal_transform.rz=hc["tilting"][2];
                 }
             }
+            if (ph.contains("beam_energy")) beam_energy = ph["beam_energy"];
             if (ph.contains("energy_angle_hist")) {
                 auto &ea = ph["energy_angle_hist"];
                 if (ea.contains("angle_min"))   ea_angle_min   = ea["angle_min"];
@@ -294,6 +295,15 @@ void AppState::init(const std::string &db_dir,
                 if (ea.contains("energy_min"))  ea_energy_min  = ea["energy_min"];
                 if (ea.contains("energy_max"))  ea_energy_max  = ea["energy_max"];
                 if (ea.contains("energy_step")) ea_energy_step = ea["energy_step"];
+            }
+            if (ph.contains("position_hist")) {
+                auto &po = ph["position_hist"];
+                if (po.contains("x_min"))  pos_x_min  = po["x_min"];
+                if (po.contains("x_max"))  pos_x_max  = po["x_max"];
+                if (po.contains("x_step")) pos_x_step = po["x_step"];
+                if (po.contains("y_min"))  pos_y_min  = po["y_min"];
+                if (po.contains("y_max"))  pos_y_max  = po["y_max"];
+                if (po.contains("y_step")) pos_y_step = po["y_step"];
             }
             std::cerr << "Physics   : target=(" << target_x << "," << target_y << "," << target_z
                       << ") HyCal=(" << hycal_transform.x << "," << hycal_transform.y << ","
@@ -331,6 +341,9 @@ void AppState::init(const std::string &db_dir,
     int ea_nx = std::max(1, (int)std::ceil((ea_angle_max - ea_angle_min) / ea_angle_step));
     int ea_ny = std::max(1, (int)std::ceil((ea_energy_max - ea_energy_min) / ea_energy_step));
     energy_angle_hist.init(ea_nx, ea_ny);
+    int pos_nx = std::max(1, (int)std::ceil((pos_x_max - pos_x_min) / pos_x_step));
+    int pos_ny = std::max(1, (int)std::ceil((pos_y_max - pos_y_min) / pos_y_step));
+    pos_xy_hist.init(pos_nx, pos_ny);
 }
 
 //=============================================================================
@@ -447,6 +460,7 @@ void AppState::clusterEvent(fdec::EventData &event,
         float theta_deg = std::atan2(r, dz) * (180.f / 3.14159265f);
         energy_angle_hist.fill(theta_deg, rh.energy,
             ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+        pos_xy_hist.fill(lx, ly, pos_x_min, pos_x_step, pos_y_min, pos_y_step);
     }
     nclusters_hist.fill(reco_hits.size(), nclusters_hist_min, nclusters_hist_step);
     cluster_events_processed++;
@@ -671,6 +685,7 @@ void AppState::clearHistograms()
     nclusters_hist.clear();
     nblocks_hist.clear();
     energy_angle_hist.clear();
+    pos_xy_hist.clear();
     cluster_events_processed = 0;
 }
 
@@ -738,6 +753,17 @@ json AppState::apiEnergyAngle() const
             {"energy_min", ea_energy_min}, {"energy_max", ea_energy_max}, {"energy_step", ea_energy_step},
             {"target", {target_x, target_y, target_z}},
             {"hycal_z", hycal_transform.z},
+            {"beam_energy", beam_energy},
+            {"events", cluster_events_processed}};
+}
+
+json AppState::apiPositionXY() const
+{
+    std::lock_guard<std::mutex> lk(data_mtx);
+    return {{"bins", pos_xy_hist.bins},
+            {"nx", pos_xy_hist.nx}, {"ny", pos_xy_hist.ny},
+            {"x_min", pos_x_min}, {"x_max", pos_x_max}, {"x_step", pos_x_step},
+            {"y_min", pos_y_min}, {"y_max", pos_y_max}, {"y_step", pos_y_step},
             {"events", cluster_events_processed}};
 }
 
@@ -981,9 +1007,14 @@ void AppState::fillConfigJson(json &cfg) const
             {"position", {hycal_transform.x, hycal_transform.y, hycal_transform.z}},
             {"tilting", {hycal_transform.rx, hycal_transform.ry, hycal_transform.rz}},
         }},
+        {"beam_energy", beam_energy},
         {"energy_angle_hist", {
             {"angle_min", ea_angle_min}, {"angle_max", ea_angle_max}, {"angle_step", ea_angle_step},
             {"energy_min", ea_energy_min}, {"energy_max", ea_energy_max}, {"energy_step", ea_energy_step},
+        }},
+        {"position_hist", {
+            {"x_min", pos_x_min}, {"x_max", pos_x_max}, {"x_step", pos_x_step},
+            {"y_min", pos_y_min}, {"y_max", pos_y_max}, {"y_step", pos_y_step},
         }},
     };
     cfg["elog"] = {
@@ -1004,6 +1035,8 @@ AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
         return {true, apiOccupancy().dump()};
     if (uri == "/api/physics/energy_angle")
         return {true, apiEnergyAngle().dump()};
+    if (uri == "/api/physics/position_xy")
+        return {true, apiPositionXY().dump()};
     if (uri == "/api/cluster_hist")
         return {true, apiClusterHist().dump()};
     if (uri.rfind("/api/hist/", 0) == 0)

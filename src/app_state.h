@@ -62,6 +62,9 @@ struct AppState {
     DetectorTransform hycal_transform;           // HyCal position + tilting
     float ea_angle_min=0.f, ea_angle_max=8.f, ea_angle_step=0.2f;   // degrees
     float ea_energy_min=0.f, ea_energy_max=3000.f, ea_energy_step=100.f; // MeV
+    float pos_x_min=-600.f, pos_x_max=600.f, pos_x_step=5.f;     // mm
+    float pos_y_min=-600.f, pos_y_max=600.f, pos_y_step=5.f;     // mm
+    float beam_energy = 2200.f;  // MeV (for elastic line overlay)
 
     // EPICS config
     int   epics_max_history = 5000;
@@ -107,6 +110,7 @@ struct AppState {
     Histogram nclusters_hist;
     Histogram nblocks_hist;
     Histogram2D energy_angle_hist;
+    Histogram2D pos_xy_hist;
     int       cluster_events_processed = 0;
 
     // ---- LMS data (guarded by lms_mtx) -------------------------------------
@@ -181,6 +185,7 @@ struct AppState {
     nlohmann::json apiLmsModule(int module_index, int ref_index = -1) const;
     nlohmann::json apiLmsRefChannels() const;
     nlohmann::json apiEnergyAngle() const;
+    nlohmann::json apiPositionXY() const;
     nlohmann::json apiEpicsChannels() const;
     nlohmann::json apiEpicsChannel(const std::string &name) const;
     nlohmann::json apiEpicsLatest() const;

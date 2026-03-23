@@ -651,7 +651,7 @@ function connectWebSocket() {
                     lastOccFetch = now;
                     fetchOccupancy();
                     fetchClHist();
-                    if(activeTab==='physics') fetchEnergyAngle();
+                    if(activeTab==='physics') fetchPhysics();
                 }
             } else if (msg.type === 'status') {
                 setEtStatus(msg.connected, msg.waiting, msg.retries);
@@ -822,7 +822,7 @@ function pollProgress() {
                 if (histEnabled) { fetchOccupancy(); fetchClHist(); }
                 fetchEpicsChannels(); fetchEpicsLatest();
                 if(activeTab==='epics') fetchAllEpicsSlots();
-                if(activeTab==='physics') fetchEnergyAngle();
+                if(activeTab==='physics') fetchPhysics();
                 syncDqRange();
                 drawGeo();
                 if (totalEvents > 0) loadEvent(1);
@@ -938,8 +938,8 @@ function switchTab(tab){
             for(let i=0;i<EPICS_NUM_SLOTS;i++) try{Plotly.Plots.resize('epics-plot-'+i);}catch(e){}
         }, 50);
     } else if(tab==='physics') {
-        fetchEnergyAngle();
-        setTimeout(()=>{try{Plotly.Plots.resize('physics-plot');}catch(e){}},50);
+        fetchPhysics();
+        setTimeout(()=>resizePhysics(),50);
     } else {
         drawGeo();
     }
@@ -1852,7 +1852,7 @@ function init(){
             if(histEnabled) { fetchOccupancy(); fetchClHist(); }
             fetchEpicsChannels(); fetchEpicsLatest();
             if(activeTab==='epics') fetchAllEpicsSlots();
-            if(activeTab==='physics') fetchEnergyAngle();
+            if(activeTab==='physics') fetchPhysics();
             syncDqRange();
             geoViewInit=false; resizeGeo();
             if(totalEvents>0)loadEvent(1);
@@ -1861,7 +1861,7 @@ function init(){
             syncDqRange();
             fetchOccupancy();
             fetchEpicsChannels(); fetchEpicsLatest();
-            if(activeTab==='physics') fetchEnergyAngle();
+            if(activeTab==='physics') fetchPhysics();
             resizeGeo();
             connectWebSocket();
             updateRingSelector();

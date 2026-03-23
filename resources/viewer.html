@@ -296,10 +296,16 @@
     <div class="physics-outer" id="physics-outer" style="display:none">
         <div class="physics-toolbar">
             <label>Log Z</label><input type="checkbox" id="physics-logz" checked>
+            <label style="margin-left:12px">Elastic ep</label><input type="checkbox" id="physics-elastic">
             <span id="physics-stats" style="color:var(--dim);font-size:11px;margin-left:12px"></span>
         </div>
-        <div class="physics-plot-wrap">
-            <div id="physics-plot" style="width:100%;height:100%"></div>
+        <div class="physics-grid">
+            <div class="physics-cell">
+                <div id="physics-plot" style="width:100%;height:100%"></div>
+            </div>
+            <div class="physics-cell">
+                <div id="physics-xy-plot" style="width:100%;height:100%"></div>
+            </div>
         </div>
     </div>
 </div>
