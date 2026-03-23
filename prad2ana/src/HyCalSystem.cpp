@@ -439,6 +439,19 @@ const Module *HyCalSystem::module_by_daq(int crate, int slot, int ch) const
     return (it != daq_map_.end()) ? &modules_[it->second] : nullptr;
 }
 
+double HyCalSystem::GetCalibConstant(int primex_id) const
+{
+    const Module *m = module_by_id(primex_id);
+    return m ? m->cal_factor : 0.;
+}
+
+void HyCalSystem::SetCalibConstant(int primex_id, double factor)
+{
+    auto it = id_map_.find(primex_id);
+    if (it != id_map_.end())
+        modules_[it->second].cal_factor = factor;
+}
+
 int HyCalSystem::LoadCalibration(const std::string &calib_path)
 {
     std::ifstream f(calib_path);

@@ -18,6 +18,8 @@ export FETCHCONTENT_BASE_DIR=$HOME/.cmake/fetchcontent
 
 For prebuilt CODA libraries: `cmake .. -DEVIO_SOURCE=prebuilt -DET_SOURCE=prebuilt`
 
+For analysis tools (requires ROOT): `cmake .. -DBUILD_ANALYSIS=ON`
+
 For the Qt5 monitor client: `cmake .. -DBUILD_GUI=ON`
 
 ## Event Viewer
@@ -140,6 +142,7 @@ src/
     evc_monitor.cpp             Online monitor (ET + WebSocket)
     app_state.h/cpp             Shared application state
     viewer_utils.h              Common types and helpers
+analysis/                       Replay + physics analysis (requires ROOT, see analysis/README.md)
 test/                           Diagnostic tools (see test/README.md)
 prad2qtmon/                     Qt5 WebEngine client (optional)
 ```
