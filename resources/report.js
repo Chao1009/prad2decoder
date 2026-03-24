@@ -352,10 +352,10 @@ registerReportSection({id:'lms',title:'LMS Monitoring',order:30,
         const d=await fetch(`/api/lms/summary${refQ}`).then(r=>r.json());
         lmsSummaryData=d;
         const lmsEvents=lmsSummaryData?lmsSummaryData.events||0:0;
-        const trigBit=lmsSummaryData?lmsSummaryData.trigger_bit:'?';
+        const trigMask=lmsSummaryData?'0x'+(lmsSummaryData.trigger_mask||0).toString(16):'?';
         if(!lmsSummaryData||!lmsSummaryData.modules||
             !Object.keys(lmsSummaryData.modules).length)
-            return `## LMS Monitoring\n\nLMS events received: ${lmsEvents} (trigger bit = ${trigBit})\n\n`;
+            return `## LMS Monitoring\n\nLMS events received: ${lmsEvents} (trigger mask = ${trigMask})\n\n`;
         const allEntries=Object.entries(lmsSummaryData.modules)
             .map(([idx,m])=>({idx:parseInt(idx),...m}));
 

@@ -26,6 +26,7 @@
 struct AppState {
     // ---- Configuration (set once at startup, then read-only) ---------------
     HistConfig hist_cfg;
+    uint32_t waveform_trigger_mask = 0;  // 0 = accept all
     int hist_nbins = 0;
     int pos_nbins  = 0;
 
@@ -38,11 +39,10 @@ struct AppState {
     nlohmann::json base_config;                 // modules, daq, crate_roc for /api/config
 
     // LMS config
-    int      lms_trigger_bit  = 16;
+    uint32_t lms_trigger_mask = 0;       // 0 = accept all
     float    lms_warn_thresh  = 0.1f;
     float    lms_warn_min_mean = 100.f;  // warn if mean below this
     int      lms_max_history  = 5000;
-    uint32_t lms_trigger_mask = 0;
 
     // LMS reference channels (for normalization)
     struct LmsRefChannel {
@@ -63,6 +63,7 @@ struct AppState {
     float ea_angle_min=0.f, ea_angle_max=8.f, ea_angle_step=0.2f;   // degrees
     float ea_energy_min=0.f, ea_energy_max=3000.f, ea_energy_step=100.f; // MeV
     float beam_energy = 2200.f;  // MeV (for elastic line overlay)
+    uint32_t physics_trigger_mask = 0;  // 0 = accept all
 
     // Møller selection config
     float moller_energy_tol = 0.1f;     // energy sum within this fraction of beam_energy
@@ -94,7 +95,7 @@ struct AppState {
     std::map<std::string, std::pair<float, float>> color_range_defaults;
 
     // cluster config
-    uint32_t cluster_skip_mask = 0;
+    uint32_t cluster_trigger_mask = 0;   // 0 = accept all
     float    adc_to_mev        = 1.0f;
     float    cl_hist_min       = 0.f;
     float    cl_hist_max       = 3000.f;

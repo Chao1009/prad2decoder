@@ -115,12 +115,13 @@ Main configuration file for both viewer and monitor:
 | Section | Key fields |
 |---------|------------|
 | `online` | `et_host`, `et_port`, `et_file`, `et_station`, `ring_buffer_size`, `refresh_ms` |
-| `waveform` | `time_cut`, `integral_hist`, `time_hist`, `thresholds` |
-| `clustering` | `min_module_energy`, `min_cluster_energy`, `skip_trigger_bits`, `energy_hist`, `nclusters_hist`, `nblocks_hist` |
-| `lms_monitor` | `trigger_bit`, `warn_threshold`, `warn_min_mean`, `max_history`, `reference_channels` |
-| `epics` | `max_history`, `warn_threshold`, `alert_threshold`, `min_avg_points`, `mean_window`, `slots` |
+| `runinfo` | `beam_energy`, `calibration` (`file`, `default_adc2mev`), `target`, `hycal` (`position`, `tilting`) |
+| `waveform` | `accept_trigger_bits`, `time_cut`, `integral_hist`, `time_hist`, `thresholds` |
+| `clustering` | `accept_trigger_bits`, `min_module_energy`, `min_cluster_energy`, `energy_hist`, `nclusters_hist`, `nblocks_hist` |
+| `lms_monitor` | `accept_trigger_bits`, `warn_threshold`, `warn_min_mean`, `max_history`, `reference_channels` |
 | `color_ranges` | Per-tab:metric color range defaults (e.g. `"dq:integral": [0, 10000]`) |
-| `calibration` | `adc_to_mev`, `calibration_file` |
+| `epics` | `max_history`, `warn_threshold`, `alert_threshold`, `min_avg_points`, `mean_window`, `slots` |
+| `physics` | `accept_trigger_bits`, `energy_angle_hist`, `moller` (`energy_tolerance`, `angle_min`, `angle_max`, `xy_hist`, `energy_hist`) |
 | `elog` | `url`, `logbook`, `author`, `tags`, `cert`, `key` |
 
 ### PRad Support

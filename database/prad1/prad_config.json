@@ -12,7 +12,20 @@
             "lms": 2000
         }
     },
+    "runinfo": {
+        "beam_energy": 1100.0,
+        "calibration": {
+            "file": "prad1/prad_calibration.json",
+            "default_adc2mev": 0.078
+        },
+        "target": [0.0, 0.0, 0.0],
+        "hycal": {
+            "position": [0.0, 0.0, 5800.0],
+            "tilting": [0.0, 0.0, 0.0]
+        }
+    },
     "waveform": {
+        "accept_trigger_bits": [],
         "time_cut": {"min": 160, "max": 220},
         "integral_hist": {"min": 0, "max": 20000, "step": 100},
         "time_hist": {"min": 0, "max": 400, "step": 4},
@@ -22,6 +35,7 @@
         }
     },
     "clustering": {
+        "accept_trigger_bits": [0, 1],
         "min_module_energy": 1.0,
         "min_center_energy": 10.0,
         "min_cluster_energy": 50.0,
@@ -30,25 +44,12 @@
         "split_iter": 6,
         "least_split": 0.01,
         "log_weight_thres": 3.6,
-        "skip_trigger_bits": [2, 3],
-        "energy_hist": {
-            "min": 0,
-            "max": 3000,
-            "step": 10
-        },
-        "nclusters_hist": {
-            "min": 0,
-            "max": 20,
-            "step": 1
-        },
-        "nblocks_hist": {
-            "min": 0,
-            "max": 40,
-            "step": 1
-        }
+        "energy_hist": {"min": 0, "max": 3000, "step": 10},
+        "nclusters_hist": {"min": 0, "max": 20, "step": 1},
+        "nblocks_hist": {"min": 0, "max": 40, "step": 1}
     },
     "lms_monitor": {
-        "trigger_bit": 2,
+        "accept_trigger_bits": [2],
         "warn_threshold": 0.1,
         "warn_min_mean": 100,
         "max_history": 5000,
@@ -65,17 +66,23 @@
         "lms:mean":     [0, 5000],
         "lms:rms_frac": [0, 0.2]
     },
-    "calibration": {
-        "adc_to_mev": 0.078,
-        "calibration_file": "prad1/prad_calibration.json"
+    "epics": {
+        "max_history": 5000,
+        "warn_threshold": 0.1,
+        "alert_threshold": 0.2,
+        "min_avg_points": 10,
+        "mean_window": 20,
+        "slots": [
+            ["hallb_IPM2C24A_CUR", "hallb_IPM2C21A_CUR"],
+            ["MBSY2C_energy"],
+            ["TGT:PRad:Cell_P", "TGT:PRad:Chamber_P"],
+            ["TGT:PRad:Cell_Body_T", "TGT:PRad:Cell_Gas_T"],
+            ["hallb_IPM2C24A_XPOS", "hallb_IPM2C24A_YPOS"],
+            ["hallb_IPM2C21A_XPOS", "hallb_IPM2C21A_YPOS"]
+        ]
     },
     "physics": {
-        "beam_energy": 1100.0,
-        "target": [0.0, 0.0, 0.0],
-        "hycal": {
-            "position": [0.0, 0.0, 5800.0],
-            "tilting": [0.0, 0.0, 0.0]
-        },
+        "accept_trigger_bits": [0, 1],
         "energy_angle_hist": {
             "angle_min": 0.0,
             "angle_max": 8.0,
@@ -92,25 +99,8 @@
                 "x_min": -600.0, "x_max": 600.0, "x_step": 5.0,
                 "y_min": -600.0, "y_max": 600.0, "y_step": 5.0
             },
-            "energy_hist": {
-                "min": 0.0, "max": 1200.0, "step": 5.0
-            }
+            "energy_hist": {"min": 0.0, "max": 1200.0, "step": 5.0}
         }
-    },
-    "epics": {
-        "max_history": 5000,
-        "warn_threshold": 0.1,
-        "alert_threshold": 0.2,
-        "min_avg_points": 10,
-        "mean_window": 20,
-        "slots": [
-            ["hallb_IPM2C24A_CUR", "hallb_IPM2C21A_CUR"],
-            ["MBSY2C_energy"],
-            ["TGT:PRad:Cell_P", "TGT:PRad:Chamber_P"],
-            ["TGT:PRad:Cell_Body_T", "TGT:PRad:Cell_Gas_T"],
-            ["hallb_IPM2C24A_XPOS", "hallb_IPM2C24A_YPOS"],
-            ["hallb_IPM2C21A_XPOS", "hallb_IPM2C21A_YPOS"]
-        ]
     },
     "elog": {
         "url": "https://logbooks.jlab.org",

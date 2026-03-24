@@ -40,10 +40,25 @@ void AppState::init(const std::string &db_dir,
         }
     }
 
+    // helper: parse "accept_trigger_bits" array → bitmask
+    // missing or empty array → mask stays 0 (accept all)
+    // non-empty array → accept only events with any listed bit set
+    auto parseTriggerBits = [](const json &section, uint32_t &mask) {
+        if (section.contains("accept_trigger_bits")) {
+            auto &arr = section["accept_trigger_bits"];
+            if (arr.is_array() && !arr.empty()) {
+                mask = 0;
+                for (auto &b : arr)
+                    mask |= (1u << b.get<int>());
+            }
+        }
+    };
+
     // --- Waveform / histogram config ---
     // Try "waveform" section from config.json (loaded later in reco_file),
     // then fall back to separate hist_config.json, then -H override.
     auto loadWaveformConfig = [&](const json &w) {
+        parseTriggerBits(w, waveform_trigger_mask);
         if (w.contains("time_cut")) {
             auto &tc = w["time_cut"];
             if (tc.contains("min")) hist_cfg.time_min = tc["min"];
@@ -108,7 +123,8 @@ void AppState::init(const std::string &db_dir,
     pos_nbins = std::max(1, (int)std::ceil(
         (hist_cfg.pos_max - hist_cfg.pos_min) / hist_cfg.pos_step));
     std::cerr << "Waveform  : time_cut=[" << hist_cfg.time_min << "," << hist_cfg.time_max
-              << "] threshold=" << hist_cfg.threshold << "\n";
+              << "] threshold=" << hist_cfg.threshold
+              << " trigger=0x" << std::hex << waveform_trigger_mask << std::dec << "\n";
 
     // --- HyCal system ---
     std::string modules_filename = "hycal_modules.json";
@@ -184,11 +200,7 @@ void AppState::init(const std::string &db_dir,
                 if (j.contains("log_weight_thres"))   cfg.log_weight_thres   = j["log_weight_thres"];
             };
             loadCfg(cc, cluster_cfg);
-            if (cc.contains("skip_trigger_bits")) {
-                cluster_skip_mask = 0;
-                for (auto &b : cc["skip_trigger_bits"])
-                    cluster_skip_mask |= (1u << b.get<int>());
-            }
+            parseTriggerBits(cc, cluster_trigger_mask);
             if (cc.contains("energy_hist")) {
                 auto &eh = cc["energy_hist"];
                 if (eh.contains("min"))  cl_hist_min  = eh["min"];
@@ -210,18 +222,17 @@ void AppState::init(const std::string &db_dir,
             std::cerr << "Clustering: min_mod=" << cluster_cfg.min_module_energy
                       << " min_center=" << cluster_cfg.min_center_energy
                       << " min_cluster=" << cluster_cfg.min_cluster_energy
-                      << " skip_mask=0x" << std::hex << cluster_skip_mask << std::dec
+                      << " trigger=0x" << std::hex << cluster_trigger_mask << std::dec
                       << " hist=[" << cl_hist_min << "," << cl_hist_max
                       << "]/" << cl_hist_step << "\n";
         }
 
         if (rcfg.contains("lms_monitor")) {
             auto &lm = rcfg["lms_monitor"];
-            if (lm.contains("trigger_bit"))    lms_trigger_bit   = lm["trigger_bit"];
+            parseTriggerBits(lm, lms_trigger_mask);
             if (lm.contains("warn_threshold")) lms_warn_thresh     = lm["warn_threshold"];
             if (lm.contains("warn_min_mean"))  lms_warn_min_mean  = lm["warn_min_mean"];
             if (lm.contains("max_history"))    lms_max_history    = lm["max_history"];
-            lms_trigger_mask = (1u << lms_trigger_bit);
             if (lm.contains("reference_channels")) {
                 for (auto &name : lm["reference_channels"]) {
                     std::string n = name.get<std::string>();
@@ -229,8 +240,7 @@ void AppState::init(const std::string &db_dir,
                     lms_ref_channels.push_back({n, mod ? mod->index : -1});
                 }
             }
-            std::cerr << "LMS       : trigger_bit=" << lms_trigger_bit
-                      << " mask=0x" << std::hex << lms_trigger_mask << std::dec
+            std::cerr << "LMS       : trigger=0x" << std::hex << lms_trigger_mask << std::dec
                       << " warn=" << lms_warn_thresh
                       << " refs=" << lms_ref_channels.size() << "\n";
         }
@@ -243,15 +253,39 @@ void AppState::init(const std::string &db_dir,
             std::cerr << "Color ranges: " << color_range_defaults.size() << " entries\n";
         }
 
-        if (rcfg.contains("calibration")) {
-            auto &cal = rcfg["calibration"];
-            if (cal.contains("adc_to_mev")) adc_to_mev = cal["adc_to_mev"];
-            if (cal.contains("calibration_file")) {
-                std::string calib_file = findFile(cal["calibration_file"].get<std::string>(), db_dir);
-                int nmatched = hycal.LoadCalibration(calib_file);
-                if (nmatched >= 0)
-                    std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
+        if (rcfg.contains("runinfo")) {
+            auto &ri = rcfg["runinfo"];
+            if (ri.contains("beam_energy")) beam_energy = ri["beam_energy"];
+            if (ri.contains("target") && ri["target"].is_array() && ri["target"].size()>=3) {
+                target_x=ri["target"][0]; target_y=ri["target"][1]; target_z=ri["target"][2];
             }
+            if (ri.contains("hycal")) {
+                auto &hc = ri["hycal"];
+                if (hc.contains("position") && hc["position"].is_array() && hc["position"].size()>=3) {
+                    hycal_transform.x=hc["position"][0];
+                    hycal_transform.y=hc["position"][1];
+                    hycal_transform.z=hc["position"][2];
+                }
+                if (hc.contains("tilting") && hc["tilting"].is_array() && hc["tilting"].size()>=3) {
+                    hycal_transform.rx=hc["tilting"][0];
+                    hycal_transform.ry=hc["tilting"][1];
+                    hycal_transform.rz=hc["tilting"][2];
+                }
+            }
+            if (ri.contains("calibration")) {
+                auto &cal = ri["calibration"];
+                if (cal.contains("default_adc2mev")) adc_to_mev = cal["default_adc2mev"];
+                if (cal.contains("file")) {
+                    std::string calib_file = findFile(cal["file"].get<std::string>(), db_dir);
+                    int nmatched = hycal.LoadCalibration(calib_file);
+                    if (nmatched >= 0)
+                        std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
+                }
+            }
+            std::cerr << "RunInfo   : beam=" << beam_energy << "MeV default_adc2mev=" << adc_to_mev
+                      << " target=(" << target_x << "," << target_y << "," << target_z
+                      << ") HyCal=(" << hycal_transform.x << "," << hycal_transform.y << ","
+                      << hycal_transform.z << ")\n";
         }
         if (rcfg.contains("elog")) {
             auto &el = rcfg["elog"];
@@ -270,23 +304,7 @@ void AppState::init(const std::string &db_dir,
 
         if (rcfg.contains("physics")) {
             auto &ph = rcfg["physics"];
-            if (ph.contains("target") && ph["target"].is_array() && ph["target"].size()>=3) {
-                target_x=ph["target"][0]; target_y=ph["target"][1]; target_z=ph["target"][2];
-            }
-            if (ph.contains("hycal")) {
-                auto &hc = ph["hycal"];
-                if (hc.contains("position") && hc["position"].is_array() && hc["position"].size()>=3) {
-                    hycal_transform.x=hc["position"][0];
-                    hycal_transform.y=hc["position"][1];
-                    hycal_transform.z=hc["position"][2];
-                }
-                if (hc.contains("tilting") && hc["tilting"].is_array() && hc["tilting"].size()>=3) {
-                    hycal_transform.rx=hc["tilting"][0];
-                    hycal_transform.ry=hc["tilting"][1];
-                    hycal_transform.rz=hc["tilting"][2];
-                }
-            }
-            if (ph.contains("beam_energy")) beam_energy = ph["beam_energy"];
+            parseTriggerBits(ph, physics_trigger_mask);
             if (ph.contains("energy_angle_hist")) {
                 auto &ea = ph["energy_angle_hist"];
                 if (ea.contains("angle_min"))   ea_angle_min   = ea["angle_min"];
@@ -317,10 +335,8 @@ void AppState::init(const std::string &db_dir,
                     if (eh.contains("step")) moller_e_step = eh["step"];
                 }
             }
-            std::cerr << "Physics   : beam=" << beam_energy << "MeV target=("
-                      << target_x << "," << target_y << "," << target_z
-                      << ") HyCal=(" << hycal_transform.x << "," << hycal_transform.y << ","
-                      << hycal_transform.z << ") Moller: tol=" << moller_energy_tol
+            std::cerr << "Physics   : trigger=0x" << std::hex << physics_trigger_mask << std::dec
+                      << " Moller: tol=" << moller_energy_tol
                       << " angle=[" << moller_angle_min << "," << moller_angle_max << "]\n";
         }
 
@@ -367,6 +383,8 @@ void AppState::init(const std::string &db_dir,
 void AppState::fillHist(fdec::EventData &event,
                         fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
+    if (waveform_trigger_mask != 0 &&
+        !(event.info.trigger_bits & waveform_trigger_mask)) return;
     for (int r = 0; r < event.nrocs; ++r) {
         auto &roc = event.rocs[r];
         if (!roc.present) continue;
@@ -416,8 +434,8 @@ void AppState::fillHist(fdec::EventData &event,
 void AppState::clusterEvent(fdec::EventData &event,
                             fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
-    if (cluster_skip_mask != 0 &&
-        (event.info.trigger_bits & cluster_skip_mask)) return;
+    if (cluster_trigger_mask != 0 &&
+        !(event.info.trigger_bits & cluster_trigger_mask)) return;
 
     bool is_adc1881m = (daq_cfg.adc_format == "adc1881m");
     fdec::HyCalCluster clusterer(hycal);
@@ -475,15 +493,24 @@ void AppState::clusterEvent(fdec::EventData &event,
         ci.theta = std::atan2(r, dz) * (180.f / 3.14159265f);
     }
 
-    // fill standard histograms
+    // fill clustering histograms (always)
     for (size_t i = 0; i < reco_hits.size(); ++i) {
         cluster_energy_hist.fill(reco_hits[i].energy, cl_hist_min, cl_hist_step);
         nblocks_hist.fill(reco_hits[i].nblocks, nblocks_hist_min, nblocks_hist_step);
-        energy_angle_hist.fill(cinfo[i].theta, reco_hits[i].energy,
-            ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
     }
     nclusters_hist.fill(reco_hits.size(), nclusters_hist_min, nclusters_hist_step);
     cluster_events_processed++;
+
+    // physics trigger gate
+    bool physics_accept = (physics_trigger_mask == 0) ||
+        (event.info.trigger_bits & physics_trigger_mask);
+    if (!physics_accept) return;
+
+    // fill physics histograms
+    for (size_t i = 0; i < reco_hits.size(); ++i) {
+        energy_angle_hist.fill(cinfo[i].theta, reco_hits[i].energy,
+            ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+    }
 
     // Møller selection: exactly 2 clusters, energy sum ~ beam, one cluster in angle window
     if (reco_hits.size() == 2 && beam_energy > 0) {
@@ -508,7 +535,7 @@ void AppState::clusterEvent(fdec::EventData &event,
 void AppState::processLms(fdec::EventData &event,
                           fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
-    if (lms_trigger_mask == 0 ||
+    if (lms_trigger_mask != 0 &&
         !(event.info.trigger_bits & lms_trigger_mask)) return;
 
     if (lms_first_ts == 0)
@@ -604,8 +631,8 @@ json AppState::encodeEventJson(fdec::EventData &event, int ev_id,
 json AppState::computeClustersJson(fdec::EventData &event, int ev_id,
                                    fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
-    if (cluster_skip_mask != 0 &&
-        (event.info.trigger_bits & cluster_skip_mask))
+    if (cluster_trigger_mask != 0 &&
+        !(event.info.trigger_bits & cluster_trigger_mask))
         return {{"event", ev_id}, {"hits", json::object()}, {"clusters", json::array()},
                 {"info", "trigger filtered"}};
 
@@ -895,7 +922,7 @@ json AppState::apiLmsSummary(int ref_index) const
         }
     }
     return {{"modules", mods}, {"events", lms_events.load()},
-            {"trigger_bit", lms_trigger_bit},
+            {"trigger_mask", lms_trigger_mask},
             {"ref_index", ref_index},
             {"ref_mean", rc.ref_mean},
             {"sync_unix", sync_unix}, {"sync_rel_sec", sync_rel_sec}};
@@ -1047,16 +1074,20 @@ void AppState::fillConfigJson(json &cfg) const
     cfg["refresh_ms"] = {{"event", refresh_event_ms}, {"ring", refresh_ring_ms},
                          {"histogram", refresh_hist_ms}, {"lms", refresh_lms_ms}};
     cfg["lms"] = {
-        {"trigger_bit", lms_trigger_bit}, {"warn_threshold", lms_warn_thresh},
+        {"trigger_mask", lms_trigger_mask}, {"warn_threshold", lms_warn_thresh},
         {"events", lms_events.load()}, {"ref_channels", apiLmsRefChannels()},
     };
-    cfg["physics"] = {
+    cfg["runinfo"] = {
+        {"beam_energy", beam_energy},
+        {"calibration", {{"default_adc2mev", adc_to_mev}}},
         {"target", {target_x, target_y, target_z}},
         {"hycal", {
             {"position", {hycal_transform.x, hycal_transform.y, hycal_transform.z}},
             {"tilting", {hycal_transform.rx, hycal_transform.ry, hycal_transform.rz}},
         }},
-        {"beam_energy", beam_energy},
+    };
+    cfg["physics"] = {
+        {"trigger_mask", physics_trigger_mask},
         {"energy_angle_hist", {
             {"angle_min", ea_angle_min}, {"angle_max", ea_angle_max}, {"angle_step", ea_angle_step},
             {"energy_min", ea_energy_min}, {"energy_max", ea_energy_max}, {"energy_step", ea_energy_step},
