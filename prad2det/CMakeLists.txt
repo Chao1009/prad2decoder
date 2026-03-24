@@ -1,4 +1,4 @@
-# prad2ana/CMakeLists.txt — static library: libprad2ana.a
+# prad2det/CMakeLists.txt — static library: libprad2det.a
 #
 # Analysis library: HyCal clustering, event reconstruction, hit matching.
 # Depends on nlohmann/json for configuration loading.
@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.14)
 
 # If built standalone, set up project and standards
 if(NOT CMAKE_PROJECT_NAME)
-    project(prad2ana VERSION 1.0.0 LANGUAGES CXX)
+    project(prad2det VERSION 1.0.0 LANGUAGES CXX)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif()
@@ -31,24 +31,24 @@ endif()
 # ---------------------------------------------------------------------------
 # Library target
 # ---------------------------------------------------------------------------
-add_library(prad2ana STATIC
+add_library(prad2det STATIC
     src/HyCalSystem.cpp
     src/HyCalCluster.cpp
     src/EpicsStore.cpp
 )
 
-target_include_directories(prad2ana
+target_include_directories(prad2det
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include/prad2ana>
+        $<INSTALL_INTERFACE:include/prad2det>
 )
 
-target_link_libraries(prad2ana PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(prad2det PUBLIC nlohmann_json::nlohmann_json)
 
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 
-install(TARGETS prad2ana ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/prad2ana)
+install(TARGETS prad2det ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/prad2det)

@@ -64,7 +64,7 @@ analysis/
    add_analysis_tool(my_tool tools/my_tool.cpp)
    ```
 
-All shared sources (`Replay.cpp`, `PhysicsTools.cpp`) and dependencies (`prad2dec`, `prad2ana`, ROOT) are linked automatically.
+All shared sources (`Replay.cpp`, `PhysicsTools.cpp`) and dependencies (`prad2dec`, `prad2det`, ROOT) are linked automatically.
 
 ## Contributors
 Yuan Li — Shandong University

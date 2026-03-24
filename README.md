@@ -134,7 +134,7 @@ database/
     hycal_modules.json          HyCal module geometry
     prad1/                      PRad-specific config and calibration
 prad2dec/                       libprad2dec.a (EVIO decoder library)
-prad2ana/                       libprad2ana.a (HyCal clustering + analysis)
+prad2det/                       libprad2det.a (HyCal clustering + analysis)
 resources/
     viewer.html/css/js          Web GUI (shared by viewer and monitor)
 src/

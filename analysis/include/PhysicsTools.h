@@ -4,7 +4,7 @@
 //
 // Provides kinematic calculations, energy loss corrections, and
 // per-module energy histogram management with ROOT.
-// Depends on prad2ana (HyCalSystem) and ROOT (TH1F/TH2F).
+// Depends on prad2det (HyCalSystem) and ROOT (TH1F/TH2F).
 //=============================================================================
 
 #include "HyCalSystem.h"
