@@ -57,8 +57,9 @@ int main(int argc, char *argv[])
 
     if (output.empty()) {
         output = input;
-        auto dot = output.rfind('.');
-        if (dot != std::string::npos) output = output.substr(0, dot);
+        auto pos = output.find(".evio");
+        if (pos != std::string::npos) output = 
+            output.substr(0, pos) + output.substr(pos + 5);
         output += "_recon.root";
     }
 

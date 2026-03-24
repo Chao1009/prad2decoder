@@ -89,6 +89,10 @@ int main(int argc, char *argv[])
             for (int f = start; f < end; ++f) {
                 // each child process writes to its own output file to avoid conflicts
                 std::string out = evio_files[f].substr(0, evio_files[f].rfind('.')) + ".root";
+                auto pos = out.find(".evio");
+                if (pos != std::string::npos) out = 
+                    out.substr(0, pos) + out.substr(pos + 5);
+                out += ".root";
                 if(replay.Process(evio_files[f], out, max_events, peaks))
                     std::cout << "Processed " << evio_files[f] << " -> " << out << "\n";
                 else{
