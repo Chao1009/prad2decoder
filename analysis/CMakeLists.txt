@@ -18,5 +18,6 @@ function(add_analysis_tool name)
     set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endfunction()
 
-add_analysis_tool(replay_rawdata    tools/replay_rawdata.cpp)
-add_analysis_tool(replay_hycalRecon tools/replay_hycalRecon.cpp)
+add_analysis_tool(replay_rawdata tools/replay_rawdata.cpp)
+add_analysis_tool(replay_rawdata_m tools/replay_rawdata_m.cpp)
+add_analysis_tool(replay_recon tools/replay_recon.cpp)
