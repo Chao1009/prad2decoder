@@ -71,6 +71,7 @@ inline bool load_daq_config(const std::string &path, DaqConfig &cfg)
         if (bt.contains("run_info"))       cfg.run_info_tag       = parse_hex(bt["run_info"]);
         if (bt.contains("daq_config"))     cfg.daq_config_tag     = parse_hex(bt["daq_config"]);
         if (bt.contains("epics_data"))     cfg.epics_bank_tag     = parse_hex(bt["epics_data"]);
+        if (bt.contains("ssp_raw"))        cfg.ssp_bank_tag       = parse_hex(bt["ssp_raw"]);
     }
 
     // TI format
@@ -108,6 +109,7 @@ inline bool load_daq_config(const std::string &path, DaqConfig &cfg)
             re.tag   = parse_hex(entry["tag"]);
             re.name  = entry.value("name", "");
             re.crate = entry.value("crate", -1);
+            re.type  = entry.value("type", "");
             cfg.roc_tags.push_back(re);
         }
     }

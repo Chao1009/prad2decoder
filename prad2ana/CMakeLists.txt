@@ -35,6 +35,8 @@ add_library(prad2ana STATIC
     src/HyCalSystem.cpp
     src/HyCalCluster.cpp
     src/EpicsStore.cpp
+    src/GemSystem.cpp
+    src/GemCluster.cpp
 )
 
 target_include_directories(prad2ana
@@ -44,6 +46,11 @@ target_include_directories(prad2ana
 )
 
 target_link_libraries(prad2ana PUBLIC nlohmann_json::nlohmann_json)
+
+# GemSystem needs SspData.h from prad2dec (include dirs only, not linking)
+if(TARGET prad2dec)
+    target_link_libraries(prad2ana PRIVATE prad2dec)
+endif()
 
 # ---------------------------------------------------------------------------
 # Install

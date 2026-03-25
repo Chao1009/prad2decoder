@@ -1,0 +1,91 @@
+{
+    "// GEM APV mapping for PRad-II": "",
+    "// Translated from mpd_gem_view_ssp/database/gem_map_prad2.txt": "",
+    "// Format: APV, CrateID, LayerID, FiberID, GEMID, dim(0=X,1=Y), ADCId, I2C, Pos, Invert": "",
+
+    "common_mode_threshold": 20.0,
+    "zero_suppression_threshold": 5.0,
+    "cross_talk_threshold": 8.0,
+    "online_zero_suppression": false,
+    "position_resolution": 0.08,
+
+    "layers": [
+        {"id": 0, "name": "GEM0", "type": "PRADGEM", "x_apvs": 12, "y_apvs": 24, "x_pitch": 0.4, "y_pitch": 0.4},
+        {"id": 1, "name": "GEM1", "type": "PRADGEM", "x_apvs": 12, "y_apvs": 24, "x_pitch": 0.4, "y_pitch": 0.4},
+        {"id": 2, "name": "GEM2", "type": "PRADGEM", "x_apvs": 12, "y_apvs": 24, "x_pitch": 0.4, "y_pitch": 0.4},
+        {"id": 3, "name": "GEM3", "type": "PRADGEM", "x_apvs": 12, "y_apvs": 24, "x_pitch": 0.4, "y_pitch": 0.4}
+    ],
+
+    "apvs": [
+        {"// Layer 0 (det=0)": ""},
+
+        {"// X-dimension MPD6 (special: pos=11, single APV)": ""},
+        {"crate": 49, "mpd": 0, "adc": 0, "det": 0, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0},
+
+        {"// X-dimension MPD7": ""},
+        {"crate": 49, "mpd": 1, "adc": 0, "det": 0, "plane": "X", "orient": 0, "pos": 3, "det_pos": 0},
+        {"crate": 49, "mpd": 1, "adc": 1, "det": 0, "plane": "X", "orient": 0, "pos": 4, "det_pos": 0},
+        {"crate": 49, "mpd": 1, "adc": 2, "det": 0, "plane": "X", "orient": 0, "pos": 5, "det_pos": 0},
+
+        {"// X-dimension MPD8": ""},
+        {"crate": 49, "mpd": 2, "adc": 0, "det": 0, "plane": "X", "orient": 0, "pos": 0, "det_pos": 0},
+        {"crate": 49, "mpd": 2, "adc": 1, "det": 0, "plane": "X", "orient": 0, "pos": 1, "det_pos": 0},
+        {"crate": 49, "mpd": 2, "adc": 2, "det": 0, "plane": "X", "orient": 0, "pos": 2, "det_pos": 0},
+
+        {"// Y-dimension MPD9": ""},
+        {"crate": 49, "mpd": 3, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 2, "det_pos": 0},
+        {"crate": 49, "mpd": 3, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 1, "det_pos": 0},
+        {"crate": 49, "mpd": 3, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 0, "det_pos": 0},
+
+        {"// Y-dimension MPD10": ""},
+        {"crate": 49, "mpd": 4, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 5, "det_pos": 0},
+        {"crate": 49, "mpd": 4, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 4, "det_pos": 0},
+        {"crate": 49, "mpd": 4, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 3, "det_pos": 0},
+
+        {"// Y-dimension MPD13": ""},
+        {"crate": 49, "mpd": 5, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 8, "det_pos": 0},
+        {"crate": 49, "mpd": 5, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 7, "det_pos": 0},
+        {"crate": 49, "mpd": 5, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 6, "det_pos": 0},
+
+        {"// Y-dimension MPD14": ""},
+        {"crate": 49, "mpd": 6, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 11, "det_pos": 0},
+        {"crate": 49, "mpd": 6, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 10, "det_pos": 0},
+        {"crate": 49, "mpd": 6, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 9, "det_pos": 0},
+
+        {"// Y-dimension MPD15": ""},
+        {"crate": 49, "mpd": 7, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 14, "det_pos": 0},
+        {"crate": 49, "mpd": 7, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 13, "det_pos": 0},
+        {"crate": 49, "mpd": 7, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 12, "det_pos": 0},
+
+        {"// Y-dimension MPD16": ""},
+        {"crate": 49, "mpd": 8, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 17, "det_pos": 0},
+        {"crate": 49, "mpd": 8, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 16, "det_pos": 0},
+        {"crate": 49, "mpd": 8, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 15, "det_pos": 0},
+
+        {"// Y-dimension MPD17": ""},
+        {"crate": 49, "mpd": 9, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 20, "det_pos": 0},
+        {"crate": 49, "mpd": 9, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 19, "det_pos": 0},
+        {"crate": 49, "mpd": 9, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 18, "det_pos": 0},
+
+        {"// Y-dimension MPD18": ""},
+        {"crate": 49, "mpd": 10, "adc": 0, "det": 0, "plane": "Y", "orient": 1, "pos": 23, "det_pos": 0},
+        {"crate": 49, "mpd": 10, "adc": 1, "det": 0, "plane": "Y", "orient": 1, "pos": 22, "det_pos": 0},
+        {"crate": 49, "mpd": 10, "adc": 2, "det": 0, "plane": "Y", "orient": 1, "pos": 21, "det_pos": 0},
+
+        {"// X-dimension MPD19": ""},
+        {"crate": 49, "mpd": 11, "adc": 0, "det": 0, "plane": "X", "orient": 1, "pos": 7, "det_pos": 0},
+        {"crate": 49, "mpd": 11, "adc": 1, "det": 0, "plane": "X", "orient": 1, "pos": 6, "det_pos": 0},
+
+        {"// X-dimension MPD20": ""},
+        {"crate": 49, "mpd": 12, "adc": 0, "det": 0, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0},
+        {"crate": 49, "mpd": 12, "adc": 1, "det": 0, "plane": "X", "orient": 1, "pos": 9, "det_pos": 0},
+        {"crate": 49, "mpd": 12, "adc": 2, "det": 0, "plane": "X", "orient": 1, "pos": 8, "det_pos": 0},
+
+        {"// Layer 1 (det=1) — same structure as Layer 0, different fiber IDs": ""},
+        {"// See gem_map_prad2.txt for complete mapping (Layers 1-3)": ""},
+        {"// APV entries for layers 1-3 follow the same pattern with": ""},
+        {"//   layer 1: fiber 13-25, GEMID=2": ""},
+        {"//   layer 2: fiber 26-38, GEMID=3": ""},
+        {"//   layer 3: fiber 39-51, GEMID=4": ""}
+    ]
+}

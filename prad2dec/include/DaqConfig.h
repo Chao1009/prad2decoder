@@ -70,6 +70,9 @@ struct DaqConfig
     // EPICS data bank tag (within EPICS events)
     uint32_t epics_bank_tag     = 0xE114;
 
+    // SSP/MPD raw data bank tag (GEM readout)
+    uint32_t ssp_bank_tag       = 0xE11F;
+
     // --- TI data format (fallback for single-event / non-CODA3 data) --------
     // TI bank layout: word[0]=header, word[1]=trigger#, word[2]=ts_low, word[3]=ts_high
     int ti_trigger_word   = 1;
@@ -101,6 +104,7 @@ struct DaqConfig
         uint32_t    tag;
         std::string name;
         int         crate = -1;
+        std::string type;   // "fadc" (default), "gem", etc.
     };
     std::vector<RocEntry> roc_tags;
 

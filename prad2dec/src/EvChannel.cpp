@@ -1,6 +1,7 @@
 #include "EvChannel.h"
 #include "Fadc250Decoder.h"
 #include "Adc1881mDecoder.h"
+#include "SspDecoder.h"
 #include "evio.h"
 #include <cstring>
 #include <iostream>
@@ -394,9 +395,11 @@ bool EvChannel::decodeTI(fdec::EventInfo &info) const
 
 // === DecodeEvent ============================================================
 
-bool EvChannel::DecodeEvent(int i, fdec::EventData &evt) const
+bool EvChannel::DecodeEvent(int i, fdec::EventData &evt,
+                            ssp::SspEventData *ssp_evt) const
 {
     evt.clear();
+    if (ssp_evt) ssp_evt->clear();
     if (i < 0 || i >= nevents) return false;
 
     BankHeader evh(&buffer[0]);
@@ -411,6 +414,7 @@ bool EvChannel::DecodeEvent(int i, fdec::EventData &evt) const
 
     // decode ADC data — dispatch based on configured format
     int roc_idx = 0;
+    bool ssp_decoded = false;
 
     if (config.adc_format == "adc1881m") {
         // ADC1881M: find raw data banks matching configured tag
@@ -463,31 +467,51 @@ bool EvChannel::DecodeEvent(int i, fdec::EventData &evt) const
             roc_idx++;
         }
     } else {
-        // FADC250 composite: find all composite banks matching configured tag
-        for (size_t ni = 0; ni < nodes.size() && roc_idx < fdec::MAX_ROCS; ++ni) {
+        // FADC250 composite + SSP: scan all banks, dispatch by tag
+        for (size_t ni = 0; ni < nodes.size(); ++ni) {
             auto &n = nodes[ni];
-            if (n.tag != config.fadc_composite_tag || n.type != DATA_COMPOSITE)
+
+            // --- FADC250 composite banks ---
+            if (n.tag == config.fadc_composite_tag && n.type == DATA_COMPOSITE
+                && roc_idx < fdec::MAX_ROCS)
+            {
+                size_t nbytes;
+                auto *payload = GetCompositePayload(n, nbytes);
+                if (!payload) continue;
+
+                uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+
+                fdec::RocData &roc = evt.rocs[roc_idx];
+                roc.present = true;
+                roc.tag = roc_tag;
+
+                fdec::Fadc250Decoder::DecodeRoc(payload, nbytes, roc);
+
+                evt.roc_index[roc_idx] = roc_idx;
+                roc_idx++;
                 continue;
+            }
 
-            size_t nbytes;
-            auto *payload = GetCompositePayload(n, nbytes);
-            if (!payload) continue;
+            // --- SSP/MPD raw data banks (GEM) ---
+            if (ssp_evt && n.tag == config.ssp_bank_tag
+                && n.data_words > 0 && n.type == DATA_UINT32)
+            {
+                uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
 
-            uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+                // map ROC tag to crate_id
+                int crate_id = -1;
+                for (auto &re : config.roc_tags)
+                    if (re.tag == roc_tag) { crate_id = re.crate; break; }
 
-            fdec::RocData &roc = evt.rocs[roc_idx];
-            roc.present = true;
-            roc.tag = roc_tag;
-
-            fdec::Fadc250Decoder::DecodeRoc(payload, nbytes, roc);
-
-            evt.roc_index[roc_idx] = roc_idx;
-            roc_idx++;
+                ssp::SspDecoder::DecodeRoc(GetData(n), n.data_words,
+                                           crate_id, *ssp_evt);
+                ssp_decoded = true;
+            }
         }
     }
 
     evt.nrocs = roc_idx;
-    return roc_idx > 0;
+    return roc_idx > 0 || ssp_decoded;
 }
 
 // === Control event time extraction ==========================================

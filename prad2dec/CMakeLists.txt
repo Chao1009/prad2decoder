@@ -78,6 +78,7 @@ add_library(prad2dec STATIC
     src/EtChannel.cpp
     src/Fadc250Decoder.cpp
     src/Adc1881mDecoder.cpp
+    src/SspDecoder.cpp
     src/WaveAnalyzer.cpp
 )
 

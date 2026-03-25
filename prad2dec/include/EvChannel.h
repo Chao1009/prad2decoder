@@ -28,6 +28,7 @@
 
 #include "EvStruct.h"
 #include "Fadc250Data.h"
+#include "SspData.h"
 #include "DaqConfig.h"
 #include <string>
 #include <vector>
@@ -84,8 +85,10 @@ public:
 
     // Decode the i-th event (0-based) into the pre-allocated EventData.
     // Populates EventInfo (type, trigger, timestamp) and FADC ROC data.
-    // Returns true on success.
-    bool DecodeEvent(int i, fdec::EventData &evt) const;
+    // If ssp_evt is non-null, also decodes SSP/MPD banks for GEM readout.
+    // Returns true on success (at least one ROC or SSP bank decoded).
+    bool DecodeEvent(int i, fdec::EventData &evt,
+                     ssp::SspEventData *ssp_evt = nullptr) const;
 
     // --- Control event extraction (Prestart/Go/End) -------------------------
 
