@@ -4,7 +4,7 @@
 // and prints diagnostic output at each stage of the pipeline.
 //
 // Usage:
-//   gem_dump <evio_file> -D <daq_config.json> [options]
+//   gem_dump <evio_file> [-D <daq_config.json>] [options]
 //
 // Modes (default: summary):
 //   -m raw        Dump raw SSP-decoded APV data (strips × time samples)
@@ -13,7 +13,7 @@
 //   -m summary    Statistics: MPDs, APVs, strips, hits, clusters per event
 //
 // Options:
-//   -D <file>     DAQ configuration (required)
+//   -D <file>     DAQ configuration (auto-searches daq_config.json if omitted)
 //   -G <file>     GEM map file (default: gem_map.json from DAQ config dir)
 //   -P <file>     GEM pedestal file (optional, required for good hit finding)
 //   -n <N>        Max physics events to process (default: 10, 0=all)
@@ -257,7 +257,7 @@ static void usage(const char *prog)
         << "  -m clusters   Full reconstruction: clusters + 2D hits\n"
         << "  -m summary    Per-event statistics table\n\n"
         << "Options:\n"
-        << "  -D <file>     DAQ configuration (required)\n"
+        << "  -D <file>     DAQ configuration (auto-searches daq_config.json if omitted)\n"
         << "  -G <file>     GEM map file (default: gem_map.json)\n"
         << "  -P <file>     GEM pedestal file\n"
         << "  -n <N>        Max physics events (default: 10, 0=all)\n"
@@ -297,14 +297,20 @@ int main(int argc, char *argv[])
     bool need_gem = (mode == "hits" || mode == "clusters" || mode == "summary");
     bool need_cluster = (mode == "clusters" || mode == "summary");
 
-    // load DAQ config
+    // auto-search for daq_config.json if not specified
     if (daq_config_file.empty()) {
-        std::cerr << "Error: -D <daq_config.json> is required\n";
-        return 1;
+        for (auto p : {"daq_config.json", "database/daq_config.json", "../database/daq_config.json"}) {
+            std::ifstream f(p);
+            if (f.good()) { daq_config_file = p; break; }
+        }
     }
+
+    // load DAQ config
     DaqConfig daq_cfg;
-    if (!load_daq_config(daq_config_file, daq_cfg)) {
-        std::cerr << "Error: failed to load DAQ config: " << daq_config_file << "\n";
+    if (daq_config_file.empty() || !load_daq_config(daq_config_file, daq_cfg)) {
+        std::cerr << "Error: failed to load DAQ config"
+                  << (daq_config_file.empty() ? " (not found)" : ": " + daq_config_file)
+                  << "\n";
         return 1;
     }
     std::cerr << "DAQ config: " << daq_config_file

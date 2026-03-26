@@ -4,10 +4,10 @@
 // values per (crate, slot, channel), and outputs mean + rms as JSON.
 //
 // Usage:
-//   ped_calc <evio_file> -D <daq_config.json> [-t <trigger_bit>] [-o <output.json>] [-n <max_events>]
+//   ped_calc <evio_file> [-D <daq_config.json>] [-t <trigger_bit>] [-o <output.json>] [-n <max_events>]
 //
 // Options:
-//   -D   DAQ configuration file (required for PRad)
+//   -D   DAQ configuration file (auto-searches daq_config.json if omitted)
 //   -t   Trigger bit to select (default: 3, i.e. 0x08 = LMS_Alpha for PRad)
 //   -o   Output JSON file (default: pedestals_out.json)
 //   -n   Max events to process (default: all)
@@ -64,7 +64,7 @@ static void usage(const char *prog)
         << "Usage:\n"
         << "  " << prog << " <evio_file> -D <daq_config.json> [options]\n\n"
         << "Options:\n"
-        << "  -D <file>   DAQ configuration (required for PRad)\n"
+        << "  -D <file>   DAQ configuration (auto-searches daq_config.json if omitted)\n"
         << "  -t <bit>    Trigger bit to select (default: 3 = 0x08)\n"
         << "  -o <file>   Output JSON file (default: pedestals_out.json)\n"
         << "  -n <N>      Max events to process (default: all)\n\n"
@@ -103,17 +103,24 @@ int main(int argc, char *argv[])
               << "Trigger  : bit " << trigger_bit << " (mask 0x"
               << std::hex << trigger_mask << std::dec << ")\n";
 
-    // load DAQ config
-    DaqConfig daq_cfg;
-    if (!daq_config_file.empty()) {
-        if (load_daq_config(daq_config_file, daq_cfg))
-            std::cerr << "DAQ cfg  : " << daq_config_file
-                      << " (adc_format=" << daq_cfg.adc_format << ")\n";
-        else {
-            std::cerr << "Error: failed to load DAQ config\n";
-            return 1;
+    // auto-search for daq_config.json if not specified
+    if (daq_config_file.empty()) {
+        for (auto p : {"daq_config.json", "database/daq_config.json", "../database/daq_config.json"}) {
+            std::ifstream f(p);
+            if (f.good()) { daq_config_file = p; break; }
         }
     }
+
+    // load DAQ config
+    DaqConfig daq_cfg;
+    if (daq_config_file.empty() || !load_daq_config(daq_config_file, daq_cfg)) {
+        std::cerr << "Error: failed to load DAQ config"
+                  << (daq_config_file.empty() ? " (not found)" : ": " + daq_config_file)
+                  << "\n";
+        return 1;
+    }
+    std::cerr << "DAQ cfg  : " << daq_config_file
+              << " (adc_format=" << daq_cfg.adc_format << ")\n";
 
     // build ROC tag → crate map
     std::map<uint32_t, int> roc_to_crate;

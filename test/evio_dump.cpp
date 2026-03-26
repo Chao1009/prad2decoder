@@ -419,7 +419,7 @@ static void usage(const char *prog)
         << "  -m event      Detailed dump of a single record\n"
         << "  -m triggers   List trigger info for all events\n\n"
         << "Options:\n"
-        << "  -D <file>     Load DAQ configuration (for PRad etc.)\n"
+        << "  -D <file>     DAQ configuration (auto-searches daq_config.json if omitted)\n"
         << "  -n <N>        Number of events (tree mode, default 5) or event number (event mode)\n";
 }
 
@@ -441,14 +441,23 @@ int main(int argc, char *argv[])
     if (optind >= argc) { usage(argv[0]); return 1; }
     std::string path = argv[optind];
 
-    evc::DaqConfig daq_cfg;
-    if (!daq_config_file.empty()) {
-        if (evc::load_daq_config(daq_config_file, daq_cfg))
-            std::cerr << "DAQ config: " << daq_config_file
-                      << " (adc_format=" << daq_cfg.adc_format << ")\n";
-        else
-            std::cerr << "Warning: failed to load DAQ config\n";
+    // auto-search for daq_config.json if not specified
+    if (daq_config_file.empty()) {
+        for (auto p : {"daq_config.json", "database/daq_config.json", "../database/daq_config.json"}) {
+            std::ifstream f(p);
+            if (f.good()) { daq_config_file = p; break; }
+        }
     }
+
+    evc::DaqConfig daq_cfg;
+    if (daq_config_file.empty() || !evc::load_daq_config(daq_config_file, daq_cfg)) {
+        std::cerr << "Error: failed to load DAQ config"
+                  << (daq_config_file.empty() ? " (not found)" : ": " + daq_config_file)
+                  << "\n";
+        return 1;
+    }
+    std::cerr << "DAQ config: " << daq_config_file
+              << " (adc_format=" << daq_cfg.adc_format << ")\n";
 
     EvChannel ch;
     ch.SetConfig(daq_cfg);

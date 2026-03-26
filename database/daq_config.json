@@ -3,7 +3,7 @@
 
     "event_tags": {
         "_comment": "CODA2/JLab legacy control tags (confirmed in PRad-II data). Built-trigger 0xFF50+ auto-detected.",
-        "physics":      ["0xB1", "0xB9", "0xFE"],
+        "physics":      ["0x82", "0xB1", "0xB9", "0xFE"],
         "prestart":     "0x11",
         "go":           "0x12",
         "end":          "0x14",
@@ -23,7 +23,7 @@
         "run_info":        "0xE10F",
         "daq_config":      "0xE10E",
         "epics_data":      "0xE114",
-        "ssp_raw":         "0xE11F"
+        "ssp_raw":         "0x0DE9"
     },
 
     "ti_format": {
@@ -59,7 +59,8 @@
         {"tag": "0x88", "name": "adchycal5", "crate": 4},
         {"tag": "0x8A", "name": "adchycal6", "crate": 5},
         {"tag": "0x8C", "name": "adchycal7", "crate": 6},
-        {"tag": "0x31", "name": "gemroc1",   "crate": 49, "type": "gem"}
+        {"tag": "0x31", "name": "gemroc1",   "crate": 49, "type": "gem"},
+        {"tag": "0x34", "name": "gemroc2",   "crate": 52, "type": "gem"}
     ],
 
     "ti_master_tag": "0x27"
