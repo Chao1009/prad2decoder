@@ -453,25 +453,25 @@ void HyCalSystem::SetCalibConstant(int primex_id, double factor)
         modules_[it->second].cal_factor = factor;
 }
 
-void HyCalSystem::PrintCalibConstants(const std::string &output_file)
-const
+void HyCalSystem::PrintCalibConstants(const std::string &output_file) const
 {
     std::ofstream f(output_file);
     if (!f.is_open()) {
         std::cerr << "HyCalSystem::PrintCalibConstants: cannot open " << output_file << "\n";
         return;
     }
-    f << std::left << std::setw(8) << "name"
-      << std::setw(14) << "factor"
-      << std::setw(14) << "base_energy"
-      << std::setw(16) << "non_linear" << "\n";
+
+    json j = json::array();
     for (const auto &m : modules_) {
         if (m.id < 0) continue;
-        f << std::left << std::setw(8) << m.name
-        << std::setw(14) << m.cal_factor
-        << std::setw(14) << m.cal_base_energy
-        << std::setw(16) << m.cal_non_linear << "\n";
+        j.push_back({
+            {"name",        m.name},
+            {"factor",      m.cal_factor},
+            {"base_energy", m.cal_base_energy},
+            {"non_linear",  m.cal_non_linear}
+        });
     }
+    f << j.dump(2) << "\n";
 }
 
 int HyCalSystem::LoadCalibration(const std::string &calib_path)

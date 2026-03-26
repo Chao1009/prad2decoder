@@ -144,12 +144,12 @@ int main(int argc, char *argv[])
         if (dcf.is_open()) {
             auto dcj = nlohmann::json::parse(dcf, nullptr, false, true);
             if (dcj.contains("roc_tags") && dcj["roc_tags"].is_array()) {
-            for (auto &entry : dcj["roc_tags"]) {
-                int tag   = std::stoi(entry.at("tag").get<std::string>(), nullptr, 16);
-                int crate = entry.at("crate").get<int>();
-                roc_to_crate[tag] = crate;
+                for (auto &entry : dcj["roc_tags"]) {
+                    int tag   = std::stoi(entry.at("tag").get<std::string>(), nullptr, 16);
+                    int crate = entry.at("crate").get<int>();
+                    roc_to_crate[tag] = crate;
+                }
             }
-}
         }
     }
 
