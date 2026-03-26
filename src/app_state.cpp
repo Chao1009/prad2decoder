@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <cmath>
+#include <cstdlib>
 
 using json = nlohmann::json;
 
@@ -20,23 +21,29 @@ void AppState::init(const std::string &db_dir,
     if (main_config.empty()) main_config = findFile("config.json", db_dir);
     if (main_config.empty()) main_config = findFile("reconstruction.json", db_dir);
 
-    // --- DAQ config + pedestals ---
-    if (!daq_config_file.empty()) {
-        if (evc::load_daq_config(daq_config_file, daq_cfg)) {
-            std::cerr << "DAQ config: " << daq_config_file
-                      << " (adc_format=" << daq_cfg.adc_format << ")\n";
-            std::ifstream dcf(daq_config_file);
-            if (dcf.is_open()) {
-                auto dcj = json::parse(dcf, nullptr, false, true);
-                if (dcj.contains("pedestal_file")) {
-                    std::string ped_file = findFile(dcj["pedestal_file"].get<std::string>(), db_dir);
-                    if (evc::load_pedestals(ped_file, daq_cfg))
-                        std::cerr << "Pedestals : " << ped_file
-                                  << " (" << daq_cfg.pedestals.size() << " channels)\n";
-                }
+    // --- DAQ config + pedestals (required) ---
+    std::string daq_cfg_path = daq_config_file;
+    if (daq_cfg_path.empty())
+        daq_cfg_path = findFile("daq_config.json", db_dir);
+
+    if (daq_cfg_path.empty() || !evc::load_daq_config(daq_cfg_path, daq_cfg)) {
+        std::cerr << "Error: failed to load DAQ config"
+                  << (daq_cfg_path.empty() ? " (not found)" : ": " + daq_cfg_path)
+                  << "\n";
+        std::exit(EXIT_FAILURE);
+    }
+    std::cerr << "DAQ config: " << daq_cfg_path
+              << " (adc_format=" << daq_cfg.adc_format << ")\n";
+    {
+        std::ifstream dcf(daq_cfg_path);
+        if (dcf.is_open()) {
+            auto dcj = json::parse(dcf, nullptr, false, true);
+            if (dcj.contains("pedestal_file")) {
+                std::string ped_file = findFile(dcj["pedestal_file"].get<std::string>(), db_dir);
+                if (evc::load_pedestals(ped_file, daq_cfg))
+                    std::cerr << "Pedestals : " << ped_file
+                              << " (" << daq_cfg.pedestals.size() << " channels)\n";
             }
-        } else {
-            std::cerr << "Warning: failed to load DAQ config: " << daq_config_file << "\n";
         }
     }
 
@@ -129,8 +136,8 @@ void AppState::init(const std::string &db_dir,
     // --- HyCal system ---
     std::string modules_filename = "hycal_modules.json";
     std::string daq_filename     = "daq_map.json";
-    if (!daq_config_file.empty()) {
-        std::ifstream dcf2(daq_config_file);
+    {
+        std::ifstream dcf2(daq_cfg_path);
         if (dcf2.is_open()) {
             auto dcj2 = json::parse(dcf2, nullptr, false, true);
             if (dcj2.contains("modules_file")) modules_filename = dcj2["modules_file"].get<std::string>();
@@ -149,8 +156,8 @@ void AppState::init(const std::string &db_dir,
 
     // --- crate_roc map ---
     crate_roc_json = json::object();
-    if (!daq_config_file.empty()) {
-        std::ifstream dcf3(daq_config_file);
+    {
+        std::ifstream dcf3(daq_cfg_path);
         if (dcf3.is_open()) {
             auto dcj3 = json::parse(dcf3, nullptr, false, true);
             if (dcj3.contains("roc_tags")) {

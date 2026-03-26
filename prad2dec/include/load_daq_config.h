@@ -77,6 +77,7 @@ inline bool load_daq_config(const std::string &path, DaqConfig &cfg)
     // TI format
     if (j.contains("ti_format")) {
         auto &ti = j["ti_format"];
+        if (ti.contains("trigger_word"))        cfg.ti_trigger_word        = ti["trigger_word"].get<int>();
         if (ti.contains("time_low_word"))       cfg.ti_time_low_word       = ti["time_low_word"].get<int>();
         if (ti.contains("time_high_word"))      cfg.ti_time_high_word      = ti["time_high_word"].get<int>();
         if (ti.contains("time_high_mask"))      cfg.ti_time_high_mask      = parse_hex(ti["time_high_mask"]);

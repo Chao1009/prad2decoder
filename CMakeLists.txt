@@ -90,6 +90,10 @@ add_executable(ped_calc test/ped_calc.cpp)
 target_link_libraries(ped_calc PRIVATE prad2dec nlohmann_json::nlohmann_json)
 set_target_properties(ped_calc PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+add_executable(gem_dump test/gem_dump.cpp)
+target_link_libraries(gem_dump PRIVATE prad2dec prad2ana nlohmann_json::nlohmann_json)
+set_target_properties(gem_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # ---------------------------------------------------------------------------
 # Event viewer
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 // DaqConfig.h — configurable DAQ bank tags and event type identification
 //
 // All tags are configurable to accommodate DAQ format changes.
-// Defaults match PRad-II data (prad_023109.evio format).
+// No defaults — a DAQ config JSON must be loaded before use.
 //
 // This is a plain struct — no JSON dependency. Loading from JSON is handled
 // by the application layer (see load_daq_config.h).
@@ -22,82 +22,82 @@ struct DaqConfig
     // --- event type identification (top-level bank tag ranges) ---------------
 
     // physics event tags (JLab CODA convention)
-    // Single-event mode: 0xB1 or 0xFE (depends on CODA event writer)
+    // Single-event mode: e.g. 0xB1, 0xB9, 0xFE (depends on CODA event writer)
     // Built-trigger mode: 0xFF50-0xFF8F (num = event count)
-    std::vector<uint32_t> physics_tags = {0x00B1, 0x00FE};
+    std::vector<uint32_t> physics_tags;
 
     // control event tags (CODA2/JLab legacy — confirmed in PRad-II data)
     // CODA3 uses 0xFFD0-0xFFD4, recognized via is_control() range check
-    uint32_t prestart_tag     = 0x11;
-    uint32_t go_tag           = 0x12;
-    uint32_t end_tag          = 0x14;
+    uint32_t prestart_tag;
+    uint32_t go_tag;
+    uint32_t end_tag;
 
     // sync event tag
-    uint32_t sync_tag         = 0xC1;
+    uint32_t sync_tag;
 
     // EPICS slow control event tag
-    uint32_t epics_tag        = 0x1F;
+    uint32_t epics_tag;
 
     // --- ADC format selection ------------------------------------------------
-    // "fadc250"  — FADC250 composite format c,i,l,N(c,Ns) (PRad-II, default)
+    // "fadc250"  — FADC250 composite format c,i,l,N(c,Ns) (PRad-II)
     // "adc1881m" — Fastbus ADC1881M raw words (PRad)
-    std::string adc_format = "fadc250";
+    std::string adc_format;
 
     // Zero-suppression threshold for ADC1881M (in units of pedestal sigma).
     // Channels with (raw - ped_mean) < sparsify_sigma * ped_rms are suppressed.
-    float sparsify_sigma = 0.f;  // 0 = disabled
+    float sparsify_sigma;
 
     // --- bank tags within physics events ------------------------------------
 
     // FADC250 composite data bank tag (used when adc_format == "fadc250")
-    uint32_t fadc_composite_tag = 0xE101;
+    uint32_t fadc_composite_tag;
 
     // ADC1881M raw data bank tag (used when adc_format == "adc1881m")
-    uint32_t adc1881m_bank_tag = 0xE120;
+    uint32_t adc1881m_bank_tag;
 
     // Trigger Interface (TI) data bank tag (present in every ROC data block)
-    uint32_t ti_bank_tag        = 0xE10A;
+    uint32_t ti_bank_tag;
 
     // JLab event number/type bank (depth 1, single-event mode)
-    uint32_t trigger_bank_tag   = 0xC000;
+    uint32_t trigger_bank_tag;
 
     // Run info bank (in TI master crate only)
-    uint32_t run_info_tag       = 0xE10F;
+    uint32_t run_info_tag;
 
     // DAQ configuration readback string bank
-    uint32_t daq_config_tag     = 0xE10E;
+    uint32_t daq_config_tag;
 
     // EPICS data bank tag (within EPICS events)
-    uint32_t epics_bank_tag     = 0xE114;
+    uint32_t epics_bank_tag;
 
     // SSP/MPD raw data bank tag (GEM readout)
-    uint32_t ssp_bank_tag       = 0xE11F;
+    uint32_t ssp_bank_tag;
 
     // --- TI data format (fallback for single-event / non-CODA3 data) --------
     // TI bank layout: word[0]=header, word[1]=trigger#, word[2]=ts_low, word[3]=ts_high
-    int ti_trigger_word   = 1;
-    int ti_time_low_word  = 2;      // lower 32 bits of 48-bit timestamp
-    int ti_time_high_word = 3;      // upper bits of timestamp (shifted)
-    uint32_t ti_time_high_mask  = 0xFFFF0000;
-    int      ti_time_high_shift = 16;   // right-shift before combining
+    int ti_trigger_word;
+    int ti_time_low_word;       // lower 32 bits of 48-bit timestamp
+    int ti_time_high_word;      // upper bits of timestamp (shifted)
+    uint32_t ti_time_high_mask;
+    int      ti_time_high_shift;    // right-shift before combining
 
     // --- trigger bits extraction (from TI master's 7-word TI bank) -----------
     // Per Sergey B.: 32 FP trigger bits are in word[5] of the TI master's
     // 0xE10A bank. Bits 16-31 = v1495 triggers, bit 16 = LMS.
     // Only the TI master crate (7-word bank) has this; ROC TI banks (4-word) don't.
-    int ti_trigger_type_word  = 5;
-    int ti_trigger_type_shift = 0;
-    uint32_t ti_trigger_type_mask = 0xFFFFFFFF;
+    int ti_trigger_type_word;
+    int ti_trigger_type_shift;
+    uint32_t ti_trigger_type_mask;
 
     // --- JLab trigger bank format (tag 0xC000, single-event mode) -----------
     // 3 words: event_number, event_tag, reserved
-    int trig_event_number_word = 0;
-    int trig_event_type_word   = 1;
+    int trig_event_number_word;
+    int trig_event_type_word;
 
     // --- run info bank format (tag 0xE10F, in TI master crate) --------------
-    int ri_run_number_word     = 1;
-    int ri_event_count_word    = 2;
-    int ri_unix_time_word      = 3;
+    int ri_run_number_word;
+    int ri_event_count_word;
+    int ri_unix_time_word;
 
     // --- ROC identification -------------------------------------------------
     struct RocEntry {
@@ -109,7 +109,7 @@ struct DaqConfig
     std::vector<RocEntry> roc_tags;
 
     // TI master crate tag (contains run info bank)
-    uint32_t ti_master_tag = 0x27;
+    uint32_t ti_master_tag;
 
     // --- per-channel pedestals (ADC1881M) ------------------------------------
     struct PedEntry { float mean = 0.f; float rms = 0.f; };

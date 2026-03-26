@@ -117,3 +117,42 @@ Example:
 ```bash
 ped_calc prad.evio -D prad_daq_config.json -t 3 -o pedestals.json
 ```
+
+## gem_dump
+
+GEM data diagnostic tool. Decodes SSP/MPD banks from EVIO data, optionally runs GEM reconstruction, and prints diagnostic output at each stage of the pipeline.
+
+```bash
+gem_dump <evio_file> -D <daq_config.json> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-D <file>` | DAQ configuration (required) |
+| `-G <file>` | GEM map file (default: gem_map.json from DAQ config dir) |
+| `-P <file>` | GEM pedestal file (optional) |
+| `-m <mode>` | Output mode (see below) |
+| `-n <N>` | Max physics events (default: 10, 0=all) |
+| `-t <bit>` | Trigger bit filter (-1=all, default) |
+| `-e <N>` | Dump only physics event N (1-based) |
+
+Modes:
+- `raw` — Dump raw SSP-decoded APV data (strips × time samples)
+- `hits` — Strip hits after pedestal subtraction, CM correction, zero suppression
+- `clusters` — Full reconstruction: 1D clusters + 2D GEM hits
+- `summary` (default) — Per-event statistics table
+
+Examples:
+```bash
+# Quick summary of first 10 events with GEM data
+gem_dump data.evio -D database/daq_config.json
+
+# Dump raw APV data for event 42
+gem_dump data.evio -D database/daq_config.json -m raw -e 42
+
+# Full reconstruction with pedestals
+gem_dump data.evio -D database/daq_config.json -G database/gem_map.json -P gem_ped.dat -m clusters -n 50
+
+# Summary with trigger filter (LMS events only)
+gem_dump data.evio -D database/daq_config.json -t 3 -n 0
+```

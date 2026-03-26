@@ -460,6 +460,10 @@ int main(int argc, char *argv[])
         std::cerr << "Config    : using defaults\n";
     }
 
+    // resolve default DAQ config path
+    if (daq_config_file.empty())
+        daq_config_file = findFile("daq_config.json", db_dir);
+
     // initialize shared state (DAQ config, HyCal, histograms, clustering, LMS)
     g_app.init(db_dir, daq_config_file, config_file);
 

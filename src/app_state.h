@@ -142,7 +142,7 @@ struct AppState {
 
     // ---- Initialization (call once at startup) -----------------------------
 
-    // Load all configs from db_dir. daq_config_file may be empty (PRad-II defaults).
+    // Load all configs from db_dir. daq_config_file may be empty (uses daq_config.json from db_dir).
     // config_file: main config (config.json or -c override). Empty = auto-find.
     void init(const std::string &db_dir,
               const std::string &daq_config_file,

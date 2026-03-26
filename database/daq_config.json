@@ -3,7 +3,7 @@
 
     "event_tags": {
         "_comment": "CODA2/JLab legacy control tags (confirmed in PRad-II data). Built-trigger 0xFF50+ auto-detected.",
-        "physics":      ["0xB1", "0xFE"],
+        "physics":      ["0xB1", "0xB9", "0xFE"],
         "prestart":     "0x11",
         "go":           "0x12",
         "end":          "0x14",
@@ -11,9 +11,13 @@
         "epics":        "0x1F"
     },
 
+    "adc_format": "fadc250",
+    "sparsify_sigma": 0,
+
     "bank_tags": {
         "_comment": "JLab single-event mode banks. CODA trigger bank (0xFF2X) auto-detected by tag range.",
         "fadc_composite":  "0xE101",
+        "adc1881m":        "0xE120",
         "ti_data":         "0xE10A",
         "trigger_bank":    "0xC000",
         "run_info":        "0xE10F",
@@ -24,6 +28,7 @@
 
     "ti_format": {
         "_comment": "TI bank (0xE10A): word[1]=trigger#, word[2]=ts_low, word[3]=ts_high. Trigger bits from TI master's 7-word bank: word[5] = 32 FP trigger inputs (bits 16-31 = v1495, bit 16 = LMS).",
+        "trigger_word":       1,
         "time_low_word":      2,
         "time_high_word":     3,
         "time_high_mask":     "0xFFFF0000",
