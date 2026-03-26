@@ -137,10 +137,9 @@ void GemSystem::Init(const std::string &map_file)
 }
 
 //=============================================================================
-// LoadPedestals — load per-strip pedestal from file
+// LoadPedestals — load per-strip pedestal from JSON file
 //
-// Format (space-separated):
-//   crate  mpd  adc  strip  offset  noise
+// Format: [{"crate":49,"mpd":0,"adc":0,"offset":[...128...],"noise":[...128...]}, ...]
 //=============================================================================
 
 void GemSystem::LoadPedestals(const std::string &ped_file)
@@ -151,21 +150,33 @@ void GemSystem::LoadPedestals(const std::string &ped_file)
         return;
     }
 
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        std::istringstream iss(line);
-        int crate, mpd, adc, strip;
-        float offset, noise;
-        if (!(iss >> crate >> mpd >> adc >> strip >> offset >> noise)) continue;
-        if (strip < 0 || strip >= APV_STRIP_SIZE) continue;
+    nlohmann::json j;
+    try { j = nlohmann::json::parse(f, nullptr, true, true); }
+    catch (const nlohmann::json::parse_error &e) {
+        std::cerr << "GemSystem::LoadPedestals: parse error: " << e.what() << std::endl;
+        return;
+    }
+
+    int loaded = 0;
+    for (auto &entry : j) {
+        int crate = entry.value("crate", -1);
+        int mpd   = entry.value("mpd", -1);
+        int adc   = entry.value("adc", -1);
 
         int idx = FindApvIndex(crate, mpd, adc);
         if (idx < 0) continue;
 
-        apvs_[idx].pedestal[strip].offset = offset;
-        apvs_[idx].pedestal[strip].noise  = noise;
+        auto &offsets = entry["offset"];
+        auto &noises  = entry["noise"];
+        int nstrips = std::min({(int)offsets.size(), (int)noises.size(), APV_STRIP_SIZE});
+
+        for (int s = 0; s < nstrips; ++s) {
+            apvs_[idx].pedestal[s].offset = offsets[s].get<float>();
+            apvs_[idx].pedestal[s].noise  = noises[s].get<float>();
+        }
+        loaded += nstrips;
     }
+    std::cerr << "GemSystem: loaded " << loaded << " pedestal entries from " << ped_file << "\n";
 }
 
 //=============================================================================

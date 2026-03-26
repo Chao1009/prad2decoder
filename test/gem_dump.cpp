@@ -343,25 +343,46 @@ static int writePedestals(const std::map<uint64_t, StripAccum> &accum,
         return 1;
     }
 
-    of << "# GEM pedestals: crate  mpd  adc  strip  offset  noise\n";
-    of << "# computed by gem_dump -m ped\n";
+    // group strips by APV: (crate, mpd, adc) → strip data
+    struct ApvKey { int crate, mpd, adc; };
+    std::map<uint64_t, ApvKey> apv_keys;
+    std::map<uint64_t, std::vector<std::pair<int, const StripAccum*>>> apv_strips;
 
-    int nstrips = 0;
     for (auto &[key, acc] : accum) {
         int crate = (key >> 48) & 0xFFFF;
         int mpd   = (key >> 32) & 0xFFFF;
         int apv   = (key >> 16) & 0xFFFF;
         int strip = key & 0xFFFF;
-
-        of << crate << " " << mpd << " " << apv << " " << strip
-           << " " << std::fixed << std::setprecision(3) << acc.mean()
-           << " " << std::setprecision(4) << acc.rms()
-           << "\n";
-        nstrips++;
+        uint64_t akey = (static_cast<uint64_t>(crate) << 32) |
+                        (static_cast<uint64_t>(mpd) << 16) | apv;
+        apv_keys[akey] = {crate, mpd, apv};
+        apv_strips[akey].emplace_back(strip, &acc);
     }
+
+    nlohmann::json arr = nlohmann::json::array();
+    int napvs = 0;
+    for (auto &[akey, strips] : apv_strips) {
+        auto &ak = apv_keys[akey];
+        // sort by strip number
+        std::sort(strips.begin(), strips.end());
+
+        nlohmann::json offsets = nlohmann::json::array();
+        nlohmann::json noises  = nlohmann::json::array();
+        for (auto &[s, acc] : strips) {
+            offsets.push_back(std::round(acc->mean() * 1000.) / 1000.);
+            noises.push_back(std::round(acc->rms() * 10000.) / 10000.);
+        }
+        arr.push_back({
+            {"crate", ak.crate}, {"mpd", ak.mpd}, {"adc", ak.adc},
+            {"offset", offsets}, {"noise", noises}
+        });
+        napvs++;
+    }
+    of << arr.dump(2) << "\n";
     of.close();
 
-    std::cerr << "Written: " << output_file << " (" << nstrips << " strips)\n";
+    std::cerr << "Written: " << output_file << " (" << napvs << " APVs, "
+              << accum.size() << " strips)\n";
     return 0;
 }
 
@@ -384,7 +405,7 @@ static void usage(const char *prog)
         << "  -D <file>     DAQ configuration (auto-searches daq_config.json if omitted)\n"
         << "  -G <file>     GEM map file (default: gem_map.json)\n"
         << "  -P <file>     GEM pedestal file (input, for hits/clusters)\n"
-        << "  -o <file>     Output file (ped mode, default: gem_ped.dat)\n"
+        << "  -o <file>     Output file (ped mode, default: gem_ped.json)\n"
         << "  -n <N>        Max physics events (default: 10, 0=all for ped)\n"
         << "  -t <bit>      Trigger bit filter (-1=all, default)\n"
         << "  -e <N>        Dump only physics event N (1-based)\n"
@@ -398,7 +419,7 @@ int main(int argc, char *argv[])
     std::string daq_config_file;
     std::string gem_map_file;
     std::string gem_ped_file;
-    std::string output_file = "gem_ped.dat";
+    std::string output_file = "gem_ped.json";
     std::string mode = "summary";
     int max_events  = 10;
     int trigger_bit = -1;   // -1 = accept all
