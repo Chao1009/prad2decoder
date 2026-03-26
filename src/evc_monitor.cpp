@@ -165,6 +165,15 @@ static void etReaderThread()
         wsBroadcast("{\"type\":\"status\",\"connected\":true}");
         std::cerr << "ET: connected, reading events\n";
 
+        // Rate-limit ring buffer push + WebSocket notifications.
+        // JSON encoding + clustering for the ring is expensive; only do it
+        // at ~20 Hz (every 50ms) instead of per-event. Histograms still
+        // get every event.
+        auto last_ring_push = std::chrono::steady_clock::now();
+        constexpr auto ring_interval = std::chrono::milliseconds(50);
+        auto last_lms_notify = last_ring_push;
+        constexpr auto lms_notify_interval = std::chrono::milliseconds(200);
+
         while (g_running) {
             auto st = ch.Read();
             if (st == status::empty) {
@@ -198,29 +207,38 @@ static void etReaderThread()
                 if (!ch.DecodeEvent(i, event)) continue;
                 last_ti_ts = event.info.timestamp;
 
-                int seq = g_app.events_processed.load() + 1;
-
-                // encode event + clusters for ring buffer
-                std::string evjson = g_app.encodeEventJson(event, seq, ana, wres).dump();
-                std::string cljson = g_app.computeClustersJson(event, seq, ana, wres).dump();
-
-                // process: histograms + clustering + LMS (thread-safe)
+                // process: histograms + clustering + LMS (every event)
                 g_app.processEvent(event, ana, wres);
 
-                // LMS WebSocket notification
-                if (g_app.lms_trigger_mask != 0 &&
-                    (event.info.trigger_bits & g_app.lms_trigger_mask))
-                    wsBroadcast("{\"type\":\"lms_event\",\"count\":" +
-                                std::to_string(g_app.lms_events.load()) + "}");
+                int seq = g_app.events_processed.load();
 
-                // push to ring buffer
-                {
-                    std::lock_guard<std::mutex> lk(g_ring_mtx);
-                    g_ring.push_back({seq, std::move(evjson), std::move(cljson)});
-                    while ((int)g_ring.size() > g_ring_size) g_ring.pop_front();
+                // LMS WebSocket notification (throttled)
+                if (g_app.lms_trigger_mask != 0 &&
+                    (event.info.trigger_bits & g_app.lms_trigger_mask)) {
+                    auto now = std::chrono::steady_clock::now();
+                    if (now - last_lms_notify >= lms_notify_interval) {
+                        last_lms_notify = now;
+                        wsBroadcast("{\"type\":\"lms_event\",\"count\":" +
+                                    std::to_string(g_app.lms_events.load()) + "}");
+                    }
                 }
 
-                wsBroadcast("{\"type\":\"new_event\",\"seq\":" + std::to_string(seq) + "}");
+                // encode JSON + push to ring buffer (throttled ~20 Hz)
+                auto now = std::chrono::steady_clock::now();
+                if (now - last_ring_push >= ring_interval) {
+                    last_ring_push = now;
+
+                    std::string evjson = g_app.encodeEventJson(event, seq, ana, wres).dump();
+                    std::string cljson = g_app.computeClustersJson(event, seq, ana, wres).dump();
+
+                    {
+                        std::lock_guard<std::mutex> lk(g_ring_mtx);
+                        g_ring.push_back({seq, std::move(evjson), std::move(cljson)});
+                        while ((int)g_ring.size() > g_ring_size) g_ring.pop_front();
+                    }
+
+                    wsBroadcast("{\"type\":\"new_event\",\"seq\":" + std::to_string(seq) + "}");
+                }
             }
         }
 
