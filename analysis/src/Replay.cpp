@@ -68,20 +68,20 @@ void Replay::clearEvent(EventVars &ev)
 
 void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
 {
-    tree->Branch("event_num", &ev.event_num, "event_num/I");
-    tree->Branch("trigger",   &ev.trigger,   "trigger/I");
+    tree->Branch("event_num", &ev.event_num, "event_num/i");
+    tree->Branch("trigger",   &ev.trigger,   "trigger/i");
     tree->Branch("timestamp", &ev.timestamp, "timestamp/L");
     tree->Branch("nch",       &ev.nch,       "nch/I");
-    tree->Branch("crate",     ev.crate,      "crate[nch]/I");
-    tree->Branch("slot",      ev.slot,       "slot[nch]/I");
-    tree->Branch("channel",   ev.channel,    "channel[nch]/I");
+    tree->Branch("crate",     ev.crate,      "crate[nch]/b");
+    tree->Branch("slot",      ev.slot,       "slot[nch]/b");
+    tree->Branch("channel",   ev.channel,    "channel[nch]/b");
     tree->Branch("module_id", ev.module_id,  "module_id[nch]/I");
-    tree->Branch("nsamples",  ev.nsamples,   "nsamples[nch]/I");
+    tree->Branch("nsamples",  ev.nsamples,   "nsamples[nch]/b");
     tree->Branch("ped_mean",  ev.ped_mean,   "ped_mean[nch]/F");
     tree->Branch("ped_rms",   ev.ped_rms,    "ped_rms[nch]/F");
     tree->Branch("integral",  ev.integral,   "integral[nch]/F");
     if (write_peaks) {
-        tree->Branch("npeaks",       ev.npeaks,       "npeaks[nch]/I");
+        tree->Branch("npeaks",       ev.npeaks,       "npeaks[nch]/b");
         tree->Branch("peak_height",  ev.peak_height,  Form("peak_height[nch][%d]/F", fdec::MAX_PEAKS));
         tree->Branch("peak_time",    ev.peak_time,    Form("peak_time[nch][%d]/F", fdec::MAX_PEAKS));
         tree->Branch("peak_integral",ev.peak_integral, Form("peak_integral[nch][%d]/F", fdec::MAX_PEAKS));

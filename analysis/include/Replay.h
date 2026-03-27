@@ -42,19 +42,19 @@ private:
 
     struct EventVars {
         int     event_num = 0;
-        int     trigger = 0;
+        uint32_t trigger = 0;
         Long64_t timestamp = 0;
         int     nch = 0;
-        int     crate[kMaxCh] = {};
-        int     slot[kMaxCh] = {};
-        int     channel[kMaxCh] = {};
+        uint8_t crate[kMaxCh] = {};
+        uint8_t slot[kMaxCh] = {};
+        uint8_t channel[kMaxCh] = {};
         int     module_id[kMaxCh] = {};
-        int     nsamples[kMaxCh] = {};
+        uint8_t nsamples[kMaxCh] = {};
         int     samples[kMaxCh][fdec::MAX_SAMPLES] = {};
         float   ped_mean[kMaxCh] = {};
         float   ped_rms[kMaxCh] = {};
         float   integral[kMaxCh] = {};
-        int     npeaks[kMaxCh] = {};
+        uint8_t npeaks[kMaxCh] = {};
         float   peak_height[kMaxCh][fdec::MAX_PEAKS] = {};
         float   peak_time[kMaxCh][fdec::MAX_PEAKS] = {};
         float   peak_integral[kMaxCh][fdec::MAX_PEAKS] = {};
