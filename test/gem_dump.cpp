@@ -126,8 +126,9 @@ static std::string getApvField(const gem::ApvConfig &cfg, const std::string &fie
 
 static bool apvMatchesFilter(const gem::ApvConfig &cfg, const EvdumpFilter &filt)
 {
-    // all conditions must match
+    // all APV-level conditions must match (skip detector-level like "clusters")
     for (auto &cond : filt.conditions) {
+        if (cond.field == "clusters") continue;
         std::string val = getApvField(cfg, cond.field);
         bool found = false;
         for (auto &v : cond.values)
