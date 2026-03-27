@@ -83,18 +83,11 @@ struct ApvConfig {
     int det_pos     = 0;       // detector position in layer
 
     // Strip mapping parameters (APV channel → physical strip)
-    // readout_offset: center point for APV25-to-strip odd/even mapping.
-    //   32 = normal, 48 for special APVs. 0 = skip readout mapping.
-    int  readout_offset = 32;
-    // strip_offset: total offset added to plane-wide strip number (default 0).
-    //   Accounts for all wiring differences (e.g. -144 for pos-11:
-    //   -128 shares X column with pos-10, -16 for disconnected strips).
-    int  strip_offset   = 0;
-    bool hybrid_board   = true; // apply hybrid board pin conversion (MPD electronics)
+    int  pin_rotate  = 0;    // rotated connector pins (e.g. 16 for pos-11 near beam hole)
+    int  shared_pos  = -1;   // effective plane position (-1 = use plane_index)
+    bool hybrid_board = true; // hybrid board pin conversion (MPD electronics)
     // match: half-strip intersection constraint for beam hole region.
-    //   "" = full strip (intersects all cross-plane strips).
-    //   "+Y" = upper half only (above beam hole).
-    //   "-Y" = lower half only (below beam hole).
+    //   "" = full strip, "+Y" = above hole, "-Y" = below hole.
     std::string match;
 
     // Pedestals (per-strip)
@@ -202,6 +195,10 @@ private:
     // --- per-detector reconstructed hits ------------------------------------
     std::vector<std::vector<GEMHit>> det_hits_;
     std::vector<GEMHit> all_hits_;
+
+    // --- global APV parameters -----------------------------------------------
+    int   apv_channels_     = 128;     // channels per APV chip
+    int   readout_center_   = 32;      // default readout mapping center
 
     // --- thresholds ---------------------------------------------------------
     float common_thres_     = 20.f;

@@ -15,6 +15,7 @@ Usage:
 import json
 import sys
 import os
+from gem_strip_map import map_strip
 
 APV_SIZE = 128
 
@@ -70,36 +71,22 @@ def map_strip_mpd(ch, plane_type, plane_index, orient):
 # Our implementation (config-driven, from GemSystem::buildStripMap)
 # =========================================================================
 
-def map_strip_ours(ch, plane_index, orient, readout_offset=32, strip_offset=0,
-                   hybrid_board=True):
-    """Our implementation — configurable pipeline."""
-    strip = 32 * (ch % 4) + 8 * (ch // 4) - 31 * (ch // 16)
-
-    if hybrid_board:
-        strip = strip + 1 + strip % 4 - 5 * ((strip // 4) % 2)
-
-    if readout_offset > 0:
-        if strip & 1:
-            strip = readout_offset - (strip + 1) // 2
-        else:
-            strip = readout_offset + strip // 2
-    strip &= 0x7f
-    local = strip
-
-    if orient == 1:
-        strip = 127 - strip
-
-    strip += strip_offset + plane_index * APV_SIZE
-    return local, strip
+def map_strip_ours(ch, plane_index, orient, pin_rotate=0, shared_pos=-1,
+                   hybrid_board=True, apv_channels=128, readout_center=32):
+    """Our implementation — delegates to shared gem_strip_map.map_strip."""
+    return map_strip(ch, plane_index, orient,
+                     pin_rotate=pin_rotate, shared_pos=shared_pos,
+                     hybrid_board=hybrid_board,
+                     apv_channels=apv_channels, readout_center=readout_center)
 
 
 # =========================================================================
 # Comparison logic
 # =========================================================================
 
-def check_apv(plane_type, plane_index, orient, readout_offset=32,
-              strip_offset=0, hybrid_board=True, verbose=False):
-    """Check all 128 channels. Returns (ok, details_string)."""
+def check_apv(plane_type, plane_index, orient, pin_rotate=0, shared_pos=-1,
+              hybrid_board=True, verbose=False):
+    """Check all 128 channels. Returns (mpd_fail, prad_fail, details)."""
     mismatches_mpd = 0
     mismatches_prad = 0
     details = []
@@ -107,21 +94,21 @@ def check_apv(plane_type, plane_index, orient, readout_offset=32,
     for ch in range(APV_SIZE):
         _, mpd_plane = map_strip_mpd(ch, plane_type, plane_index, orient)
         _, our_plane = map_strip_ours(ch, plane_index, orient,
-                                       readout_offset=readout_offset,
-                                       strip_offset=strip_offset,
+                                       pin_rotate=pin_rotate,
+                                       shared_pos=shared_pos,
                                        hybrid_board=hybrid_board)
         if mpd_plane != our_plane:
             mismatches_mpd += 1
             if verbose and mismatches_mpd <= 5:
                 details.append(f"    ch={ch}: mpd={mpd_plane} ours={our_plane} (diff={our_plane - mpd_plane})")
 
-    # also check vs PRadAnalyzer (plane-wide only, different local is expected)
+    # also check vs PRadAnalyzer (SRS = no hybrid board)
     for ch in range(APV_SIZE):
         _, prad_plane = map_strip_pradanalyzer(ch, plane_type, plane_index, orient)
         _, our_plane = map_strip_ours(ch, plane_index, orient,
-                                       readout_offset=readout_offset,
-                                       strip_offset=strip_offset,
-                                       hybrid_board=False)  # SRS = no hybrid
+                                       pin_rotate=pin_rotate,
+                                       shared_pos=shared_pos,
+                                       hybrid_board=False)
         if prad_plane != our_plane:
             mismatches_prad += 1
 
@@ -154,7 +141,7 @@ def main():
     total_mpd_fail = 0
     total_prad_fail = 0
 
-    print(f"{'det':>4} {'plane':>6} {'pos':>4} {'orient':>7} {'ro_off':>7} {'st_off':>7} {'match':>6}  {'vs MPD':>8} {'vs PRAna':>9}")
+    print(f"{'det':>4} {'plane':>6} {'pos':>4} {'orient':>7} {'pinrot':>7} {'shared':>7} {'match':>6}  {'vs MPD':>8} {'vs PRAna':>9}")
     print("-" * 72)
 
     for apv in apvs:
@@ -163,15 +150,15 @@ def main():
         plane_type = 1 if plane_str in ("Y", "1") else 0
         pos = apv["pos"]
         orient = apv["orient"]
-        readout_offset = apv.get("readout_offset", 32)
-        strip_offset = apv.get("strip_offset", 0)
+        pin_rotate = apv.get("pin_rotate", 0)
+        shared_pos = apv.get("shared_pos", -1)
         hybrid_board = apv.get("hybrid_board", True)
         match = apv.get("match", "")
 
         mpd_fail, prad_fail, details = check_apv(
             plane_type, pos, orient,
-            readout_offset=readout_offset,
-            strip_offset=strip_offset,
+            pin_rotate=pin_rotate,
+            shared_pos=shared_pos,
             hybrid_board=hybrid_board,
             verbose=True)
 
@@ -179,10 +166,11 @@ def main():
         prad_status = "OK" if prad_fail == 0 else f"FAIL({prad_fail})"
 
         special = ""
-        if strip_offset != 0 or readout_offset != 32 or match:
+        if pin_rotate != 0 or shared_pos >= 0 or match:
             special = " *"
 
-        print(f"{det:4d} {plane_str:>6} {pos:4d} {orient:7d} {readout_offset:7d} {strip_offset:7d} {match:>6}  {mpd_status:>8} {prad_status:>9}{special}")
+        sp_str = str(shared_pos) if shared_pos >= 0 else "-"
+        print(f"{det:4d} {plane_str:>6} {pos:4d} {orient:7d} {pin_rotate:7d} {sp_str:>7} {match:>6}  {mpd_status:>8} {prad_status:>9}{special}")
 
         for d in details:
             print(d)
@@ -210,19 +198,19 @@ def main():
     print("\nAdditional edge case checks:")
 
     edge_cases = [
-        ("Y plane pos=0 orient=1", 1, 0, 1, 32, 0),
-        ("Y plane pos=23 orient=1", 1, 23, 1, 32, 0),
-        ("X pos=0 orient=0", 0, 0, 0, 32, 0),
-        ("X pos=9 orient=0 (last normal)", 0, 9, 0, 32, 0),
-        ("X pos=10 orient=0 (hole neighbor)", 0, 10, 0, 32, 0),
-        ("X pos=11 orient=0 (correct config)", 0, 11, 0, 48, -144),
-        ("X pos=11 orient=1 (correct config)", 0, 11, 1, 48, -144),
+        ("Y plane pos=0 orient=1",           1,  0, 1,  0, -1),
+        ("Y plane pos=23 orient=1",          1, 23, 1,  0, -1),
+        ("X pos=0 orient=0",                 0,  0, 0,  0, -1),
+        ("X pos=9 orient=0 (last normal)",   0,  9, 0,  0, -1),
+        ("X pos=10 orient=0 (hole neighbor)",0, 10, 0,  0, -1),
+        ("X pos=11 orient=0 (pin_rot=16)",   0, 11, 0, 16, 10),
+        ("X pos=11 orient=1 (pin_rot=16)",   0, 11, 1, 16, 10),
     ]
 
     all_edge_ok = True
-    for label, pt, pi, ori, ro, so in edge_cases:
-        mpd_fail, _, details = check_apv(pt, pi, ori, readout_offset=ro,
-                                          strip_offset=so, verbose=True)
+    for label, pt, pi, ori, pr, sp in edge_cases:
+        mpd_fail, _, details = check_apv(pt, pi, ori, pin_rotate=pr,
+                                          shared_pos=sp, verbose=True)
         status = "OK" if mpd_fail == 0 else f"FAIL({mpd_fail})"
         print(f"  {label:45s} {status}")
         for d in details:

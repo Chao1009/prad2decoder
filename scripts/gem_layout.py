@@ -21,6 +21,7 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
+from gem_strip_map import map_apv_strips
 
 
 def load_gem_map(path):
@@ -31,38 +32,26 @@ def load_gem_map(path):
     apvs = [e for e in raw["apvs"] if "crate" in e]
     hole = raw.get("hole", None)
 
-    return layers, apvs, hole
+    return layers, apvs, hole, raw
 
 
-def build_strip_layout(layers, apvs, hole):
+def build_strip_layout(layers, apvs, hole, raw):
     """Build per-detector strip positions, accounting for beam hole.
 
     X strips near the hole are shortened (split APVs with 16 disconnected channels).
     Y strips are split at the hole Y boundary into top/bottom segments.
     """
     detectors = {}
-    strips_per_apv = 128
-
-    # hole geometry (same for all detectors in local frame)
-    if hole:
-        hx = hole["x_center"]
-        hy = hole["y_center"]
-        hw = hole["width"]
-        hh = hole["height"]
-        hole_x0, hole_x1 = hx - hw / 2, hx + hw / 2
-        hole_y0, hole_y1 = hy - hh / 2, hy + hh / 2
-    else:
-        hole_x0 = hole_x1 = hole_y0 = hole_y1 = -1
+    strips_per_apv = raw.get("apv_channels", 128)
 
     for det_id, layer in layers.items():
         x_pitch = layer["x_pitch"]
         y_pitch = layer["y_pitch"]
-        x_size = layer["x_apvs"] * strips_per_apv * x_pitch
         y_size = layer["y_apvs"] * strips_per_apv * y_pitch
 
         detectors[det_id] = {
             "name": layer["name"],
-            "x_size": x_size,
+            "x_size": 0,       # computed from actual strip positions below
             "y_size": y_size,
             "x_pitch": x_pitch,
             "y_pitch": y_pitch,
@@ -72,55 +61,81 @@ def build_strip_layout(layers, apvs, hole):
             "y_apv_edges": set(),
         }
 
+    apv_ch = raw.get("apv_channels", 128)
+    ro_center = raw.get("readout_center", 32)
+
+    # first pass: compute strip positions and derive x_size + hole position
+    all_x_strips = {det_id: set() for det_id in detectors}
+    match_strips = {det_id: [] for det_id in detectors}  # strips from match APVs
+    apv_data = []
+
     for apv in apvs:
         det_id = apv["det"]
         if det_id not in detectors:
             continue
-        det = detectors[det_id]
         plane = apv["plane"]
-        pos = apv["pos"]
-        orient = apv["orient"]
-        readout_offset = apv.get("readout_offset", 32)
-        strip_offset = apv.get("strip_offset", 0)
-        hybrid_board = apv.get("hybrid_board", True)
+        plane_strips = map_apv_strips(apv, apv_channels=apv_ch, readout_center=ro_center)
+        apv_data.append((apv, det_id, plane, plane_strips))
 
-        # compute plane strip positions using the MapStrip pipeline
-        plane_strips = []
-        for ch in range(strips_per_apv):
-            # step 1: APV25 internal channel mapping
-            s = 32 * (ch % 4) + 8 * (ch // 4) - 31 * (ch // 16)
-            # step 2: hybrid board pin conversion
-            if hybrid_board:
-                s = s + 1 + s % 4 - 5 * ((s // 4) % 2)
-            # step 3: readout strip mapping (skip if readout_offset == 0)
-            if readout_offset > 0:
-                if s & 1:
-                    s = readout_offset - (s + 1) // 2
-                else:
-                    s = readout_offset + s // 2
-            # step 4: 7-bit mask
-            s &= 0x7f
+        if plane == "X":
+            all_x_strips[det_id].update(plane_strips)
+            if apv.get("match", ""):
+                match_strips[det_id].extend(plane_strips)
 
-            # step 5: orient flip
-            if orient == 1:
-                s = 127 - s
+    # set x_size from actual strip range
+    for det_id, strips in all_x_strips.items():
+        if strips:
+            det = detectors[det_id]
+            x_max_strip = max(strips)
+            det["x_size"] = (x_max_strip + 1) * det["x_pitch"]
 
-            # step 6: plane-wide strip number
-            s += strip_offset + pos * strips_per_apv
+    # derive hole position from match APV strips and detector geometry
+    # x_center: center of the match strips range (where pos 10/11 overlap)
+    # y_center: center of detector Y
+    if hole:
+        hw = hole["width"]
+        hh = hole["height"]
+    else:
+        hw = hh = 0
 
-            plane_strips.append(s)
+    # compute per-detector (use first detector as reference since all identical)
+    ref_det_id = min(detectors.keys())
+    ref_det = detectors[ref_det_id]
+    if hole and match_strips[ref_det_id]:
+        ms = match_strips[ref_det_id]
+        hx = (min(ms) + max(ms) + 1) / 2 * ref_det["x_pitch"]
+        hy = ref_det["y_size"] / 2
+        hole_x0, hole_x1 = hx - hw / 2, hx + hw / 2
+        hole_y0, hole_y1 = hy - hh / 2, hy + hh / 2
+        # update hole dict for display
+        hole["x_center"] = hx
+        hole["y_center"] = hy
+    else:
+        hole_x0 = hole_x1 = hole_y0 = hole_y1 = -1
+
+    # second pass: build strip lines
+    for apv, det_id, plane, plane_strips in apv_data:
+        det = detectors[det_id]
+        match = apv.get("match", "")
 
         if plane == "X":
             pitch = det["x_pitch"]
             strip_positions = sorted(set(plane_strips))
             x_min = min(strip_positions) * pitch
             x_max = (max(strip_positions) + 1) * pitch
-            det["x_apv_edges"].add(x_min)
-            det["x_apv_edges"].add(x_max)
+            if match == "+Y" and hole:
+                y0_edge, y1_edge = hole_y1, det["y_size"]
+            elif match == "-Y" and hole:
+                y0_edge, y1_edge = 0, hole_y0
+            else:
+                y0_edge, y1_edge = 0, det["y_size"]
+
+            det["x_apv_edges"].add((x_min, y0_edge, y1_edge))
+            det["x_apv_edges"].add((x_max, y0_edge, y1_edge))
 
             for s in plane_strips:
                 strip_x = s * pitch
-                det["x_strips"].append((strip_x, 0, det["y_size"]))
+                det["x_strips"].append((strip_x, y0_edge, y1_edge))
 
         elif plane == "Y":
             pitch = det["y_pitch"]
@@ -133,8 +148,8 @@ def build_strip_layout(layers, apvs, hole):
             for s in plane_strips:
                 strip_y = s * pitch
 
-                # Y strips are split at hole boundary
-                if hole and hole_y0 <= strip_y <= hole_y1:
+                # Y strips split at hole boundary (strictly inside hole)
+                if hole and hole_y0 < strip_y < hole_y1:
                     det["y_strips"].append((strip_y, 0, hole_x0))
                     det["y_strips"].append((strip_y, hole_x1, det["x_size"]))
                 else:
@@ -165,27 +180,39 @@ def plot_detector(ax, det, det_id, hole, show_every=8):
                                     zorder=5))
 
     # X strips (vertical lines) — blue
+    # group by Y extent to preserve show_every sampling within each group
+    x_by_extent = {}
+    for (x, y0, y1) in det["x_strips"]:
+        key = (y0, y1)
+        x_by_extent.setdefault(key, []).append((x, y0, y1))
     x_lines = []
-    for i, (x, y0, y1) in enumerate(sorted(det["x_strips"])):
-        if i % show_every == 0:
-            x_lines.append([(x, y0), (x, y1)])
+    for key in sorted(x_by_extent):
+        group = sorted(x_by_extent[key])
+        for i, (x, y0, y1) in enumerate(group):
+            if i % show_every == 0:
+                x_lines.append([(x, y0), (x, y1)])
     if x_lines:
         ax.add_collection(LineCollection(x_lines, colors="steelblue",
                                           linewidths=0.3, alpha=0.6))
 
     # Y strips (horizontal lines) — red
+    y_by_extent = {}
+    for (y, x0, x1) in det["y_strips"]:
+        key = (x0, x1)
+        y_by_extent.setdefault(key, []).append((y, x0, x1))
     y_lines = []
-    sorted_y = sorted(det["y_strips"])
-    for i, (y, x0, x1) in enumerate(sorted_y):
-        if i % show_every == 0:
-            y_lines.append([(x0, y), (x1, y)])
+    for key in sorted(y_by_extent):
+        group = sorted(y_by_extent[key])
+        for i, (y, x0, x1) in enumerate(group):
+            if i % show_every == 0:
+                y_lines.append([(x0, y), (x1, y)])
     if y_lines:
         ax.add_collection(LineCollection(y_lines, colors="indianred",
                                           linewidths=0.3, alpha=0.6))
 
     # APV boundaries — dashed lines
-    for x in sorted(det["x_apv_edges"]):
-        ax.axvline(x, color="steelblue", linewidth=0.8, alpha=0.5, linestyle="--")
+    for (x, y0, y1) in sorted(det["x_apv_edges"]):
+        ax.plot([x, x], [y0, y1], color="steelblue", linewidth=0.8, alpha=0.5, linestyle="--")
     for y in sorted(det["y_apv_edges"]):
         ax.axhline(y, color="indianred", linewidth=0.8, alpha=0.5, linestyle="--")
 
@@ -226,8 +253,8 @@ def main():
             sys.exit(1)
 
     print(f"Loading: {gem_map_path}")
-    layers, apvs, hole = load_gem_map(gem_map_path)
-    detectors = build_strip_layout(layers, apvs, hole)
+    layers, apvs, hole, raw = load_gem_map(gem_map_path)
+    detectors = build_strip_layout(layers, apvs, hole, raw)
 
     if hole:
         print(f"Beam hole: {hole['width']}x{hole['height']} mm "
@@ -238,13 +265,13 @@ def main():
         print(f"  {det['name']}: {det['x_size']:.1f} x {det['y_size']:.1f} mm, "
               f"{len(det['x_strips'])} X strips, {len(det['y_strips'])} Y strip segments")
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("PRad-II GEM Strip Layout", fontsize=14)
+    # all 4 GEMs are identical — show only the first one
+    det_id = min(detectors.keys())
+    det = detectors[det_id]
 
-    for det_id in sorted(detectors.keys()):
-        row = det_id // 2
-        col = det_id % 2
-        plot_detector(axes[row][col], detectors[det_id], det_id, hole)
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+    fig.suptitle(f"PRad-II GEM Strip Layout ({det['name']})", fontsize=14)
+    plot_detector(ax, det, det_id, hole)
 
     plt.tight_layout()
     plt.savefig("gem_layout.png", dpi=150, bbox_inches="tight")

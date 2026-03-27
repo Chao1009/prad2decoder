@@ -60,6 +60,15 @@ void GemSystem::Init(const std::string &map_file)
         }
     }
 
+    // --- parse global parameters ---
+    apv_channels_    = j.value("apv_channels", 128);
+    readout_center_  = j.value("readout_center", 32);
+    common_thres_    = j.value("common_mode_threshold", 20.f);
+    zerosup_thres_   = j.value("zero_suppression_threshold", 5.f);
+    crosstalk_thres_ = j.value("cross_talk_threshold", 8.f);
+    online_zero_sup_ = j.value("online_zero_suppression", false);
+    position_res_    = j.value("position_resolution", 0.08f);
+
     // --- parse APV entries ---
     apvs_.clear();
     apv_map_.clear();
@@ -78,23 +87,16 @@ void GemSystem::Init(const std::string &map_file)
             apv.plane_index = entry.value("pos", 0);
             apv.det_pos     = entry.value("det_pos", 0);
 
-            apv.readout_offset = entry.value("readout_offset", 32);
-            apv.strip_offset   = entry.value("strip_offset", 0);
-            apv.hybrid_board   = entry.value("hybrid_board", true);
-            apv.match          = entry.value("match", "");
+            apv.pin_rotate   = entry.value("pin_rotate", 0);
+            apv.shared_pos   = entry.value("shared_pos", -1);
+            apv.hybrid_board = entry.value("hybrid_board", true);
+            apv.match        = entry.value("match", "");
 
             int idx = static_cast<int>(apvs_.size());
             apv_map_[packApvKey(apv.crate_id, apv.mpd_id, apv.adc_ch)] = idx;
             apvs_.push_back(apv);
         }
     }
-
-    // --- parse global thresholds ---
-    common_thres_    = j.value("common_mode_threshold", 20.f);
-    zerosup_thres_   = j.value("zero_suppression_threshold", 5.f);
-    crosstalk_thres_ = j.value("cross_talk_threshold", 8.f);
-    online_zero_sup_ = j.value("online_zero_suppression", false);
-    position_res_    = j.value("position_resolution", 0.08f);
 
     // --- allocate working data ---
     apv_work_.resize(apvs_.size());
@@ -467,7 +469,15 @@ void GemSystem::buildStripMap(int apv_idx)
     auto &cfg = apvs_[apv_idx];
     auto &work = apv_work_[apv_idx];
 
-    for (int ch = 0; ch < APV_STRIP_SIZE; ++ch) {
+    const int N = apv_channels_;
+    const int center = readout_center_;
+
+    // derive from physical parameters
+    int readout_off = center + cfg.pin_rotate;
+    int eff_pos = (cfg.shared_pos >= 0) ? cfg.shared_pos : cfg.plane_index;
+    int plane_shift = (eff_pos - cfg.plane_index) * N - cfg.pin_rotate;
+
+    for (int ch = 0; ch < N; ++ch) {
         // Step 1: APV25 internal channel mapping (chip wiring, universal)
         int strip = 32 * (ch % 4) + 8 * (ch / 4) - 31 * (ch / 16);
 
@@ -475,26 +485,24 @@ void GemSystem::buildStripMap(int apv_idx)
         if (cfg.hybrid_board)
             strip = strip + 1 + strip % 4 - 5 * ((strip / 4) % 2);
 
-        // Step 3: APV25 channel to readout strip mapping
-        // readout_offset > 0: apply odd/even mapping around offset point
-        // readout_offset == 0: skip (steps 1+2 give final local strip)
-        if (cfg.readout_offset > 0) {
-            int off = cfg.readout_offset;
+        // Step 3: readout strip mapping (odd/even fan-out around center)
+        // readout_off > 0: apply mapping; 0: skip (steps 1+2 give final strip)
+        if (readout_off > 0) {
             if (strip & 1)
-                strip = off - (strip + 1) / 2;
+                strip = readout_off - (strip + 1) / 2;
             else
-                strip = off + strip / 2;
+                strip = readout_off + strip / 2;
         }
 
-        // Step 4: 7-bit mask
-        strip &= 0x7f;
+        // Step 4: channel mask
+        strip &= (N - 1);
 
         // Step 5: orient flip
         if (cfg.orient == 1)
-            strip = 127 - strip;
+            strip = (N - 1) - strip;
 
         // Step 6: plane-wide strip number
-        strip += cfg.strip_offset + cfg.plane_index * APV_STRIP_SIZE;
+        strip += plane_shift + cfg.plane_index * N;
 
         work.strip_map[ch] = strip;
     }
