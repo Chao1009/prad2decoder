@@ -148,9 +148,16 @@ public:
     int GetNApvs() const { return static_cast<int>(apvs_.size()); }
     const ApvConfig& GetApvConfig(int idx) const { return apvs_[idx]; }
 
+    // Per-APV zero-suppression results (valid after ProcessEvent)
+    bool  IsChannelHit(int apv_idx, int ch) const { return apv_work_[apv_idx].hit_pos[ch]; }
+    float GetProcessedAdc(int apv_idx, int ch, int ts) const {
+        return apv_work_[apv_idx].raw[ts * APV_STRIP_SIZE + ch];
+    }
+
     // Configuration
     float GetCommonModeThreshold() const { return common_thres_; }
     float GetZeroSupThreshold()    const { return zerosup_thres_; }
+    float GetCrossTalkThreshold()  const { return crosstalk_thres_; }
     void  SetCommonModeThreshold(float v) { common_thres_ = v; }
     void  SetZeroSupThreshold(float v)    { zerosup_thres_ = v; }
 

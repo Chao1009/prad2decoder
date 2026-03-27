@@ -262,7 +262,50 @@ static int dumpEventJson(const ssp::SspEventData &ssp,
     }
     root["raw_apvs"] = raw_arr;
 
-    // --- per-detector: strip hits, clusters, 2D hits ---
+    // --- zero-suppressed APV channels (APV address preserved) ---
+    json zs_arr = json::array();
+    float zs_thres = sys.GetZeroSupThreshold();
+    float xt_thres = sys.GetCrossTalkThreshold();
+    for (int m = 0; m < ssp.nmpds; ++m) {
+        auto &mpd = ssp.mpds[m];
+        if (!mpd.present) continue;
+        for (int a = 0; a < ssp::MAX_APVS_PER_MPD; ++a) {
+            auto &apv = mpd.apvs[a];
+            if (!apv.present) continue;
+            int idx = sys.FindApvIndex(mpd.crate_id, mpd.mpd_id, a);
+            if (idx < 0) continue;
+
+            json ch_obj = json::object();
+            auto &cfg = sys.GetApvConfig(idx);
+            for (int ch = 0; ch < ssp::APV_STRIP_SIZE; ++ch) {
+                if (!sys.IsChannelHit(idx, ch)) continue;
+
+                float max_charge = -1e9f;
+                short max_tb = 0;
+                json ts = json::array();
+                for (int t = 0; t < ssp::SSP_TIME_SAMPLES; ++t) {
+                    float val = sys.GetProcessedAdc(idx, ch, t);
+                    ts.push_back(r1(val));
+                    if (val > max_charge) { max_charge = val; max_tb = static_cast<short>(t); }
+                }
+                bool xtalk = (max_charge < cfg.pedestal[ch].noise * xt_thres)
+                          && (max_charge > cfg.pedestal[ch].noise * zs_thres);
+                ch_obj[std::to_string(ch)] = {
+                    {"charge", r1(max_charge)}, {"max_timebin", max_tb},
+                    {"cross_talk", xtalk}, {"ts_adc", ts}
+                };
+            }
+            if (!ch_obj.empty()) {
+                zs_arr.push_back({
+                    {"crate", mpd.crate_id}, {"mpd", mpd.mpd_id}, {"adc", a},
+                    {"channels", ch_obj}
+                });
+            }
+        }
+    }
+    root["zs_apvs"] = zs_arr;
+
+    // --- per-detector: clusters, 2D hits ---
     json det_arr = json::array();
     auto &dets = sys.GetDetectors();
     for (int d = 0; d < sys.GetNDetectors(); ++d) {
@@ -276,23 +319,6 @@ static int dumpEventJson(const ssp::SspEventData &ssp,
 
         for (int p = 0; p < 2; ++p) {
             std::string pre = (p == 0) ? "x" : "y";
-
-            // strip hits (after pedestal/CM/zero-suppression)
-            auto &hits = sys.GetPlaneHits(d, p);
-            json h_arr = json::array();
-            for (auto &h : hits) {
-                json hj;
-                hj["strip"]       = h.strip;
-                hj["position"]    = r2(h.position);
-                hj["charge"]      = r1(h.charge);
-                hj["max_timebin"] = h.max_timebin;
-                hj["cross_talk"]  = h.cross_talk;
-                json ts = json::array();
-                for (auto v : h.ts_adc) ts.push_back(r1(v));
-                hj["ts_adc"] = ts;
-                h_arr.push_back(hj);
-            }
-            dj[pre + "_hits"] = h_arr;
 
             // 1D clusters
             auto &clusters = sys.GetPlaneClusters(d, p);
