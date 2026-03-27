@@ -164,50 +164,27 @@ def plot_detector(ax, det_geom, det_data, det_hits, hole, norm):
         _format_axes(ax, x_size, y_size)
         return
 
-    # ── cluster extent bands ─────────────────────────────────────────
-    for cl in det_data.get("x_clusters", []):
-        strips = cl.get("hit_strips", [])
-        if strips:
-            x0 = min(strips) * x_pitch - x_pitch * 0.5
-            x1 = (max(strips) + 1) * x_pitch - x_pitch * 0.5
-            ax.axvspan(x0, x1, alpha=0.12, color="steelblue", zorder=1.5)
-
-    for cl in det_data.get("y_clusters", []):
-        strips = cl.get("hit_strips", [])
-        if strips:
-            y0 = min(strips) * y_pitch - y_pitch * 0.5
-            y1 = (max(strips) + 1) * y_pitch - y_pitch * 0.5
-            ax.axhspan(y0, y1, alpha=0.12, color="indianred", zorder=1.5)
-
     # ── fired strips (geometry from APV properties) ──────────────────
     _draw_strips(ax, x_hits, "X", cm.Blues, norm)
     _draw_strips(ax, y_hits, "Y", cm.Reds, norm)
 
-    # ── cluster center markers ───────────────────────────────────────
+    # ── cluster center markers (triangles at detector edge) ──────────
     for cl in det_data.get("x_clusters", []):
         cx = cl["position"] + x_plane_size / 2 - x_pitch / 2
-        label = f"Q={cl['total_charge']:.0f} n={cl['size']}"
-        ax.plot(cx, -y_size * 0.025, "^", color="blue", markersize=7,
+        ax.plot(cx, -y_size * 0.02, "^", color="blue", markersize=6,
                 clip_on=False, zorder=6)
-        ax.annotate(label, (cx, -y_size * 0.025), fontsize=5,
-                    ha="center", va="top", color="blue",
-                    xytext=(0, -6), textcoords="offset points")
 
     for cl in det_data.get("y_clusters", []):
         cy = cl["position"] + y_plane_size / 2 - y_pitch / 2
-        label = f"Q={cl['total_charge']:.0f} n={cl['size']}"
-        ax.plot(-x_size * 0.025, cy, ">", color="red", markersize=7,
+        ax.plot(-x_size * 0.02, cy, ">", color="red", markersize=6,
                 clip_on=False, zorder=6)
-        ax.annotate(label, (-x_size * 0.025, cy), fontsize=5,
-                    ha="right", va="center", color="red",
-                    xytext=(-6, 0), textcoords="offset points")
 
     # ── 2D reconstructed hits ────────────────────────────────────────
     for h in det_data.get("hits_2d", []):
         hx = h["x"] + x_plane_size / 2 - x_pitch / 2
         hy = h["y"] + y_plane_size / 2 - y_pitch / 2
-        ax.plot(hx, hy, "*", color="lime", markersize=14,
-                markeredgecolor="darkgreen", markeredgewidth=0.5, zorder=7)
+        ax.plot(hx, hy, "+", color="darkgreen", markersize=12,
+                markeredgewidth=2, zorder=7)
 
     # ── title and formatting ─────────────────────────────────────────
     n_xh = len(x_hits)
@@ -266,19 +243,16 @@ def add_legend(fig):
     handles = [
         mpatches.Patch(color="steelblue", alpha=0.6, label="X strip hits"),
         mpatches.Patch(color="indianred", alpha=0.6, label="Y strip hits"),
-        mpatches.Patch(facecolor="steelblue", alpha=0.15, label="X cluster range"),
-        mpatches.Patch(facecolor="indianred", alpha=0.15, label="Y cluster range"),
         plt.Line2D([], [], marker="^", color="blue", linestyle="None",
-                   markersize=7, label="X cluster center"),
+                   markersize=6, label="X cluster center"),
         plt.Line2D([], [], marker=">", color="red", linestyle="None",
-                   markersize=7, label="Y cluster center"),
-        plt.Line2D([], [], marker="*", color="lime", linestyle="None",
-                   markeredgecolor="darkgreen", markersize=12,
-                   label="2D hit"),
+                   markersize=6, label="Y cluster center"),
+        plt.Line2D([], [], marker="+", color="darkgreen", linestyle="None",
+                   markeredgewidth=2, markersize=10, label="2D hit"),
         plt.Line2D([], [], color="gray", linestyle="--", linewidth=0.6,
                    alpha=0.5, label="Cross-talk hit"),
     ]
-    fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=8,
+    fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=11,
                framealpha=0.9)
 
 
@@ -336,16 +310,41 @@ def main():
         print("No detector data in event JSON")
         sys.exit(1)
 
-    # print summary
+    # print summary and cluster table
     for dd in det_list:
         did = dd["id"]
         hits = det_hits.get(did, {"x": [], "y": []})
         nx = len(hits["x"])
         ny = len(hits["y"])
-        nc = len(dd.get("x_clusters", [])) + len(dd.get("y_clusters", []))
+        xcl = dd.get("x_clusters", [])
+        ycl = dd.get("y_clusters", [])
         n2d = len(dd.get("hits_2d", []))
-        print(f"  {dd['name']}: {nx} X hits, {ny} Y hits, "
-              f"{nc} clusters, {n2d} 2D hits")
+        print(f"\n  {dd['name']}: {nx} X hits, {ny} Y hits, "
+              f"{len(xcl)}+{len(ycl)} clusters, {n2d} 2D hits")
+
+        if xcl or ycl:
+            print(f"  {'plane':>5} {'pos(mm)':>8} {'peak':>8} {'total':>8} "
+                  f"{'size':>4} {'tbin':>4} {'xtalk':>5}  strips")
+            print(f"  {'-'*5:>5} {'-'*8:>8} {'-'*8:>8} {'-'*8:>8} "
+                  f"{'-'*4:>4} {'-'*4:>4} {'-'*5:>5}  {'-'*10}")
+            for cl in xcl:
+                strips = cl.get("hit_strips", [])
+                srange = f"{min(strips)}-{max(strips)}" if strips else ""
+                print(f"  {'X':>5} {cl['position']:>8.2f} {cl['peak_charge']:>8.1f} "
+                      f"{cl['total_charge']:>8.1f} {cl['size']:>4} "
+                      f"{cl['max_timebin']:>4} {'y' if cl.get('cross_talk') else '':>5}  "
+                      f"{srange}")
+            for cl in ycl:
+                strips = cl.get("hit_strips", [])
+                srange = f"{min(strips)}-{max(strips)}" if strips else ""
+                print(f"  {'Y':>5} {cl['position']:>8.2f} {cl['peak_charge']:>8.1f} "
+                      f"{cl['total_charge']:>8.1f} {cl['size']:>4} "
+                      f"{cl['max_timebin']:>4} {'y' if cl.get('cross_talk') else '':>5}  "
+                      f"{srange}")
+
+        if dd.get("hits_2d"):
+            print(f"  2D hits: ", end="")
+            print("  ".join(f"({h['x']:.1f}, {h['y']:.1f})" for h in dd["hits_2d"]))
 
     # figure size matched to detector aspect ratio (~1:2)
     ref_det = detectors[min(detectors.keys())]
@@ -353,13 +352,8 @@ def main():
     cell_w = 6
     cell_h = cell_w * det_aspect
 
-    if n == 1:
-        cols, rows = 1, 1
-    elif n <= 2:
-        cols, rows = n, 1
-    else:
-        cols = 2
-        rows = (n + 1) // 2
+    cols = n
+    rows = 1
 
     fig, axes = plt.subplots(rows, cols,
                              figsize=(cell_w * cols, cell_h * rows + 1.5),
@@ -386,11 +380,20 @@ def main():
     for i in range(len(det_list), len(axes)):
         axes[i].set_visible(False)
 
-    # shared colorbar
-    sm = cm.ScalarMappable(cmap=cm.hot, norm=norm)
-    sm.set_array([])
-    fig.colorbar(sm, ax=axes[:len(det_list)], shrink=0.6, pad=0.02,
-                 label="Charge (ADC)")
+    # dual colorbars matching strip colors
+    active_axes = axes[:len(det_list)]
+    sm_x = cm.ScalarMappable(cmap=cm.Blues, norm=norm)
+    sm_x.set_array([])
+    sm_y = cm.ScalarMappable(cmap=cm.Reds, norm=norm)
+    sm_y.set_array([])
+    cb_x = fig.colorbar(sm_x, ax=active_axes, shrink=0.4, pad=0.01,
+                         aspect=30, location="right")
+    cb_y = fig.colorbar(sm_y, ax=active_axes, shrink=0.4, pad=0.01,
+                         aspect=30, location="right")
+    cb_x.set_label("X charge (ADC)", fontsize=11)
+    cb_y.set_label("Y charge (ADC)", fontsize=11)
+    cb_x.ax.tick_params(labelsize=10)
+    cb_y.ax.tick_params(labelsize=10)
 
     fig.suptitle(f"GEM Cluster View -- Event #{ev_num}", fontsize=14)
     add_legend(fig)
