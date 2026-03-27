@@ -11,6 +11,7 @@
 //   -m hits       Process through GemSystem → show strip hits per plane
 //   -m clusters   Full reconstruction → show clusters and 2D GEM hits
 //   -m summary    Statistics: MPDs, APVs, strips, hits, clusters per event
+//   -m evdump     Dump single event to JSON (raw + hits + clusters)
 //
 // Options:
 //   -D <file>     DAQ configuration (auto-searches daq_config.json if omitted)
@@ -207,6 +208,144 @@ static void dumpClusters(gem::GemSystem &sys, int phys_ev)
 }
 
 // -------------------------------------------------------------------------
+// Mode: evdump — dump single event data to JSON file
+// -------------------------------------------------------------------------
+static int dumpEventJson(const ssp::SspEventData &ssp,
+                         gem::GemSystem &sys,
+                         int phys_ev,
+                         int32_t trigger_num,
+                         uint32_t trigger_bits,
+                         const std::string &output_file)
+{
+    using json = nlohmann::json;
+    auto r1 = [](float v) -> double { return std::round(v * 10.) / 10.; };
+    auto r2 = [](float v) -> double { return std::round(v * 100.) / 100.; };
+
+    json root;
+    root["event_number"]  = phys_ev;
+    root["trigger_number"] = trigger_num;
+    root["trigger_bits"]   = trigger_bits;
+
+    // --- raw APV data (before pedestal/CM/zero-sup) ---
+    json raw_arr = json::array();
+    for (int m = 0; m < ssp.nmpds; ++m) {
+        auto &mpd = ssp.mpds[m];
+        if (!mpd.present) continue;
+        for (int a = 0; a < ssp::MAX_APVS_PER_MPD; ++a) {
+            auto &apv = mpd.apvs[a];
+            if (!apv.present) continue;
+
+            json aj;
+            aj["crate"] = mpd.crate_id;
+            aj["mpd"]   = mpd.mpd_id;
+            aj["adc"]   = a;
+
+            int idx = sys.FindApvIndex(mpd.crate_id, mpd.mpd_id, a);
+            if (idx >= 0) {
+                auto &cfg = sys.GetApvConfig(idx);
+                aj["det"]   = cfg.det_id;
+                aj["plane"] = (cfg.plane_type == 0) ? "X" : "Y";
+                aj["pos"]   = cfg.plane_index;
+            }
+
+            json ch_obj = json::object();
+            for (int s = 0; s < ssp::APV_STRIP_SIZE; ++s) {
+                if (!apv.hasStrip(s)) continue;
+                json samples = json::array();
+                for (int t = 0; t < ssp::SSP_TIME_SAMPLES; ++t)
+                    samples.push_back(apv.strips[s][t]);
+                ch_obj[std::to_string(s)] = samples;
+            }
+            aj["channels"] = ch_obj;
+            raw_arr.push_back(aj);
+        }
+    }
+    root["raw_apvs"] = raw_arr;
+
+    // --- per-detector: strip hits, clusters, 2D hits ---
+    json det_arr = json::array();
+    auto &dets = sys.GetDetectors();
+    for (int d = 0; d < sys.GetNDetectors(); ++d) {
+        json dj;
+        dj["id"]       = d;
+        dj["name"]     = dets[d].name;
+        dj["x_pitch"]  = dets[d].planes[0].pitch;
+        dj["y_pitch"]  = dets[d].planes[1].pitch;
+        dj["x_strips"] = dets[d].planes[0].n_apvs * 128;
+        dj["y_strips"] = dets[d].planes[1].n_apvs * 128;
+
+        for (int p = 0; p < 2; ++p) {
+            std::string pre = (p == 0) ? "x" : "y";
+
+            // strip hits (after pedestal/CM/zero-suppression)
+            auto &hits = sys.GetPlaneHits(d, p);
+            json h_arr = json::array();
+            for (auto &h : hits) {
+                json hj;
+                hj["strip"]       = h.strip;
+                hj["position"]    = r2(h.position);
+                hj["charge"]      = r1(h.charge);
+                hj["max_timebin"] = h.max_timebin;
+                hj["cross_talk"]  = h.cross_talk;
+                json ts = json::array();
+                for (auto v : h.ts_adc) ts.push_back(r1(v));
+                hj["ts_adc"] = ts;
+                h_arr.push_back(hj);
+            }
+            dj[pre + "_hits"] = h_arr;
+
+            // 1D clusters
+            auto &clusters = sys.GetPlaneClusters(d, p);
+            json cl_arr = json::array();
+            for (auto &cl : clusters) {
+                json cj;
+                cj["position"]     = r2(cl.position);
+                cj["peak_charge"]  = r1(cl.peak_charge);
+                cj["total_charge"] = r1(cl.total_charge);
+                cj["max_timebin"]  = cl.max_timebin;
+                cj["cross_talk"]   = cl.cross_talk;
+                cj["size"]         = static_cast<int>(cl.hits.size());
+                json hs = json::array();
+                for (auto &sh : cl.hits) hs.push_back(sh.strip);
+                cj["hit_strips"] = hs;
+                cl_arr.push_back(cj);
+            }
+            dj[pre + "_clusters"] = cl_arr;
+        }
+
+        // 2D reconstructed hits
+        auto &h2d = sys.GetHits(d);
+        json h2d_arr = json::array();
+        for (auto &h : h2d) {
+            json hj;
+            hj["x"] = r2(h.x);  hj["y"] = r2(h.y);
+            hj["x_charge"] = r1(h.x_charge);
+            hj["y_charge"] = r1(h.y_charge);
+            hj["x_peak"]   = r1(h.x_peak);
+            hj["y_peak"]   = r1(h.y_peak);
+            hj["x_size"]   = h.x_size;
+            hj["y_size"]   = h.y_size;
+            h2d_arr.push_back(hj);
+        }
+        dj["hits_2d"] = h2d_arr;
+
+        det_arr.push_back(dj);
+    }
+    root["detectors"] = det_arr;
+
+    // write
+    std::ofstream of(output_file);
+    if (!of.is_open()) {
+        std::cerr << "Error: cannot write " << output_file << "\n";
+        return 1;
+    }
+    of << root.dump(2) << "\n";
+    of.close();
+    std::cerr << "Written: " << output_file << "\n";
+    return 0;
+}
+
+// -------------------------------------------------------------------------
 // Summary accumulator
 // -------------------------------------------------------------------------
 struct EventStats {
@@ -400,7 +539,8 @@ static void usage(const char *prog)
         << "  -m hits       Strip hits after pedestal/CM/zero-sup\n"
         << "  -m clusters   Full reconstruction: clusters + 2D hits\n"
         << "  -m summary    Per-event statistics table\n"
-        << "  -m ped        Compute per-strip pedestals → output file\n\n"
+        << "  -m ped        Compute per-strip pedestals → output file\n"
+        << "  -m evdump     Dump single event to JSON (raw + hits + clusters)\n\n"
         << "Options:\n"
         << "  -D <file>     DAQ configuration (auto-searches daq_config.json if omitted)\n"
         << "  -G <file>     GEM map file (default: gem_map.json)\n"
@@ -448,9 +588,17 @@ int main(int argc, char *argv[])
     if (mode == "ped" && max_events == 10)
         max_events = 0;
 
+    // evdump mode defaults: one event, output to gem_event.json
+    if (mode == "evdump") {
+        if (target_event == 0 && max_events == 10)
+            max_events = 1;
+        if (output_file == "gem_ped.json")
+            output_file = "gem_event.json";
+    }
+
     // validate mode
-    bool need_gem = (mode == "hits" || mode == "clusters" || mode == "summary");
-    bool need_cluster = (mode == "clusters" || mode == "summary");
+    bool need_gem = (mode == "hits" || mode == "clusters" || mode == "summary" || mode == "evdump");
+    bool need_cluster = (mode == "clusters" || mode == "summary" || mode == "evdump");
 
     // auto-search for daq_config.json if not specified
     if (daq_config_file.empty()) {
@@ -614,6 +762,13 @@ int main(int argc, char *argv[])
                           << " bits=0x" << std::hex << event.info.trigger_bits
                           << std::dec << "]\n";
                 dumpClusters(*gem_sys, phys_count);
+            }
+            else if (mode == "evdump") {
+                if (dumpEventJson(ssp_evt, *gem_sys, phys_count,
+                                  event.info.trigger_number,
+                                  event.info.trigger_bits,
+                                  output_file) != 0)
+                    return 1;
             }
             else { // summary
                 EventStats st;

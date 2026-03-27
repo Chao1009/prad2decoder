@@ -144,6 +144,10 @@ public:
     // DAQ→APV index lookup (O(1))
     int FindApvIndex(int crate, int mpd, int adc) const;
 
+    // APV config access (for diagnostics/serialization)
+    int GetNApvs() const { return static_cast<int>(apvs_.size()); }
+    const ApvConfig& GetApvConfig(int idx) const { return apvs_[idx]; }
+
     // Configuration
     float GetCommonModeThreshold() const { return common_thres_; }
     float GetZeroSupThreshold()    const { return zerosup_thres_; }
