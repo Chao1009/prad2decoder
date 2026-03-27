@@ -256,150 +256,162 @@ def add_legend(fig):
                framealpha=0.9)
 
 
-# ── main ─────────────────────────────────────────────────────────────────
+# ── cluster table printout ────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Visualize GEM clustering from gem_dump -m evdump JSON")
-    parser.add_argument("event_json", help="Event JSON from gem_dump -m evdump")
-    parser.add_argument("gem_map", nargs="?",
-                        help="GEM map JSON (default: auto-search)")
-    parser.add_argument("--det", type=int, default=-1,
-                        help="Show only detector N (default: all)")
-    parser.add_argument("-o", "--output", default="gem_cluster_view.png",
-                        help="Output image file (default: gem_cluster_view.png)")
-    args = parser.parse_args()
-
-    # find gem_map.json
-    if args.gem_map:
-        gem_map_path = args.gem_map
-    else:
-        for candidate in ["database/gem_map.json",
-                          "../database/gem_map.json",
-                          "gem_map.json"]:
-            if os.path.exists(candidate):
-                gem_map_path = candidate
-                break
-        else:
-            print("Error: cannot find gem_map.json. Specify path as argument.")
-            sys.exit(1)
-
-    # load data
-    print(f"Event data : {args.event_json}")
-    event = load_event(args.event_json)
-
-    print(f"GEM map    : {gem_map_path}")
-    layers, gem_map_apvs, hole, raw = load_gem_map(gem_map_path)
-    detectors = build_strip_layout(layers, gem_map_apvs, hole, raw)
-    apv_map = build_apv_map(gem_map_apvs)
-
-    # convert zero-suppressed APV data to drawable strip hits
-    zs_apvs = event.get("zs_apvs", [])
-    det_hits = process_zs_hits(zs_apvs, apv_map, detectors, hole, raw)
-
-    ev_num = event.get("event_number", "?")
-    det_list = event.get("detectors", [])
-    if args.det >= 0:
-        det_list = [d for d in det_list if d["id"] == args.det]
-        if not det_list:
-            print(f"Error: detector {args.det} not in event data")
-            sys.exit(1)
-
-    n = len(det_list)
-    if n == 0:
-        print("No detector data in event JSON")
-        sys.exit(1)
-
-    # print summary and cluster table
+def print_event_summary(det_list, det_hits):
     for dd in det_list:
         did = dd["id"]
         hits = det_hits.get(did, {"x": [], "y": []})
-        nx = len(hits["x"])
-        ny = len(hits["y"])
         xcl = dd.get("x_clusters", [])
         ycl = dd.get("y_clusters", [])
-        n2d = len(dd.get("hits_2d", []))
-        print(f"\n  {dd['name']}: {nx} X hits, {ny} Y hits, "
-              f"{len(xcl)}+{len(ycl)} clusters, {n2d} 2D hits")
-
+        print(f"\n  {dd['name']}: {len(hits['x'])} X hits, {len(hits['y'])} Y hits, "
+              f"{len(xcl)}+{len(ycl)} clusters, {len(dd.get('hits_2d',[]))} 2D hits")
         if xcl or ycl:
             print(f"  {'plane':>5} {'pos(mm)':>8} {'peak':>8} {'total':>8} "
                   f"{'size':>4} {'tbin':>4} {'xtalk':>5}  strips")
             print(f"  {'-'*5:>5} {'-'*8:>8} {'-'*8:>8} {'-'*8:>8} "
                   f"{'-'*4:>4} {'-'*4:>4} {'-'*5:>5}  {'-'*10}")
-            for cl in xcl:
-                strips = cl.get("hit_strips", [])
-                srange = f"{min(strips)}-{max(strips)}" if strips else ""
-                print(f"  {'X':>5} {cl['position']:>8.2f} {cl['peak_charge']:>8.1f} "
-                      f"{cl['total_charge']:>8.1f} {cl['size']:>4} "
-                      f"{cl['max_timebin']:>4} {'y' if cl.get('cross_talk') else '':>5}  "
-                      f"{srange}")
-            for cl in ycl:
-                strips = cl.get("hit_strips", [])
-                srange = f"{min(strips)}-{max(strips)}" if strips else ""
-                print(f"  {'Y':>5} {cl['position']:>8.2f} {cl['peak_charge']:>8.1f} "
-                      f"{cl['total_charge']:>8.1f} {cl['size']:>4} "
-                      f"{cl['max_timebin']:>4} {'y' if cl.get('cross_talk') else '':>5}  "
-                      f"{srange}")
-
+            for plane, cls in [("X", xcl), ("Y", ycl)]:
+                for cl in cls:
+                    strips = cl.get("hit_strips", [])
+                    srange = f"{min(strips)}-{max(strips)}" if strips else ""
+                    print(f"  {plane:>5} {cl['position']:>8.2f} {cl['peak_charge']:>8.1f} "
+                          f"{cl['total_charge']:>8.1f} {cl['size']:>4} "
+                          f"{cl['max_timebin']:>4} {'y' if cl.get('cross_talk') else '':>5}  "
+                          f"{srange}")
         if dd.get("hits_2d"):
-            print(f"  2D hits: ", end="")
-            print("  ".join(f"({h['x']:.1f}, {h['y']:.1f})" for h in dd["hits_2d"]))
+            print("  2D hits: " +
+                  "  ".join(f"({h['x']:.1f}, {h['y']:.1f})" for h in dd["hits_2d"]))
 
-    # figure size matched to detector aspect ratio (~1:2)
-    ref_det = detectors[min(detectors.keys())]
-    det_aspect = ref_det["y_size"] / ref_det["x_size"]
+
+# ── batch / single-file rendering ────────────────────────────────────────
+
+def render_event(event_path, gem_map_path, detectors, apv_map, hole, raw,
+                 det_filter=-1, output=None):
+    """Render one event JSON to a PNG file. Returns output path."""
+    event = load_event(event_path)
+    det_list = event.get("detectors", [])
+    if det_filter >= 0:
+        det_list = [d for d in det_list if d["id"] == det_filter]
+    det_hits = process_zs_hits(event.get("zs_apvs", []), apv_map,
+                               detectors, hole, raw)
+    n = len(det_list)
+    if n == 0:
+        return None
+
+    ref = detectors[min(detectors.keys())]
     cell_w = 6
-    cell_h = cell_w * det_aspect
+    cell_h = cell_w * ref["y_size"] / ref["x_size"]
 
-    cols = n
-    rows = 1
-
-    fig, axes = plt.subplots(rows, cols,
-                             figsize=(cell_w * cols, cell_h * rows + 1.5),
+    fig, axes = plt.subplots(1, n,
+                             figsize=(cell_w * n, cell_h + 1.5),
                              constrained_layout=True)
     if n == 1:
         axes = [axes]
     else:
-        axes = list(axes.flat) if hasattr(axes, "flat") else list(axes)
+        axes = list(axes.flat) if hasattr(axes, "flat") else axes
 
-    # global charge normalization
-    all_charges = []
-    for hits in det_hits.values():
-        all_charges += [h[3] for h in hits["x"]]  # charge is index 3
-        all_charges += [h[3] for h in hits["y"]]
-    vmax = max(all_charges) if all_charges else 1
-    norm = Normalize(vmin=0, vmax=vmax)
+    all_q = []
+    for h in det_hits.values():
+        all_q += [x[3] for x in h["x"]] + [x[3] for x in h["y"]]
+    norm = Normalize(vmin=0, vmax=max(all_q) if all_q else 1)
 
-    for i, det_data in enumerate(det_list):
-        did = det_data["id"]
-        det_geom = detectors.get(did, detectors[min(detectors.keys())])
-        hits = det_hits.get(did, {"x": [], "y": []})
-        plot_detector(axes[i], det_geom, det_data, hits, hole, norm)
-
-    for i in range(len(det_list), len(axes)):
+    for i, dd in enumerate(det_list):
+        did = dd["id"]
+        dg = detectors.get(did, detectors[min(detectors.keys())])
+        plot_detector(axes[i], dg, dd,
+                      det_hits.get(did, {"x": [], "y": []}), hole, norm)
+    for i in range(n, len(axes)):
         axes[i].set_visible(False)
 
-    # dual colorbars matching strip colors
-    active_axes = axes[:len(det_list)]
-    sm_x = cm.ScalarMappable(cmap=cm.Blues, norm=norm)
-    sm_x.set_array([])
-    sm_y = cm.ScalarMappable(cmap=cm.Reds, norm=norm)
-    sm_y.set_array([])
-    cb_x = fig.colorbar(sm_x, ax=active_axes, shrink=0.4, pad=0.01,
-                         aspect=30, location="right")
-    cb_y = fig.colorbar(sm_y, ax=active_axes, shrink=0.4, pad=0.01,
-                         aspect=30, location="right")
-    cb_x.set_label("X charge (ADC)", fontsize=11)
-    cb_y.set_label("Y charge (ADC)", fontsize=11)
-    cb_x.ax.tick_params(labelsize=10)
-    cb_y.ax.tick_params(labelsize=10)
+    active = axes[:n]
+    for cmap_obj, label in [(cm.Blues, "X charge (ADC)"),
+                            (cm.Reds, "Y charge (ADC)")]:
+        sm = cm.ScalarMappable(cmap=cmap_obj, norm=norm); sm.set_array([])
+        cb = fig.colorbar(sm, ax=active, shrink=0.4, pad=0.01,
+                          aspect=30, location="right")
+        cb.set_label(label, fontsize=11); cb.ax.tick_params(labelsize=10)
 
+    ev_num = event.get("event_number", "?")
     fig.suptitle(f"GEM Cluster View -- Event #{ev_num}", fontsize=14)
     add_legend(fig)
-    plt.savefig(args.output, dpi=150, bbox_inches="tight")
-    print(f"Saved: {args.output}")
-    plt.show()
+
+    if output is None:
+        output = os.path.splitext(event_path)[0] + ".png"
+    fig.savefig(output, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+# ── main ─────────────────────────────────────────────────────────────────
+
+def main():
+    import glob as globmod
+
+    parser = argparse.ArgumentParser(
+        description="Visualize GEM clustering from gem_dump -m evdump JSON. "
+                    "Accepts a single file, directory, or glob pattern.")
+    parser.add_argument("event_json",
+                        help="Event JSON file, directory, or glob pattern")
+    parser.add_argument("gem_map", nargs="?",
+                        help="GEM map JSON (default: auto-search)")
+    parser.add_argument("--det", type=int, default=-1,
+                        help="Show only detector N (default: all)")
+    parser.add_argument("-o", "--output", default=None,
+                        help="Output PNG (single file mode only)")
+    args = parser.parse_args()
+
+    # find gem_map
+    gem_map_path = args.gem_map
+    if not gem_map_path:
+        for c in ["database/gem_map.json", "../database/gem_map.json", "gem_map.json"]:
+            if os.path.exists(c):
+                gem_map_path = c; break
+    if not gem_map_path:
+        print("Error: cannot find gem_map.json"); sys.exit(1)
+
+    # collect files
+    path = args.event_json
+    if os.path.isdir(path):
+        files = sorted(globmod.glob(os.path.join(path, "gem_event*.json")))
+    elif "*" in path or "?" in path:
+        files = sorted(globmod.glob(path))
+    else:
+        files = [path]
+    files = [f for f in files if f.lower().endswith(".json")]
+    if not files:
+        print("Error: no JSON files found"); sys.exit(1)
+
+    # load geometry once
+    print(f"GEM map    : {gem_map_path}")
+    layers, gem_map_apvs, hole, raw = load_gem_map(gem_map_path)
+    detectors = build_strip_layout(layers, gem_map_apvs, hole, raw)
+    apv_map = build_apv_map(gem_map_apvs)
+
+    print(f"Files      : {len(files)}")
+
+    for i, fpath in enumerate(files):
+        fname = os.path.basename(fpath)
+        event = load_event(fpath)
+        if not isinstance(event, dict) or "detectors" not in event:
+            print(f"\n[{i+1}/{len(files)}] {fname} -- skipped (not an event file)")
+            continue
+        det_list = event.get("detectors", [])
+        if args.det >= 0:
+            det_list = [d for d in det_list if d["id"] == args.det]
+        det_hits = process_zs_hits(event.get("zs_apvs", []), apv_map,
+                                   detectors, hole, raw)
+
+        print(f"\n[{i+1}/{len(files)}] {fname}")
+        print_event_summary(det_list, det_hits)
+
+        out = args.output if (args.output and len(files) == 1) else None
+        result = render_event(fpath, gem_map_path, detectors, apv_map, hole,
+                              raw, args.det, out)
+        if result:
+            print(f"  -> {result}")
+
+    print(f"\nDone: {len(files)} file(s) processed.")
 
 
 if __name__ == "__main__":

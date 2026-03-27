@@ -187,6 +187,8 @@ void GemSystem::LoadCommonModeRange(const std::string &cm_file)
 
 void GemSystem::Clear()
 {
+    for (auto &w : apv_work_)
+        std::memset(w.hit_pos, 0, sizeof(w.hit_pos));
     for (auto &pd : plane_data_) {
         pd[0].hits.clear();
         pd[0].clusters.clear();
