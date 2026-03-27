@@ -165,8 +165,8 @@ def plot_detector(ax, det_geom, det_data, det_hits, hole, norm):
         return
 
     # ── fired strips (geometry from APV properties) ──────────────────
-    _draw_strips(ax, x_hits, "X", cm.Blues, norm)
-    _draw_strips(ax, y_hits, "Y", cm.Reds, norm)
+    _draw_strips(ax, x_hits, "X", cm.winter, norm)
+    _draw_strips(ax, y_hits, "Y", cm.autumn, norm)
 
     # ── cluster center markers (triangles at detector edge) ──────────
     for cl in det_data.get("x_clusters", []):
@@ -241,8 +241,8 @@ def _format_axes(ax, x_size, y_size):
 
 def add_legend(fig):
     handles = [
-        mpatches.Patch(color="steelblue", alpha=0.6, label="X strip hits"),
-        mpatches.Patch(color="indianred", alpha=0.6, label="Y strip hits"),
+        mpatches.Patch(color="teal", alpha=0.8, label="X strip hits"),
+        mpatches.Patch(color="orangered", alpha=0.8, label="Y strip hits"),
         plt.Line2D([], [], marker="^", color="blue", linestyle="None",
                    markersize=6, label="X cluster center"),
         plt.Line2D([], [], marker=">", color="red", linestyle="None",
@@ -325,8 +325,8 @@ def render_event(event_path, gem_map_path, detectors, apv_map, hole, raw,
         axes[i].set_visible(False)
 
     active = axes[:n]
-    for cmap_obj, label in [(cm.Blues, "X charge (ADC)"),
-                            (cm.Reds, "Y charge (ADC)")]:
+    for cmap_obj, label in [(cm.winter, "X charge (ADC)"),
+                            (cm.autumn, "Y charge (ADC)")]:
         sm = cm.ScalarMappable(cmap=cmap_obj, norm=norm); sm.set_array([])
         cb = fig.colorbar(sm, ax=active, shrink=0.4, pad=0.01,
                           aspect=30, location="right")

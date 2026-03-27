@@ -54,62 +54,87 @@ static std::string hex(uint32_t v)
 }
 
 // -------------------------------------------------------------------------
-// Event filter for evdump: field=val[,val]:min_dets
-//   e.g.  pos=10,11:3   match=+Y,-Y:2   plane=X:4
+// Event filter for evdump
+//
+// Single condition:    field=val[,val]:min_dets
+// AND conditions:      field=val+field=val:min_dets
+//
+// Examples:
+//   pos=10,11:3                 pos 10 or 11 (any plane) in >=3 dets
+//   plane=X+pos=10,11:3         X-plane pos 10 or 11 in >=3 dets
+//   match=+Y,-Y:3               beam-hole APVs in >=3 dets
 // -------------------------------------------------------------------------
-struct EvdumpFilter {
+struct FilterCondition {
     std::string field;
     std::vector<std::string> values;
+};
+
+struct EvdumpFilter {
+    std::vector<FilterCondition> conditions;  // all must match (AND)
     int min_dets = 1;
 };
 
 static bool parseEvdumpFilter(const std::string &expr, EvdumpFilter &filt)
 {
-    // split at ':'
+    // split at last ':'
     auto colon = expr.rfind(':');
     std::string lhs = (colon != std::string::npos) ? expr.substr(0, colon) : expr;
     filt.min_dets = (colon != std::string::npos) ? std::atoi(expr.substr(colon + 1).c_str()) : 1;
 
-    // split at '='
-    auto eq = lhs.find('=');
-    if (eq == std::string::npos) {
-        std::cerr << "Error: filter must be field=val[,val]:min_dets\n";
-        return false;
-    }
-    filt.field = lhs.substr(0, eq);
-    std::string vals = lhs.substr(eq + 1);
-
-    // split values by ','
-    filt.values.clear();
+    // split conditions by '+'
+    filt.conditions.clear();
     size_t start = 0;
-    while (start < vals.size()) {
-        auto comma = vals.find(',', start);
-        if (comma == std::string::npos) comma = vals.size();
-        filt.values.push_back(vals.substr(start, comma - start));
-        start = comma + 1;
+    while (start < lhs.size()) {
+        auto plus = lhs.find('+', start);
+        if (plus == std::string::npos) plus = lhs.size();
+        std::string term = lhs.substr(start, plus - start);
+        start = plus + 1;
+
+        auto eq = term.find('=');
+        if (eq == std::string::npos) {
+            std::cerr << "Error: filter term must be field=val[,val]\n";
+            return false;
+        }
+        FilterCondition cond;
+        cond.field = term.substr(0, eq);
+        std::string vals = term.substr(eq + 1);
+        size_t vs = 0;
+        while (vs < vals.size()) {
+            auto comma = vals.find(',', vs);
+            if (comma == std::string::npos) comma = vals.size();
+            cond.values.push_back(vals.substr(vs, comma - vs));
+            vs = comma + 1;
+        }
+        if (cond.values.empty()) {
+            std::cerr << "Error: empty value in filter term '" << term << "'\n";
+            return false;
+        }
+        filt.conditions.push_back(std::move(cond));
     }
-    return !filt.values.empty();
+    return !filt.conditions.empty();
+}
+
+static std::string getApvField(const gem::ApvConfig &cfg, const std::string &field)
+{
+    if (field == "pos")    return std::to_string(cfg.plane_index);
+    if (field == "plane")  return (cfg.plane_type == 0) ? "X" : "Y";
+    if (field == "match")  return cfg.match;
+    if (field == "orient") return std::to_string(cfg.orient);
+    if (field == "det")    return std::to_string(cfg.det_id);
+    return "";
 }
 
 static bool apvMatchesFilter(const gem::ApvConfig &cfg, const EvdumpFilter &filt)
 {
-    std::string val;
-    if (filt.field == "pos")
-        val = std::to_string(cfg.plane_index);
-    else if (filt.field == "plane")
-        val = (cfg.plane_type == 0) ? "X" : "Y";
-    else if (filt.field == "match")
-        val = cfg.match;
-    else if (filt.field == "orient")
-        val = std::to_string(cfg.orient);
-    else if (filt.field == "det")
-        val = std::to_string(cfg.det_id);
-    else
-        return false;
-
-    for (auto &v : filt.values)
-        if (v == val) return true;
-    return false;
+    // all conditions must match
+    for (auto &cond : filt.conditions) {
+        std::string val = getApvField(cfg, cond.field);
+        bool found = false;
+        for (auto &v : cond.values)
+            if (v == val) { found = true; break; }
+        if (!found) return false;
+    }
+    return true;
 }
 
 static bool checkEvdumpFilter(const EvdumpFilter &filt,
@@ -117,23 +142,60 @@ static bool checkEvdumpFilter(const EvdumpFilter &filt,
                                const ssp::SspEventData &ssp,
                                int phys_ev = 0)
 {
-    std::set<int> matching_dets;
-    for (int m = 0; m < ssp.nmpds; ++m) {
-        auto &mpd = ssp.mpds[m];
-        if (!mpd.present) continue;
-        for (int a = 0; a < ssp::MAX_APVS_PER_MPD; ++a) {
-            if (!mpd.apvs[a].present) continue;
-            int idx = sys.FindApvIndex(mpd.crate_id, mpd.mpd_id, a);
-            if (idx < 0) continue;
-            if (!sys.HasApvZsHits(idx)) continue;
-
-            auto &cfg = sys.GetApvConfig(idx);
-            if (apvMatchesFilter(cfg, filt))
-                matching_dets.insert(cfg.det_id);
+    // separate APV-level conditions from detector-level conditions
+    bool has_apv_conds = false;
+    bool has_cluster_cond = false;
+    int cluster_min = 0;
+    for (auto &cond : filt.conditions) {
+        if (cond.field == "clusters") {
+            has_cluster_cond = true;
+            cluster_min = cond.values.empty() ? 1 : std::atoi(cond.values[0].c_str());
+        } else {
+            has_apv_conds = true;
         }
     }
+
+    std::set<int> matching_dets;
+
+    // APV-based matching
+    if (has_apv_conds) {
+        for (int m = 0; m < ssp.nmpds; ++m) {
+            auto &mpd = ssp.mpds[m];
+            if (!mpd.present) continue;
+            for (int a = 0; a < ssp::MAX_APVS_PER_MPD; ++a) {
+                if (!mpd.apvs[a].present) continue;
+                int idx = sys.FindApvIndex(mpd.crate_id, mpd.mpd_id, a);
+                if (idx < 0) continue;
+                if (!sys.HasApvZsHits(idx)) continue;
+
+                auto &cfg = sys.GetApvConfig(idx);
+                if (apvMatchesFilter(cfg, filt))
+                    matching_dets.insert(cfg.det_id);
+            }
+        }
+    }
+
+    // cluster count matching
+    if (has_cluster_cond) {
+        std::set<int> cluster_dets;
+        for (int d = 0; d < sys.GetNDetectors(); ++d) {
+            int nc = static_cast<int>(sys.GetPlaneClusters(d, 0).size()
+                                    + sys.GetPlaneClusters(d, 1).size());
+            if (nc >= cluster_min)
+                cluster_dets.insert(d);
+        }
+        if (has_apv_conds) {
+            // AND: keep only dets that pass both APV and cluster conditions
+            std::set<int> both;
+            for (auto d : matching_dets)
+                if (cluster_dets.count(d)) both.insert(d);
+            matching_dets = both;
+        } else {
+            matching_dets = cluster_dets;
+        }
+    }
+
     bool pass = static_cast<int>(matching_dets.size()) >= filt.min_dets;
-    // periodic progress + all passing events
     if (pass || (phys_ev > 0 && phys_ev % 200 == 0)) {
         std::cerr << "  ev " << phys_ev << ": " << matching_dets.size() << " det(s) matched";
         if (!matching_dets.empty()) {
@@ -309,7 +371,8 @@ static int dumpEventJson(const ssp::SspEventData &ssp,
                          int phys_ev,
                          int32_t trigger_num,
                          uint32_t trigger_bits,
-                         const std::string &output_file)
+                         const std::string &output_file,
+                         bool include_raw = false)
 {
     using json = nlohmann::json;
     auto r1 = [](float v) -> double { return std::round(v * 10.) / 10.; };
@@ -320,41 +383,43 @@ static int dumpEventJson(const ssp::SspEventData &ssp,
     root["trigger_number"] = trigger_num;
     root["trigger_bits"]   = trigger_bits;
 
-    // --- raw APV data (before pedestal/CM/zero-sup) ---
-    json raw_arr = json::array();
-    for (int m = 0; m < ssp.nmpds; ++m) {
-        auto &mpd = ssp.mpds[m];
-        if (!mpd.present) continue;
-        for (int a = 0; a < ssp::MAX_APVS_PER_MPD; ++a) {
-            auto &apv = mpd.apvs[a];
-            if (!apv.present) continue;
+    // --- raw APV data (optional, before pedestal/CM/zero-sup) ---
+    if (include_raw) {
+        json raw_arr = json::array();
+        for (int m = 0; m < ssp.nmpds; ++m) {
+            auto &mpd = ssp.mpds[m];
+            if (!mpd.present) continue;
+            for (int a = 0; a < ssp::MAX_APVS_PER_MPD; ++a) {
+                auto &apv = mpd.apvs[a];
+                if (!apv.present) continue;
 
-            json aj;
-            aj["crate"] = mpd.crate_id;
-            aj["mpd"]   = mpd.mpd_id;
-            aj["adc"]   = a;
+                json aj;
+                aj["crate"] = mpd.crate_id;
+                aj["mpd"]   = mpd.mpd_id;
+                aj["adc"]   = a;
 
-            int idx = sys.FindApvIndex(mpd.crate_id, mpd.mpd_id, a);
-            if (idx >= 0) {
-                auto &cfg = sys.GetApvConfig(idx);
-                aj["det"]   = cfg.det_id;
-                aj["plane"] = (cfg.plane_type == 0) ? "X" : "Y";
-                aj["pos"]   = cfg.plane_index;
+                int idx = sys.FindApvIndex(mpd.crate_id, mpd.mpd_id, a);
+                if (idx >= 0) {
+                    auto &cfg = sys.GetApvConfig(idx);
+                    aj["det"]   = cfg.det_id;
+                    aj["plane"] = (cfg.plane_type == 0) ? "X" : "Y";
+                    aj["pos"]   = cfg.plane_index;
+                }
+
+                json ch_obj = json::object();
+                for (int s = 0; s < ssp::APV_STRIP_SIZE; ++s) {
+                    if (!apv.hasStrip(s)) continue;
+                    json samples = json::array();
+                    for (int t = 0; t < ssp::SSP_TIME_SAMPLES; ++t)
+                        samples.push_back(apv.strips[s][t]);
+                    ch_obj[std::to_string(s)] = samples;
+                }
+                aj["channels"] = ch_obj;
+                raw_arr.push_back(aj);
             }
-
-            json ch_obj = json::object();
-            for (int s = 0; s < ssp::APV_STRIP_SIZE; ++s) {
-                if (!apv.hasStrip(s)) continue;
-                json samples = json::array();
-                for (int t = 0; t < ssp::SSP_TIME_SAMPLES; ++t)
-                    samples.push_back(apv.strips[s][t]);
-                ch_obj[std::to_string(s)] = samples;
-            }
-            aj["channels"] = ch_obj;
-            raw_arr.push_back(aj);
         }
+        root["raw_apvs"] = raw_arr;
     }
-    root["raw_apvs"] = raw_arr;
 
     // --- zero-suppressed APV channels (APV address preserved) ---
     json zs_arr = json::array();
@@ -670,9 +735,14 @@ static void usage(const char *prog)
         << "  -t <bit>      Trigger bit filter (-1=all, default)\n"
         << "  -e <N>        Dump only physics event N (1-based)\n"
         << "  -z <sigma>    Override zero-suppression threshold (default: from gem_map)\n"
-        << "  -f <filter>   Event filter for evdump: field=val[,val]:min_dets\n"
-        << "                Fields: pos, plane (X/Y), match (+Y/-Y), orient, det\n"
-        << "                Example: -f pos=10,11:3 (ZS hits from pos 10/11 in >=3 dets)\n";
+        << "  -f <filter>   Event filter for evdump: field=val[+field=val]:min_dets\n"
+        << "                APV fields: pos, plane (X/Y), match (+Y/-Y), orient, det\n"
+        << "                Detector field: clusters=N (>=N clusters per det)\n"
+        << "                Use + to AND conditions. Examples:\n"
+        << "                  -f plane=X+pos=10,11:3   X-plane pos 10/11 in >=3 dets\n"
+        << "                  -f match=+Y,-Y:3         beam-hole APVs in >=3 dets\n"
+        << "                  -f clusters=1:3           >=1 cluster in >=3 dets\n"
+        << "                  -f clusters=2+match=+Y:2  >=2 clusters AND match APV in >=2 dets\n";
 }
 
 int main(int argc, char *argv[])
@@ -689,9 +759,10 @@ int main(int argc, char *argv[])
     int trigger_bit = -1;   // -1 = accept all
     int target_event = 0;   // 0 = disabled
     float zerosup_override = -1.f;  // <0 = use gem_map default
+    bool include_raw = false;
 
     int opt;
-    while ((opt = getopt(argc, argv, "D:G:P:o:m:n:t:e:z:f:h")) != -1) {
+    while ((opt = getopt(argc, argv, "D:G:P:o:m:n:t:e:z:f:Rh")) != -1) {
         switch (opt) {
         case 'D': daq_config_file = optarg; break;
         case 'G': gem_map_file = optarg; break;
@@ -702,6 +773,7 @@ int main(int argc, char *argv[])
         case 't': trigger_bit = std::atoi(optarg); break;
         case 'e': target_event = std::atoi(optarg); max_events = 0; break;
         case 'f': filter_expr = optarg; break;
+        case 'R': include_raw = true; break;
         case 'z': zerosup_override = std::atof(optarg); break;
         default:  usage(argv[0]); return 1;
         }
@@ -732,9 +804,14 @@ int main(int argc, char *argv[])
             if (!parseEvdumpFilter(filter_expr, evdump_filter))
                 return 1;
             has_evdump_filter = true;
-            std::cerr << "Filter   : " << evdump_filter.field << "=";
-            for (size_t i = 0; i < evdump_filter.values.size(); ++i)
-                std::cerr << (i ? "," : "") << evdump_filter.values[i];
+            std::cerr << "Filter   : ";
+            for (size_t c = 0; c < evdump_filter.conditions.size(); ++c) {
+                if (c) std::cerr << " + ";
+                auto &cond = evdump_filter.conditions[c];
+                std::cerr << cond.field << "=";
+                for (size_t i = 0; i < cond.values.size(); ++i)
+                    std::cerr << (i ? "," : "") << cond.values[i];
+            }
             std::cerr << " in >=" << evdump_filter.min_dets << " dets\n";
         }
     }
@@ -931,7 +1008,8 @@ int main(int argc, char *argv[])
 
                 if (dumpEventJson(ssp_evt, *gem_sys, phys_count,
                                   event.info.trigger_number,
-                                  event.info.trigger_bits, out) != 0)
+                                  event.info.trigger_bits, out,
+                                  include_raw) != 0)
                     return 1;
 
                 if (evdump_limit > 0 && ++evdump_count >= evdump_limit)
