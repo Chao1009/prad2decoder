@@ -31,7 +31,7 @@
         {"// ====== Layer 0 (GEM0) — crate 49, fibers 0-12 ======": ""},
 
         {"// X-dimension MPD6 (fiber 0)": ""},
-        {"crate": 49, "mpd": 0, "adc": 0, "det": 0, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "+Y"},
+        {"crate": 49, "mpd": 0, "adc": 0, "det": 0, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "-Y"},
 
         {"// X-dimension MPD7 (fiber 1)": ""},
         {"crate": 49, "mpd": 1, "adc": 0, "det": 0, "plane": "X", "orient": 0, "pos": 3, "det_pos": 0},
@@ -88,14 +88,14 @@
         {"crate": 49, "mpd": 11, "adc": 1, "det": 0, "plane": "X", "orient": 1, "pos": 6, "det_pos": 0},
 
         {"// X-dimension MPD20 (fiber 12)": ""},
-        {"crate": 49, "mpd": 12, "adc": 0, "det": 0, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "-Y"},
+        {"crate": 49, "mpd": 12, "adc": 0, "det": 0, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "+Y"},
         {"crate": 49, "mpd": 12, "adc": 1, "det": 0, "plane": "X", "orient": 1, "pos": 9, "det_pos": 0},
         {"crate": 49, "mpd": 12, "adc": 2, "det": 0, "plane": "X", "orient": 1, "pos": 8, "det_pos": 0},
 
         {"// ====== Layer 1 (GEM1) — crate 49, fibers 13-25 ======": ""},
 
         {"// X-dimension MPD6 (fiber 13)": ""},
-        {"crate": 49, "mpd": 13, "adc": 0, "det": 1, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "+Y"},
+        {"crate": 49, "mpd": 13, "adc": 0, "det": 1, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "-Y"},
 
         {"// X-dimension MPD7 (fiber 14)": ""},
         {"crate": 49, "mpd": 14, "adc": 0, "det": 1, "plane": "X", "orient": 0, "pos": 3, "det_pos": 0},
@@ -152,14 +152,14 @@
         {"crate": 49, "mpd": 24, "adc": 1, "det": 1, "plane": "X", "orient": 1, "pos": 6, "det_pos": 0},
 
         {"// X-dimension MPD20 (fiber 25)": ""},
-        {"crate": 49, "mpd": 25, "adc": 0, "det": 1, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "-Y"},
+        {"crate": 49, "mpd": 25, "adc": 0, "det": 1, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "+Y"},
         {"crate": 49, "mpd": 25, "adc": 1, "det": 1, "plane": "X", "orient": 1, "pos": 9, "det_pos": 0},
         {"crate": 49, "mpd": 25, "adc": 2, "det": 1, "plane": "X", "orient": 1, "pos": 8, "det_pos": 0},
 
         {"// ====== Layer 2 (GEM2) — crate 52, fibers 0-12 ======": ""},
 
         {"// X-dimension MPD6 (fiber 0)": ""},
-        {"crate": 52, "mpd": 0, "adc": 0, "det": 2, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "+Y"},
+        {"crate": 52, "mpd": 0, "adc": 0, "det": 2, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "-Y"},
 
         {"// X-dimension MPD7 (fiber 1)": ""},
         {"crate": 52, "mpd": 1, "adc": 0, "det": 2, "plane": "X", "orient": 0, "pos": 3, "det_pos": 0},
@@ -216,14 +216,14 @@
         {"crate": 52, "mpd": 11, "adc": 1, "det": 2, "plane": "X", "orient": 1, "pos": 6, "det_pos": 0},
 
         {"// X-dimension MPD20 (fiber 12)": ""},
-        {"crate": 52, "mpd": 12, "adc": 0, "det": 2, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "-Y"},
+        {"crate": 52, "mpd": 12, "adc": 0, "det": 2, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "+Y"},
         {"crate": 52, "mpd": 12, "adc": 1, "det": 2, "plane": "X", "orient": 1, "pos": 9, "det_pos": 0},
         {"crate": 52, "mpd": 12, "adc": 2, "det": 2, "plane": "X", "orient": 1, "pos": 8, "det_pos": 0},
 
         {"// ====== Layer 3 (GEM3) — crate 52, fibers 13-25 ======": ""},
 
         {"// X-dimension MPD6 (fiber 13)": ""},
-        {"crate": 52, "mpd": 13, "adc": 0, "det": 3, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "+Y"},
+        {"crate": 52, "mpd": 13, "adc": 0, "det": 3, "plane": "X", "orient": 0, "pos": 11, "det_pos": 0, "pin_rotate": 16, "shared_pos": 10, "match": "-Y"},
 
         {"// X-dimension MPD7 (fiber 14)": ""},
         {"crate": 52, "mpd": 14, "adc": 0, "det": 3, "plane": "X", "orient": 0, "pos": 3, "det_pos": 0},
@@ -280,7 +280,7 @@
         {"crate": 52, "mpd": 24, "adc": 1, "det": 3, "plane": "X", "orient": 1, "pos": 6, "det_pos": 0},
 
         {"// X-dimension MPD20 (fiber 25)": ""},
-        {"crate": 52, "mpd": 25, "adc": 0, "det": 3, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "-Y"},
+        {"crate": 52, "mpd": 25, "adc": 0, "det": 3, "plane": "X", "orient": 1, "pos": 10, "det_pos": 0, "match": "+Y"},
         {"crate": 52, "mpd": 25, "adc": 1, "det": 3, "plane": "X", "orient": 1, "pos": 9, "det_pos": 0},
         {"crate": 52, "mpd": 25, "adc": 2, "det": 3, "plane": "X", "orient": 1, "pos": 8, "det_pos": 0}
     ]

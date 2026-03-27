@@ -128,7 +128,7 @@ static bool apvMatchesFilter(const gem::ApvConfig &cfg, const EvdumpFilter &filt
 {
     // all APV-level conditions must match (skip detector-level like "clusters")
     for (auto &cond : filt.conditions) {
-        if (cond.field == "clusters") continue;
+        if (cond.field == "clusters" || cond.field == "cluster") continue;
         std::string val = getApvField(cfg, cond.field);
         bool found = false;
         for (auto &v : cond.values)
@@ -148,7 +148,7 @@ static bool checkEvdumpFilter(const EvdumpFilter &filt,
     bool has_cluster_cond = false;
     int cluster_min = 0;
     for (auto &cond : filt.conditions) {
-        if (cond.field == "clusters") {
+        if (cond.field == "clusters" || cond.field == "cluster") {
             has_cluster_cond = true;
             cluster_min = cond.values.empty() ? 1 : std::atoi(cond.values[0].c_str());
         } else {
