@@ -333,8 +333,8 @@ static int dumpEventJson(const ssp::SspEventData &ssp,
     }
     root["detectors"] = det_arr;
 
-    // write
-    std::ofstream of(output_file);
+    // write (binary mode to avoid BOM/encoding issues on Windows)
+    std::ofstream of(output_file, std::ios::binary);
     if (!of.is_open()) {
         std::cerr << "Error: cannot write " << output_file << "\n";
         return 1;
@@ -476,7 +476,7 @@ static void accumulatePedestals(const ssp::SspEventData &ssp,
 static int writePedestals(const std::map<uint64_t, StripAccum> &accum,
                           const std::string &output_file)
 {
-    std::ofstream of(output_file);
+    std::ofstream of(output_file, std::ios::binary);
     if (!of.is_open()) {
         std::cerr << "Error: cannot write " << output_file << "\n";
         return 1;
