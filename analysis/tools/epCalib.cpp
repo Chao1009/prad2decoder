@@ -127,6 +127,12 @@ int main(int argc, char *argv[])
     evc::DaqConfig daq_cfg;
     if (!daq_config_file.empty()) evc::load_daq_config(daq_config_file, daq_cfg);
     hycal.Init(db_dir + "/hycal_modules.json", db_dir + "/daq_map.json");
+
+    std::string calib_file = db_dir + "/prad1/prad_calibration.json";
+    int nmatched = hycal.LoadCalibration(calib_file);
+    if (nmatched >= 0)
+        std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
+
     analysis::PhysicsTools physics(hycal);
     fdec::ClusterConfig cl_cfg;
 
@@ -160,6 +166,9 @@ int main(int argc, char *argv[])
     int nmod = hycal.module_count();
     //ratio of expected/measured peak position for each module
     TH1F *ratio_module_all = new TH1F("ratio_all", "Ratio of Expected/Measured Peak Position for All Modules;Ratio;Modules", 100, 0, 2);
+    TH2F *module_ratio = new TH2F("#cbar#bar{E_{recon}} - E_{expect}#cbar #/ E_{expect}",
+                                  "#cbar#bar{E_{recon}} - E_{expect}#cbar #/ E_{expect}",
+                                  34, -17.*20.75, 17.*20.75, 34, -17.*20.75, 17.*20.75);
     std::vector<float> ratio_values(nmod, 0.f);
     for (int m = 0; m < nmod; m++) {
         auto [peak, resolution] = physics.FitPeakResolution(m);

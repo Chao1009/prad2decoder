@@ -88,6 +88,7 @@ std::unique_ptr<TH1F> PhysicsTools::GetEpYieldHist(TH2F *energy_theta, float Ebe
     if (!energy_theta) return nullptr;
 
     auto h_ep = std::make_unique<TH1F>("ep_yield", "Elastic e-p Yield;Scattering Angle (deg);Counts", 80, 0, 8);
+    h_ep->SetDirectory(nullptr);
     for (int i = 1; i <= energy_theta->GetNbinsX(); i++) {
         for (int j = 1; j <= energy_theta->GetNbinsY(); j++) {
             float theta = energy_theta->GetXaxis()->GetBinCenter(i);
@@ -107,6 +108,7 @@ std::unique_ptr<TH1F> PhysicsTools::GetEeYieldHist(TH2F *energy_theta, float Ebe
     if (!energy_theta) return nullptr;
 
     auto h_ee = std::make_unique<TH1F>("ee_yield", "Elastic e-e Yield;Scattering Angle (deg);Counts", 80, 0, 8);
+    h_ee->SetDirectory(nullptr);
     for (int i = 1; i <= energy_theta->GetNbinsX(); i++) {
         for (int j = 1; j <= energy_theta->GetNbinsY(); j++) {
             float theta = energy_theta->GetXaxis()->GetBinCenter(i);
@@ -126,6 +128,7 @@ std::unique_ptr<TH1F> PhysicsTools::GetYieldRatioHist(TH1F *ep_hist, TH1F *ee_hi
     if (!ep_hist || !ee_hist) return nullptr;
 
     auto h_ratio = std::make_unique<TH1F>("yield_ratio", "Yield Ratio (e-p / e-e);Scattering Angle (deg);Ratio", 80, 0, 8);
+    h_ratio->SetDirectory(nullptr);
     for (int i = 1; i <= ep_hist->GetNbinsX(); i++) {
         float theta = ep_hist->GetXaxis()->GetBinCenter(i);
         float ep_count = ep_hist->GetBinContent(i);
