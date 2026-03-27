@@ -1,0 +1,170 @@
+{
+  "detectors": [
+    {
+      "hits_2d": [
+        {
+          "x": 216.4,
+          "x_charge": 284.5,
+          "x_peak": 145.6,
+          "x_size": 2,
+          "y": -550.15,
+          "y_charge": 317.1,
+          "y_peak": 131.7,
+          "y_size": 3
+        }
+      ],
+      "id": 0,
+      "name": "GEM0",
+      "x_clusters": [
+        {
+          "cross_talk": false,
+          "hit_strips": [
+            1308,
+            1309
+          ],
+          "max_timebin": 2,
+          "peak_charge": 145.6,
+          "position": 216.4,
+          "size": 2,
+          "total_charge": 284.5
+        }
+      ],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [
+        {
+          "cross_talk": false,
+          "hit_strips": [
+            159,
+            160,
+            161
+          ],
+          "max_timebin": 2,
+          "peak_charge": 131.7,
+          "position": -550.15,
+          "size": 3,
+          "total_charge": 317.1
+        }
+      ],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    },
+    {
+      "hits_2d": [],
+      "id": 1,
+      "name": "GEM1",
+      "x_clusters": [],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    },
+    {
+      "hits_2d": [],
+      "id": 2,
+      "name": "GEM2",
+      "x_clusters": [],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    },
+    {
+      "hits_2d": [],
+      "id": 3,
+      "name": "GEM3",
+      "x_clusters": [],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    }
+  ],
+  "event_number": 131,
+  "trigger_bits": 0,
+  "trigger_number": 131,
+  "zs_apvs": [
+    {
+      "adc": 0,
+      "channels": {
+        "32": {
+          "charge": 145.6,
+          "cross_talk": false,
+          "max_timebin": 2,
+          "ts_adc": [
+            78.9,
+            134.6,
+            145.6,
+            93.3,
+            86.6,
+            54.0
+          ]
+        },
+        "48": {
+          "charge": 138.9,
+          "cross_talk": false,
+          "max_timebin": 2,
+          "ts_adc": [
+            65.1,
+            133.8,
+            138.9,
+            118.6,
+            125.9,
+            96.3
+          ]
+        }
+      },
+      "crate": 49,
+      "mpd": 0
+    },
+    {
+      "adc": 1,
+      "channels": {
+        "111": {
+          "charge": 112.3,
+          "cross_talk": false,
+          "max_timebin": 3,
+          "ts_adc": [
+            92.5,
+            108.5,
+            110.0,
+            112.3,
+            106.8,
+            97.6
+          ]
+        },
+        "127": {
+          "charge": 131.7,
+          "cross_talk": false,
+          "max_timebin": 2,
+          "ts_adc": [
+            128.1,
+            130.1,
+            131.7,
+            117.0,
+            114.4,
+            103.3
+          ]
+        },
+        "63": {
+          "charge": 73.0,
+          "cross_talk": true,
+          "max_timebin": 3,
+          "ts_adc": [
+            72.1,
+            57.2,
+            64.7,
+            73.0,
+            65.5,
+            50.3
+          ]
+        }
+      },
+      "crate": 49,
+      "mpd": 3
+    }
+  ]
+}

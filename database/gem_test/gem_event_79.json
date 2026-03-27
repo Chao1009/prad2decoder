@@ -1,0 +1,85 @@
+{
+  "detectors": [
+    {
+      "hits_2d": [],
+      "id": 0,
+      "name": "GEM0",
+      "x_clusters": [],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    },
+    {
+      "hits_2d": [],
+      "id": 1,
+      "name": "GEM1",
+      "x_clusters": [],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    },
+    {
+      "hits_2d": [],
+      "id": 2,
+      "name": "GEM2",
+      "x_clusters": [
+        {
+          "cross_talk": false,
+          "hit_strips": [
+            1346
+          ],
+          "max_timebin": 4,
+          "peak_charge": 63.7,
+          "position": 231.4,
+          "size": 1,
+          "total_charge": 63.7
+        }
+      ],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    },
+    {
+      "hits_2d": [],
+      "id": 3,
+      "name": "GEM3",
+      "x_clusters": [],
+      "x_pitch": 0.4000000059604645,
+      "x_strips": 1536,
+      "y_clusters": [],
+      "y_pitch": 0.4000000059604645,
+      "y_strips": 3072
+    }
+  ],
+  "event_number": 79,
+  "trigger_bits": 0,
+  "trigger_number": 79,
+  "zs_apvs": [
+    {
+      "adc": 0,
+      "channels": {
+        "93": {
+          "charge": 63.7,
+          "cross_talk": true,
+          "max_timebin": 4,
+          "ts_adc": [
+            30.0,
+            37.4,
+            47.0,
+            62.3,
+            63.7,
+            43.2
+          ]
+        }
+      },
+      "crate": 52,
+      "mpd": 12
+    }
+  ]
+}
