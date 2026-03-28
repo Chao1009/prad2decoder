@@ -10,8 +10,8 @@
 // --- configuration ----------------------------------------------------------
 const GEM_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'];
 const GEM_PLANES = [
-    { name: 'Plane 1 (upstream)',   dets: [0, 1], hitId: 'gem-plane-0', occId: 'gem-occ-0' },
-    { name: 'Plane 2 (downstream)', dets: [2, 3], hitId: 'gem-plane-1', occId: 'gem-occ-1' },
+    { name: 'Plane 1 (upstream)',   dets: [0, 1], hitId: 'gem-plane-0' },
+    { name: 'Plane 2 (downstream)', dets: [2, 3], hitId: 'gem-plane-1' },
 ];
 
 const PL_GEM = {
@@ -20,6 +20,15 @@ const PL_GEM = {
     font: { color: '#e0e0e0', size: 11 },
     margin: { l: 50, r: 20, t: 30, b: 40 },
     hovermode: 'closest',
+};
+
+const PL_GEM_OCC = {
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: '#1a1a2e',
+    font: { color: '#e0e0e0', size: 10 },
+    margin: { l: 45, r: 10, t: 28, b: 32 },
+    hovermode: 'closest',
+    showlegend: false,
 };
 
 let gemConfig = null;
@@ -123,55 +132,43 @@ function plotGemHits(data) {
     });
 }
 
-// --- occupancy heatmap (right) ----------------------------------------------
+// --- occupancy heatmap (right, 2x2 per-detector) ---------------------------
+
+const GEM_OCC_IDS = ['gem-occ-0', 'gem-occ-1', 'gem-occ-2', 'gem-occ-3'];
 
 function plotGemOccupancy(data) {
     if (!data || !data.enabled) {
-        GEM_PLANES.forEach(plane => {
-            const div = document.getElementById(plane.occId);
-            if (div) div.innerHTML = '<div style="color:var(--dim);padding:40px;text-align:center">GEM not enabled</div>';
+        GEM_OCC_IDS.forEach(id => {
+            const div = document.getElementById(id);
+            if (div) div.innerHTML = '<div style="color:var(--dim);padding:20px;text-align:center">GEM not enabled</div>';
         });
         return;
     }
 
     const detectors = data.detectors || [];
+    const total = data.total || 0;
 
-    GEM_PLANES.forEach((plane) => {
-        // sum occupancy bins across detectors in this plane
-        let nx = 0, ny = 0, xSize = 0, ySize = 0;
-        let sumBins = null;
-        let names = [];
-
-        plane.dets.forEach((detId) => {
-            const det = detectors.find(d => d.id === detId);
-            if (!det) return;
-            names.push(det.name);
-            if (!sumBins) {
-                nx = det.nx; ny = det.ny;
-                xSize = det.x_size; ySize = det.y_size;
-                sumBins = det.bins.slice();
-            } else {
-                for (let i = 0; i < sumBins.length; i++)
-                    sumBins[i] += (det.bins[i] || 0);
-            }
-        });
-
-        if (!sumBins) {
-            Plotly.react(plane.occId,
-                [{ x: [], y: [], z: [[]], type: 'heatmap', name: 'No data' }],
-                Object.assign({}, PL_GEM, {
-                    title: { text: plane.name, font: { size: 13, color: '#e0e0e0' } },
-                }),
+    GEM_OCC_IDS.forEach((divId, detId) => {
+        const det = detectors.find(d => d.id === detId);
+        if (!det) {
+            Plotly.react(divId,
+                [{ x: [], y: [], z: [[]], type: 'heatmap' }],
+                Object.assign({}, PL_GEM_OCC, { title: { text: 'GEM' + detId, font: { size: 12, color: '#e0e0e0' } } }),
                 { responsive: true, displayModeBar: false });
             return;
         }
 
+        const nx = det.nx, ny = det.ny;
+        const xSize = det.x_size, ySize = det.y_size;
         const xStep = xSize / nx, yStep = ySize / ny;
+
+        // build z matrix as rate (count / total_events)
         const z = [];
+        const scale = total > 0 ? 1.0 / total : 0;
         for (let iy = 0; iy < ny; iy++) {
             const row = [];
             for (let ix = 0; ix < nx; ix++)
-                row.push(sumBins[iy * nx + ix] || 0);
+                row.push((det.bins[iy * nx + ix] || 0) * scale);
             z.push(row);
         }
 
@@ -184,19 +181,18 @@ function plotGemOccupancy(data) {
             x: xArr, y: yArr, z: z,
             type: 'heatmap',
             colorscale: 'Hot', reversescale: true,
-            name: names.join('+'),
-            hovertemplate: names.join('+') + '<br>x=%{x:.0f} mm<br>y=%{y:.0f} mm<br>count=%{z}<extra></extra>',
-            colorbar: { thickness: 12, tickfont: { size: 9 } },
+            hovertemplate: det.name + '<br>x=%{x:.0f} mm<br>y=%{y:.0f} mm<br>rate=%{z:.4f}<extra></extra>',
+            colorbar: { thickness: 10, tickfont: { size: 9 }, tickformat: '.3f' },
         }];
 
-        const layout = Object.assign({}, PL_GEM, {
-            title: { text: plane.name + ' (' + names.join('+') + ')', font: { size: 13, color: '#e0e0e0' } },
+        const layout = Object.assign({}, PL_GEM_OCC, {
+            title: { text: det.name + (total > 0 ? ' (' + total + ' evts)' : ''),
+                     font: { size: 12, color: '#e0e0e0' } },
             xaxis: { title: 'X (mm)', gridcolor: '#333', zerolinecolor: '#555' },
             yaxis: { title: 'Y (mm)', gridcolor: '#333', zerolinecolor: '#555' },
-            showlegend: false,
         });
 
-        Plotly.react(plane.occId, traces, layout, { responsive: true, displayModeBar: false });
+        Plotly.react(divId, traces, layout, { responsive: true, displayModeBar: false });
     });
 }
 
@@ -205,6 +201,8 @@ function plotGemOccupancy(data) {
 function resizeGem() {
     GEM_PLANES.forEach(plane => {
         try { Plotly.Plots.resize(plane.hitId); } catch (e) {}
-        try { Plotly.Plots.resize(plane.occId); } catch (e) {}
+    });
+    GEM_OCC_IDS.forEach(id => {
+        try { Plotly.Plots.resize(id); } catch (e) {}
     });
 }

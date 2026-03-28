@@ -902,6 +902,7 @@ nlohmann::json AppState::apiGemOccupancy() const
         dets.push_back(dj);
     }
     result["detectors"] = dets;
+    result["total"] = events_processed.load();
     return result;
 }
 
