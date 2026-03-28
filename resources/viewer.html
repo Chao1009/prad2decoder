@@ -301,12 +301,20 @@
         <div class="gem-toolbar">
             <span id="gem-stats" style="color:var(--dim);font-size:11px"></span>
         </div>
-        <div class="gem-grid">
-            <div class="gem-plane-cell">
-                <div id="gem-plane-0" style="width:100%;height:100%"></div>
+        <div class="gem-columns">
+            <div class="gem-col">
+                <div class="gem-col-title">Event Clusters</div>
+                <div class="gem-grid">
+                    <div class="gem-plane-cell"><div id="gem-plane-0" style="width:100%;height:100%"></div></div>
+                    <div class="gem-plane-cell"><div id="gem-plane-1" style="width:100%;height:100%"></div></div>
+                </div>
             </div>
-            <div class="gem-plane-cell">
-                <div id="gem-plane-1" style="width:100%;height:100%"></div>
+            <div class="gem-col">
+                <div class="gem-col-title">Cluster Occupancy</div>
+                <div class="gem-grid">
+                    <div class="gem-plane-cell"><div id="gem-occ-0" style="width:100%;height:100%"></div></div>
+                    <div class="gem-plane-cell"><div id="gem-occ-1" style="width:100%;height:100%"></div></div>
+                </div>
             </div>
         </div>
     </div>

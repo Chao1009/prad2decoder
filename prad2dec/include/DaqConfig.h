@@ -133,11 +133,13 @@ struct DaqConfig
     // --- helpers ------------------------------------------------------------
     bool is_physics(uint32_t tag) const
     {
+        // built-in trigger range for physics (0xFF50-0xFF8F, 0x00A0-0x00BF)
+        if ((tag & 0x00FF) <= 0x00BF && (tag & 0x00FF) >= 0x00A0) || (tag >= 0xFF50 && tag <= 0xFF8F)
+            return true;
         // single-event tags
         for (auto t : physics_tags)
             if (tag == t) return true;
-        // built-in trigger range for physics (0xFF50-0xFF8F, 0x00B0-0x00BF)
-        return (tag >= 0xFF50 && tag <= 0xFF8F) || ((tag & 0x00F0) == 0x00B0);
+        return false;
     }
 
     bool is_control(uint32_t tag) const

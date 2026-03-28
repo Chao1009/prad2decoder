@@ -172,6 +172,9 @@ void AppState::init(const std::string &db_dir,
             gem_enabled = (gem_sys.GetNDetectors() > 0);
             if (gem_enabled) {
                 std::cerr << "GEM       : " << gem_sys.GetNDetectors() << " detectors\n";
+                // init occupancy histograms
+                gem_occupancy.resize(gem_sys.GetNDetectors());
+                for (auto &h : gem_occupancy) h.init(GEM_OCC_NX, GEM_OCC_NY);
                 if (!gem_ped_filename.empty()) {
                     std::string gem_ped_file = findFile(gem_ped_filename, db_dir);
                     if (!gem_ped_file.empty()) {
@@ -777,6 +780,18 @@ void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
     gem_sys.Clear();
     gem_sys.ProcessEvent(ssp_evt);
     gem_sys.Reconstruct(gem_clusterer);
+
+    // accumulate occupancy
+    std::lock_guard<std::mutex> lk(data_mtx);
+    for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
+        auto &det = gem_sys.GetDetectors()[d];
+        float xSize = det.planes[0].size;
+        float ySize = det.planes[1].size;
+        float xStep = xSize / GEM_OCC_NX;
+        float yStep = ySize / GEM_OCC_NY;
+        for (auto &h : gem_sys.GetHits(d))
+            gem_occupancy[d].fill(h.x, h.y, -xSize/2, xStep, -ySize/2, yStep);
+    }
 }
 
 //=============================================================================
@@ -855,10 +870,38 @@ nlohmann::json AppState::apiGemConfig() const
             {"x_pitch", det.planes[0].pitch},
             {"y_pitch", det.planes[1].pitch},
             {"x_apvs", det.planes[0].n_apvs},
-            {"y_apvs", det.planes[1].n_apvs}
+            {"y_apvs", det.planes[1].n_apvs},
+            {"x_size", det.planes[0].size},
+            {"y_size", det.planes[1].size}
         });
     }
     result["layers"] = layers;
+    result["occ_nx"] = GEM_OCC_NX;
+    result["occ_ny"] = GEM_OCC_NY;
+    return result;
+}
+
+nlohmann::json AppState::apiGemOccupancy() const
+{
+    json result = json::object();
+    result["enabled"] = gem_enabled;
+    if (!gem_enabled) return result;
+
+    std::lock_guard<std::mutex> lk(data_mtx);
+    json dets = json::array();
+    for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
+        auto &det = gem_sys.GetDetectors()[d];
+        json dj;
+        dj["id"] = det.id;
+        dj["name"] = det.name;
+        dj["x_size"] = det.planes[0].size;
+        dj["y_size"] = det.planes[1].size;
+        dj["nx"] = GEM_OCC_NX;
+        dj["ny"] = GEM_OCC_NY;
+        dj["bins"] = gem_occupancy[d].bins;
+        dets.push_back(dj);
+    }
+    result["detectors"] = dets;
     return result;
 }
 
@@ -882,6 +925,7 @@ void AppState::clearHistograms()
     moller_energy_hist.clear();
     moller_events = 0;
     cluster_events_processed = 0;
+    for (auto &h : gem_occupancy) h.clear();
 }
 
 void AppState::clearLms()
@@ -1291,5 +1335,7 @@ AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
         return {true, apiGemHits().dump()};
     if (uri == "/api/gem/config")
         return {true, apiGemConfig().dump()};
+    if (uri == "/api/gem/occupancy")
+        return {true, apiGemOccupancy().dump()};
     return {false, ""};
 }

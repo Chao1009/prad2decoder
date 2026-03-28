@@ -251,7 +251,10 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
 .gem-outer { display:none; flex-direction:column; flex:1; min-height:0; }
 .gem-toolbar { display:flex; align-items:center; gap:8px; padding:4px 12px;
     font-size:12px; color:var(--text); border-bottom:1px solid var(--border); }
-.gem-grid { flex:1; min-height:0; display:flex; flex-direction:column; gap:4px; padding:4px; }
+.gem-columns { flex:1; min-height:0; display:flex; gap:4px; padding:4px; }
+.gem-col { flex:1; min-width:0; display:flex; flex-direction:column; }
+.gem-col-title { text-align:center; font-size:11px; color:var(--dim); padding:2px 0; }
+.gem-grid { flex:1; min-height:0; display:flex; flex-direction:column; gap:4px; }
 .gem-plane-cell { flex:1; min-height:0; position:relative; }
 
 /* --- Physics tab --- */

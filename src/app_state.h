@@ -42,6 +42,11 @@ struct AppState {
     gem::GemCluster gem_clusterer;
     bool gem_enabled = false;       // true if gem_map.json loaded successfully
 
+    // GEM occupancy (accumulated per-detector 2D histograms)
+    static constexpr int GEM_OCC_NX = 50;
+    static constexpr int GEM_OCC_NY = 30;
+    std::vector<Histogram2D> gem_occupancy;  // one per detector
+
     std::unordered_map<int, int> roc_to_crate;  // ROC tag → crate index
     nlohmann::json crate_roc_json;              // crate→ROC tag JSON
     nlohmann::json base_config;                 // modules, daq, crate_roc for /api/config
@@ -213,6 +218,7 @@ struct AppState {
     nlohmann::json apiEpicsLatest() const;
     nlohmann::json apiGemHits() const;
     nlohmann::json apiGemConfig() const;
+    nlohmann::json apiGemOccupancy() const;
 
     // Fill common config fields into a JSON object (used by both viewer and monitor).
     void fillConfigJson(nlohmann::json &cfg) const;
