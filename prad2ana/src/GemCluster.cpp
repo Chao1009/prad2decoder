@@ -256,10 +256,31 @@ static float seedMeanTime(const StripCluster &cl, float ts_period)
 //=============================================================================
 // CartesianReconstruct — match X and Y clusters to form 2D hits
 //
-// Full Cartesian product with optional cuts from mpd_gem_view_ssp:
+// Mode 0 (ADC-sorted): sort by peak charge, pair 1:1 by rank
+// Mode 1 (Cartesian):  all X×Y combinations with optional cuts:
 //   - ADC asymmetry: |Qx_peak - Qy_peak| / (Qx_peak + Qy_peak) <= threshold
 //   - Timing:        |mean_time_x_seed - mean_time_y_seed| <= threshold
 //=============================================================================
+
+static GEMHit makeHit(const StripCluster &xc, const StripCluster &yc,
+                       int det_id, float resolution)
+{
+    GEMHit hit;
+    hit.x = xc.position;
+    hit.y = yc.position;
+    hit.z = 0.f;
+    hit.det_id = det_id;
+    hit.x_charge = xc.total_charge;
+    hit.y_charge = yc.total_charge;
+    hit.x_peak   = xc.peak_charge;
+    hit.y_peak   = yc.peak_charge;
+    hit.x_max_timebin = xc.max_timebin;
+    hit.y_max_timebin = yc.max_timebin;
+    hit.x_size = static_cast<int>(xc.hits.size());
+    hit.y_size = static_cast<int>(yc.hits.size());
+    hit.sig_pos = resolution;
+    return hit;
+}
 
 void GemCluster::CartesianReconstruct(
     const std::vector<StripCluster> &x_clusters,
@@ -269,6 +290,25 @@ void GemCluster::CartesianReconstruct(
 {
     container.clear();
 
+    // Mode 0: ADC-sorted 1:1 matching
+    if (cfg_.match_mode == 0) {
+        std::vector<StripCluster> xc = x_clusters;
+        std::vector<StripCluster> yc = y_clusters;
+        std::sort(xc.begin(), xc.end(),
+                  [](const StripCluster &a, const StripCluster &b) {
+                      return a.peak_charge > b.peak_charge;
+                  });
+        std::sort(yc.begin(), yc.end(),
+                  [](const StripCluster &a, const StripCluster &b) {
+                      return a.peak_charge > b.peak_charge;
+                  });
+        size_t npairs = std::min(xc.size(), yc.size());
+        for (size_t i = 0; i < npairs; ++i)
+            container.push_back(makeHit(xc[i], yc[i], det_id, resolution));
+        return;
+    }
+
+    // Mode 1: full Cartesian product with cuts
     const float adc_asym_cut = cfg_.match_adc_asymmetry;
     const float time_cut     = cfg_.match_time_diff;
     const float ts_ns        = cfg_.ts_period;
@@ -293,21 +333,7 @@ void GemCluster::CartesianReconstruct(
                     continue;
             }
 
-            GEMHit hit;
-            hit.x = xc.position;
-            hit.y = yc.position;
-            hit.z = 0.f;
-            hit.det_id = det_id;
-            hit.x_charge = xc.total_charge;
-            hit.y_charge = yc.total_charge;
-            hit.x_peak   = xc.peak_charge;
-            hit.y_peak   = yc.peak_charge;
-            hit.x_max_timebin = xc.max_timebin;
-            hit.y_max_timebin = yc.max_timebin;
-            hit.x_size = static_cast<int>(xc.hits.size());
-            hit.y_size = static_cast<int>(yc.hits.size());
-            hit.sig_pos = resolution;
-            container.push_back(hit);
+            container.push_back(makeHit(xc, yc, det_id, resolution));
         }
     }
 }

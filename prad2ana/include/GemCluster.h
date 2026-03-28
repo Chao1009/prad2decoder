@@ -25,7 +25,9 @@ struct ClusterConfig {
     float position_res      = 0.08f;// mm
     std::vector<float> charac_dists;// cross-talk characteristic distances
 
-    // XY matching cuts (Cartesian reconstruction)
+    // XY matching mode: 0 = ADC-sorted 1:1, 1 = full Cartesian with cuts
+    int   match_mode          = 1;
+    // XY matching cuts (mode 1 only)
     float match_adc_asymmetry = 0.8f;  // max |Qx-Qy|/(Qx+Qy), <0 to disable
     float match_time_diff     = 50.f;  // max |mean_t_x - mean_t_y| in ns, <0 to disable
     float ts_period           = 25.f;  // ns per time sample

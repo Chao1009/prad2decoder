@@ -18,7 +18,9 @@
     "min_peak_adc": 30.0,
     "min_sum_adc": 60.0,
 
-    "// XY cluster matching cuts (negative to disable)": "",
+    "// XY cluster matching: mode 0 = ADC-sorted 1:1, mode 1 = Cartesian with cuts": "",
+    "match_mode": 1,
+    "// XY matching cuts for mode 1 (negative to disable)": "",
     "match_adc_asymmetry": 0.8,
     "match_time_diff": 50.0,
     "match_ts_period": 25.0,

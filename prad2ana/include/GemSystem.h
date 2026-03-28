@@ -229,7 +229,8 @@ private:
     float min_peak_adc_         = 0.f;    // min peak ADC per strip (0=disabled)
     float min_sum_adc_          = 0.f;    // min sum ADC per strip (0=disabled)
 
-    // --- XY matching cuts (passed to GemCluster at Reconstruct time) ------
+    // --- XY matching (passed to GemCluster at Reconstruct time) -----------
+    int   match_mode_           = 1;     // 0=sorted, 1=Cartesian+cuts
     float match_adc_asymmetry_  = 0.8f;
     float match_time_diff_      = 50.f;
     float match_ts_period_      = 25.f;

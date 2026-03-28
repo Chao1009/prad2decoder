@@ -252,7 +252,7 @@ def add_legend(fig):
         plt.Line2D([], [], color="gray", linestyle="--", linewidth=0.6,
                    alpha=0.5, label="Cross-talk hit"),
     ]
-    fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=11,
+    fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=14,
                framealpha=0.9)
 
 

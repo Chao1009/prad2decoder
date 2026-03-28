@@ -75,7 +75,8 @@ void GemSystem::Init(const std::string &map_file)
     min_peak_adc_         = j.value("min_peak_adc", 0.f);
     min_sum_adc_          = j.value("min_sum_adc", 0.f);
 
-    // XY matching cuts (stored here, applied via GemCluster)
+    // XY matching (stored here, applied via GemCluster)
+    match_mode_           = j.value("match_mode", 1);
     match_adc_asymmetry_  = j.value("match_adc_asymmetry", 0.8f);
     match_time_diff_      = j.value("match_time_diff", 50.f);
     match_ts_period_      = j.value("match_ts_period", 25.f);
@@ -239,8 +240,9 @@ void GemSystem::ProcessEvent(const ssp::SspEventData &evt)
 
 void GemSystem::Reconstruct(GemCluster &clusterer)
 {
-    // apply XY matching cuts from gem_map config
+    // apply XY matching config from gem_map
     auto cfg = clusterer.GetConfig();
+    cfg.match_mode          = match_mode_;
     cfg.match_adc_asymmetry = match_adc_asymmetry_;
     cfg.match_time_diff     = match_time_diff_;
     cfg.ts_period           = match_ts_period_;
