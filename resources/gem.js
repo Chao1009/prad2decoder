@@ -58,7 +58,6 @@ function fetchGemData() {
 
     configReady.then(() => {
         fetch('/api/gem/hits').then(r => r.json()).then(plotGemHits).catch(() => {});
-        fetchGemAccum();
     });
 }
 
@@ -204,33 +203,40 @@ function plotGemOccupancy(data) {
 // --- GEM histograms (bottom right) ------------------------------------------
 
 const GEM_HIST_IDS = ['gem-ncl-hist', 'gem-theta-hist'];
+let currentGemNclHist = null, currentGemThetaHist = null;
 
 function plotGemHist(data) {
-    if (!data) return;
+    if (!data) { currentGemNclHist = currentGemThetaHist = null; return; }
 
     function plotOne(divId, hdata, title, xlabel, color) {
         if (!hdata || !hdata.bins || hdata.bins.length === 0) {
             Plotly.react(divId, [], Object.assign({}, PL_GEM_OCC, {
                 title: { text: title, font: { size: 12, color: '#e0e0e0' } },
             }), { responsive: true, displayModeBar: false });
-            return;
+            return null;
         }
         const n = hdata.bins.length;
         const x = Array.from({length: n}, (_, i) => hdata.min + (i + 0.5) * hdata.step);
+        const entries = hdata.bins.reduce((a, b) => a + b, 0);
+        // store non-zero bins for copy
+        const cx = [], cy = [];
+        for (let i = 0; i < n; i++) { if (hdata.bins[i] > 0) { cx.push(x[i]); cy.push(hdata.bins[i]); } }
         Plotly.react(divId, [{
             x: x, y: hdata.bins, type: 'bar',
-            marker: { color: color },
+            marker: { color: color, line: { width: 0 } },
             hovertemplate: xlabel + '=%{x:.1f}<br>count=%{y}<extra></extra>',
         }], Object.assign({}, PL_GEM_OCC, {
-            title: { text: title, font: { size: 12, color: '#e0e0e0' } },
+            title: { text: title + '<br><span style="font-size:9px;color:#888">' + entries + ' entries</span>',
+                     font: { size: 12, color: '#e0e0e0' } },
             xaxis: { title: xlabel, gridcolor: '#333', zerolinecolor: '#555' },
             yaxis: { title: 'Counts', gridcolor: '#333', zerolinecolor: '#555' },
             bargap: 0.05,
         }), { responsive: true, displayModeBar: false });
+        return { x: cx, y: cy };
     }
 
-    plotOne('gem-ncl-hist', data.nclusters, 'GEM Clusters / Event', 'N clusters', '#51cf66');
-    plotOne('gem-theta-hist', data.theta, 'GEM Hit Angle', 'θ (deg)', '#00b4d8');
+    currentGemNclHist = plotOne('gem-ncl-hist', data.nclusters, 'GEM Clusters / Event', 'N clusters', '#51cf66');
+    currentGemThetaHist = plotOne('gem-theta-hist', data.theta, 'GEM Hit Angle', 'θ (deg)', '#00b4d8');
 }
 
 // --- resize -----------------------------------------------------------------

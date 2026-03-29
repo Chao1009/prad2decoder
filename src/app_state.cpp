@@ -8,6 +8,16 @@
 
 using json = nlohmann::json;
 
+// Serialize a Histogram to JSON.
+static json histToJson(const Histogram &h, float mn, float mx, float st)
+{
+    if (h.bins.empty())
+        return {{"bins", json::array()}, {"underflow", 0}, {"overflow", 0},
+                {"min", mn}, {"max", mx}, {"step", st}};
+    return {{"bins", h.bins}, {"underflow", h.underflow}, {"overflow", h.overflow},
+            {"min", mn}, {"max", mx}, {"step", st}};
+}
+
 // Load position/tilting from a JSON object into a DetectorTransform.
 static void loadTransform(DetectorTransform &t, const json &j)
 {
@@ -183,8 +193,10 @@ void AppState::init(const std::string &db_dir,
             gem_enabled = (gem_sys.GetNDetectors() > 0);
             if (gem_enabled) {
                 std::cerr << "GEM       : " << gem_sys.GetNDetectors() << " detectors\n";
-                // init occupancy histograms
-                gem_occupancy.resize(gem_sys.GetNDetectors());
+                // init per-detector data (identity transform by default)
+                int ndet = gem_sys.GetNDetectors();
+                gem_transforms.resize(ndet);
+                gem_occupancy.resize(ndet);
                 for (auto &h : gem_occupancy) h.init(GEM_OCC_NX, GEM_OCC_NY);
                 if (!gem_ped_filename.empty()) {
                     std::string gem_ped_file = findFile(gem_ped_filename, db_dir);
@@ -341,10 +353,9 @@ void AppState::init(const std::string &db_dir,
 
             // GEM per-detector transforms (same position/tilting format as HyCal)
             if (gem_enabled && ri.contains("gem") && ri["gem"].is_array()) {
-                gem_transforms.resize(gem_sys.GetNDetectors());
                 for (auto &entry : ri["gem"]) {
                     int id = entry.value("id", -1);
-                    if (id < 0 || id >= gem_sys.GetNDetectors()) continue;
+                    if (id < 0 || id >= (int)gem_transforms.size()) continue;
                     loadTransform(gem_transforms[id], entry);
                 }
                 std::cerr << "GEM geom  : " << gem_transforms.size() << " detectors configured\n";
@@ -824,35 +835,30 @@ void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
     gem_sys.ProcessEvent(ssp_evt);
     gem_sys.Reconstruct(gem_clusterer);
 
-    // accumulate occupancy (rotation only, no position offset — each GEM in its own cell)
+    // accumulate occupancy + histograms in a single pass
     std::lock_guard<std::mutex> lk(data_mtx);
+    int total_clusters = 0;
     for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
         auto &det = gem_sys.GetDetectors()[d];
         float xSize = det.planes[0].size;
         float ySize = det.planes[1].size;
         float xStep = xSize / GEM_OCC_NX;
         float yStep = ySize / GEM_OCC_NY;
-        bool hasXform = d < (int)gem_transforms.size();
-        for (auto &h : gem_sys.GetHits(d)) {
-            float lx = h.x, ly = h.y;
-            if (hasXform) gem_transforms[d].rotate(h.x, h.y, lx, ly);
-            gem_occupancy[d].fill(lx, ly, -xSize/2, xStep, -ySize/2, yStep);
-        }
-    }
-
-    // accumulate GEM histograms
-    int total_clusters = 0;
-    for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
-        bool hasXform = d < (int)gem_transforms.size();
-        for (auto &h : gem_sys.GetHits(d)) {
+        auto &xform = gem_transforms[d];
+        auto &hits = gem_sys.GetHits(d);
+        total_clusters += static_cast<int>(hits.size());
+        for (auto &h : hits) {
+            // rotation only for occupancy (local detector coords)
+            float ox, oy;
+            xform.rotate(h.x, h.y, ox, oy);
+            gem_occupancy[d].fill(ox, oy, -xSize/2, xStep, -ySize/2, yStep);
+            // full transform for theta (lab frame)
             float lx, ly, lz;
-            if (hasXform) gem_transforms[d].toLab(h.x, h.y, lx, ly, lz);
-            else { lx = h.x; ly = h.y; lz = 0.f; }
+            xform.toLab(h.x, h.y, lx, ly, lz);
             float r = std::sqrt(lx*lx + ly*ly);
             float theta = std::atan2(r, lz) * (180.f / 3.14159265f);
             gem_theta_hist.fill(theta, gem_theta_min, gem_theta_step);
         }
-        total_clusters += static_cast<int>(gem_sys.GetHits(d).size());
     }
     gem_nclusters_hist.fill(static_cast<float>(total_clusters),
                             static_cast<float>(gem_ncl_min),
@@ -871,6 +877,7 @@ nlohmann::json AppState::apiGemHits() const
 
     result["n_detectors"] = gem_sys.GetNDetectors();
     json detectors = json::array();
+    json all_hits = json::array();
     for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
         auto &det = gem_sys.GetDetectors()[d];
         json dj;
@@ -893,38 +900,27 @@ nlohmann::json AppState::apiGemHits() const
             dj[pname] = clusters;
         }
 
-        // 2D hits (transformed to lab frame)
-        bool hasXform = d < (int)gem_transforms.size();
+        // 2D hits (transformed to lab frame) — build per-det and all_hits in one pass
+        auto &xform = gem_transforms[d];
         json hits = json::array();
         for (auto &h : gem_sys.GetHits(d)) {
             float lx, ly, lz;
-            if (hasXform) gem_transforms[d].toLab(h.x, h.y, lx, ly, lz);
-            else { lx = h.x; ly = h.y; lz = 0.f; }
+            xform.toLab(h.x, h.y, lx, ly, lz);
             hits.push_back({
                 {"x", lx}, {"y", ly},
                 {"x_charge", h.x_charge}, {"y_charge", h.y_charge},
                 {"x_size", h.x_size}, {"y_size", h.y_size}
+            });
+            all_hits.push_back({
+                {"x", lx}, {"y", ly}, {"det", d},
+                {"x_charge", h.x_charge}, {"y_charge", h.y_charge}
             });
         }
         dj["hits_2d"] = hits;
         detectors.push_back(dj);
     }
     result["detectors"] = detectors;
-
-    // flat list of all 2D hits (lab frame)
-    json all = json::array();
-    for (auto &h : gem_sys.GetAllHits()) {
-        int d = h.det_id;
-        float lx, ly, lz;
-        if (d < (int)gem_transforms.size())
-            gem_transforms[d].toLab(h.x, h.y, lx, ly, lz);
-        else { lx = h.x; ly = h.y; lz = 0.f; }
-        all.push_back({
-            {"x", lx}, {"y", ly}, {"det", d},
-            {"x_charge", h.x_charge}, {"y_charge", h.y_charge}
-        });
-    }
-    result["all_hits"] = all;
+    result["all_hits"] = all_hits;
     return result;
 }
 
@@ -949,11 +945,9 @@ nlohmann::json AppState::apiGemConfig() const
             {"x_size", det.planes[0].size},
             {"y_size", det.planes[1].size}
         };
-        if (d < (int)gem_transforms.size()) {
-            auto &t = gem_transforms[d];
-            lj["position"] = {t.x, t.y, t.z};
-            lj["tilting"]  = {t.rx, t.ry, t.rz};
-        }
+        auto &t = gem_transforms[d];
+        lj["position"] = {t.x, t.y, t.z};
+        lj["tilting"]  = {t.rx, t.ry, t.rz};
         layers.push_back(lj);
     }
     result["layers"] = layers;
@@ -990,16 +984,9 @@ nlohmann::json AppState::apiGemOccupancy() const
 nlohmann::json AppState::apiGemHist() const
 {
     std::lock_guard<std::mutex> lk(data_mtx);
-    auto histJson = [](const Histogram &h, float mn, float mx, float st) -> json {
-        if (h.bins.empty())
-            return {{"bins", json::array()}, {"underflow", 0}, {"overflow", 0},
-                    {"min", mn}, {"max", mx}, {"step", st}};
-        return {{"bins", h.bins}, {"underflow", h.underflow}, {"overflow", h.overflow},
-                {"min", mn}, {"max", mx}, {"step", st}};
-    };
     return {
-        {"nclusters", histJson(gem_nclusters_hist, (float)gem_ncl_min, (float)gem_ncl_max, (float)gem_ncl_step)},
-        {"theta",     histJson(gem_theta_hist, gem_theta_min, gem_theta_max, gem_theta_step)}
+        {"nclusters", histToJson(gem_nclusters_hist, (float)gem_ncl_min, (float)gem_ncl_max, (float)gem_ncl_step)},
+        {"theta",     histToJson(gem_theta_hist, gem_theta_min, gem_theta_max, gem_theta_step)}
     };
 }
 
@@ -1067,18 +1054,11 @@ json AppState::apiHist(bool integral, const std::string &key) const
 json AppState::apiClusterHist() const
 {
     std::lock_guard<std::mutex> lk(data_mtx);
-    auto histJson = [](const Histogram &h, float mn, float mx, float st) -> json {
-        if (h.bins.empty())
-            return {{"bins", json::array()}, {"underflow", 0}, {"overflow", 0},
-                    {"min", mn}, {"max", mx}, {"step", st}};
-        return {{"bins", h.bins}, {"underflow", h.underflow}, {"overflow", h.overflow},
-                {"min", mn}, {"max", mx}, {"step", st}};
-    };
-    json r = histJson(cluster_energy_hist, cl_hist_min, cl_hist_max, cl_hist_step);
+    json r = histToJson(cluster_energy_hist, cl_hist_min, cl_hist_max, cl_hist_step);
     r["events"] = cluster_events_processed;
-    r["nclusters"] = histJson(nclusters_hist,
+    r["nclusters"] = histToJson(nclusters_hist,
         (float)nclusters_hist_min, (float)nclusters_hist_max, (float)nclusters_hist_step);
-    r["nblocks"] = histJson(nblocks_hist,
+    r["nblocks"] = histToJson(nblocks_hist,
         (float)nblocks_hist_min, (float)nblocks_hist_max, (float)nblocks_hist_step);
     return r;
 }
@@ -1099,15 +1079,11 @@ json AppState::apiEnergyAngle() const
 json AppState::apiMoller() const
 {
     std::lock_guard<std::mutex> lk(data_mtx);
-    auto histJson = [](const Histogram &h, float mn, float mx, float st) -> json {
-        return {{"bins", h.bins}, {"underflow", h.underflow}, {"overflow", h.overflow},
-                {"min", mn}, {"max", mx}, {"step", st}};
-    };
     return {{"xy_bins", moller_xy_hist.bins},
             {"xy_nx", moller_xy_hist.nx}, {"xy_ny", moller_xy_hist.ny},
             {"xy_x_min", moller_xy_x_min}, {"xy_x_max", moller_xy_x_max}, {"xy_x_step", moller_xy_x_step},
             {"xy_y_min", moller_xy_y_min}, {"xy_y_max", moller_xy_y_max}, {"xy_y_step", moller_xy_y_step},
-            {"energy_hist", histJson(moller_energy_hist, moller_e_min, moller_e_max, moller_e_step)},
+            {"energy_hist", histToJson(moller_energy_hist, moller_e_min, moller_e_max, moller_e_step)},
             {"moller_events", moller_events},
             {"total_events", cluster_events_processed},
             {"cuts", {{"energy_tolerance", moller_energy_tol},

@@ -991,6 +991,7 @@ function switchTab(tab){
         setTimeout(()=>resizePhysics(),50);
     } else if(tab==='gem') {
         fetchGemData();
+        fetchGemAccum();
         setTimeout(()=>resizeGem(),50);
     } else {
         drawGeo();
@@ -1541,6 +1542,12 @@ function init(){
     Plotly.newPlot('cl-nclust-hist',[],{...PL,title:{text:'Clusters per Event',font:{size:10,color:'#555'}}},PC2);
     Plotly.newPlot('cl-nblocks-hist',[],{...PL,title:{text:'Blocks per Cluster',font:{size:10,color:'#555'}}},PC2);
 
+    // GEM histograms init + copy
+    Plotly.newPlot('gem-ncl-hist',[],{...PL,title:{text:'GEM Clusters / Event',font:{size:10,color:'#555'}}},PC2);
+    Plotly.newPlot('gem-theta-hist',[],{...PL,title:{text:'GEM Hit Angle',font:{size:10,color:'#555'}}},PC2);
+    setupCopyBtn('btn-copy-gem-ncl', ()=>currentGemNclHist);
+    setupCopyBtn('btn-copy-gem-theta', ()=>currentGemThetaHist);
+
     // cluster stat row column divider
     setupDivider('div-cl-stat','x',
         ()=>document.querySelector('.cl-stat-cell'),
@@ -1715,6 +1722,9 @@ function init(){
             document.getElementById('lms-detail-header').innerHTML=
                 '<span class="cl-info-text">Click a module to view LMS history</span>';
             document.getElementById('lms-tbody').innerHTML='';
+
+            // GEM: clear histogram copy data
+            currentGemNclHist=null; currentGemThetaHist=null;
 
             // EPICS + Physics: clear
             clearEpicsFrontend();

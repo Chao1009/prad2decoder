@@ -5,6 +5,10 @@
 // Transforms detector-plane coordinates (x, y) to lab frame via
 // Euler rotation (Rx * Ry * Rz) then translation.
 // Reusable for HyCal, GEMs, or any planar detector.
+//
+// The rotation matrix is lazily computed on first use and cached.
+// Call prepare() explicitly to force precomputation, or just use
+// toLab()/rotate() — they auto-prepare if needed.
 //=============================================================================
 
 #include <cmath>
@@ -13,28 +17,45 @@ struct DetectorTransform {
     float x=0, y=0, z=0;               // detector origin in lab frame (mm)
     float rx=0, ry=0, rz=0;            // tilting angles (degrees)
 
-    // Transform a point from detector plane to lab frame.
-    void toLab(float dx, float dy, float &lx, float &ly, float &lz) const {
+    // Precomputed rotation matrix elements.
+    struct Matrix {
+        float r00=1, r01=0, r10=0, r11=1, r20=0, r21=0;
+        float tx=0, ty=0, tz=0;
+    };
+
+    // Force matrix precomputation (idempotent).
+    void prepare() const {
+        if (prepared_) return;
         const float DEG = 3.14159265f / 180.f;
         float cx=std::cos(rx*DEG), sx=std::sin(rx*DEG);
         float cy=std::cos(ry*DEG), sy=std::sin(ry*DEG);
         float cz=std::cos(rz*DEG), sz=std::sin(rz*DEG);
-        // R = Rx * Ry * Rz applied to (dx, dy, 0)
-        float px =  cy*cz*dx - cy*sz*dy;
-        float py = (sx*sy*cz + cx*sz)*dx + (-sx*sy*sz + cx*cz)*dy;
-        float pz = (-cx*sy*cz + sx*sz)*dx + (cx*sy*sz + sx*cz)*dy;
-        lx = px + x;
-        ly = py + y;
-        lz = pz + z;
+        mat_.r00 =  cy*cz;              mat_.r01 = -cy*sz;
+        mat_.r10 =  sx*sy*cz + cx*sz;   mat_.r11 = -sx*sy*sz + cx*cz;
+        mat_.r20 = -cx*sy*cz + sx*sz;   mat_.r21 =  cx*sy*sz + sx*cz;
+        mat_.tx = x;  mat_.ty = y;  mat_.tz = z;
+        prepared_ = true;
+    }
+
+    // Transform a point from detector plane to lab frame.
+    void toLab(float dx, float dy, float &lx, float &ly, float &lz) const {
+        prepare();
+        lx = mat_.r00*dx + mat_.r01*dy + mat_.tx;
+        ly = mat_.r10*dx + mat_.r11*dy + mat_.ty;
+        lz = mat_.r20*dx + mat_.r21*dy + mat_.tz;
     }
 
     // Rotation only (no translation). For drawing in detector-local space.
     void rotate(float dx, float dy, float &ox, float &oy) const {
-        const float DEG = 3.14159265f / 180.f;
-        float cx=std::cos(rx*DEG), sx=std::sin(rx*DEG);
-        float cy=std::cos(ry*DEG), sy=std::sin(ry*DEG);
-        float cz=std::cos(rz*DEG), sz=std::sin(rz*DEG);
-        ox =  cy*cz*dx - cy*sz*dy;
-        oy = (sx*sy*cz + cx*sz)*dx + (-sx*sy*sz + cx*cz)*dy;
+        prepare();
+        ox = mat_.r00*dx + mat_.r01*dy;
+        oy = mat_.r10*dx + mat_.r11*dy;
     }
+
+    // Access the cached matrix directly (auto-prepares).
+    const Matrix& matrix() const { prepare(); return mat_; }
+
+private:
+    mutable Matrix mat_;
+    mutable bool   prepared_ = false;
 };
