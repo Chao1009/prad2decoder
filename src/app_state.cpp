@@ -19,6 +19,7 @@ static json histToJson(const Histogram &h, float mn, float mx, float st)
 }
 
 // Load position/tilting from a JSON object into a DetectorTransform.
+// Calls prepare() so the rotation matrix is cached before multithreaded use.
 static void loadTransform(DetectorTransform &t, const json &j)
 {
     if (j.contains("position") && j["position"].is_array() && j["position"].size()>=3) {
@@ -27,6 +28,7 @@ static void loadTransform(DetectorTransform &t, const json &j)
     if (j.contains("tilting") && j["tilting"].is_array() && j["tilting"].size()>=3) {
         t.rx = j["tilting"][0]; t.ry = j["tilting"][1]; t.rz = j["tilting"][2];
     }
+    t.prepare();
 }
 
 //=============================================================================
@@ -193,9 +195,10 @@ void AppState::init(const std::string &db_dir,
             gem_enabled = (gem_sys.GetNDetectors() > 0);
             if (gem_enabled) {
                 std::cerr << "GEM       : " << gem_sys.GetNDetectors() << " detectors\n";
-                // init per-detector data (identity transform by default)
+                // init per-detector data (identity transform by default, pre-prepared)
                 int ndet = gem_sys.GetNDetectors();
                 gem_transforms.resize(ndet);
+                for (auto &t : gem_transforms) t.prepare();
                 gem_occupancy.resize(ndet);
                 for (auto &h : gem_occupancy) h.init(GEM_OCC_NX, GEM_OCC_NY);
                 if (!gem_ped_filename.empty()) {
@@ -467,6 +470,9 @@ void AppState::init(const std::string &db_dir,
     moller_energy_hist.init(std::max(1, (int)std::ceil((moller_e_max - moller_e_min) / moller_e_step)));
     gem_nclusters_hist.init(std::max(1, (gem_ncl_max - gem_ncl_min) / gem_ncl_step));
     gem_theta_hist.init(std::max(1, (int)std::ceil((gem_theta_max - gem_theta_min) / gem_theta_step)));
+
+    // ensure all transforms are pre-prepared before multithreaded use
+    hycal_transform.prepare();
 }
 
 //=============================================================================
