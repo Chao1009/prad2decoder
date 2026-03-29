@@ -597,7 +597,11 @@ class ScanEngine:
         return False
 
     def _wait_dwell(self) -> str:
-        """Wait for dwell_time seconds.  Returns 'done', 'skip', or 'stop'."""
+        """Wait for dwell_time seconds.  Returns 'done', 'skip', or 'stop'.
+
+        On resume after pause, the dwell timer restarts from the full
+        dwell_time (beam trip recovery — partial data is discarded).
+        """
         end = time.time() + self.dwell_time
         while time.time() < end:
             if self._stop.is_set():
@@ -606,12 +610,15 @@ class ScanEngine:
                 self._skip.clear()
                 self.log("Module skipped by user")
                 return "skip"
-            while self._paused and not self._stop.is_set():
-                end += 0.1       # freeze the countdown while paused
+            if self._paused:
                 self.state = ScanState.PAUSED
-                time.sleep(0.1)
-            if self._stop.is_set():
-                return "stop"
+                while self._paused and not self._stop.is_set():
+                    time.sleep(0.1)
+                if self._stop.is_set():
+                    return "stop"
+                # Restart full dwell after resume
+                end = time.time() + self.dwell_time
+                self.log("Dwell restarted after resume")
             self.state = ScanState.DWELLING
             self.dwell_remaining = max(0.0, end - time.time())
             time.sleep(0.1)
@@ -727,12 +734,20 @@ class SnakeScanGUI:
                   foreground=[("disabled", "#484f58")])
         style.configure("Accent.TButton", background="#1f6feb",
                          foreground="white")
+        style.map("Accent.TButton",
+                  background=[("active", "#388bfd")])
         style.configure("Danger.TButton", background="#da3633",
                          foreground="white")
+        style.map("Danger.TButton",
+                  background=[("active", "#f85149")])
         style.configure("Warn.TButton", background="#9e6a03",
                          foreground="white")
+        style.map("Warn.TButton",
+                  background=[("active", "#d29922")])
         style.configure("Green.TButton", background="#238636",
                          foreground="white")
+        style.map("Green.TButton",
+                  background=[("active", "#3fb950")])
         style.configure("TCombobox", fieldbackground=C.PANEL,
                          background=C.BORDER, foreground=C.TEXT,
                          selectbackground=C.BORDER,
