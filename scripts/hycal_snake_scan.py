@@ -148,8 +148,6 @@ class Module:
     y: float           # centre y in HyCal frame (mm)
     sx: float          # module width  (mm)
     sy: float          # module height (mm)
-    row: int = 0       # grid row index  (assigned by assign_grid_indices)
-    col: int = 0       # grid col index  (assigned by assign_grid_indices)
 
 
 def load_modules(json_path: str) -> List[Module]:
@@ -169,40 +167,168 @@ def load_modules(json_path: str) -> List[Module]:
     return modules
 
 
-def assign_grid_indices(modules: List[Module], y_tol: float = 0.5):
-    """Assign row/col indices by grouping modules by y position (top-down)."""
-    if not modules:
-        return
-    by_y = sorted(modules, key=lambda m: -m.y)  # top to bottom
-    rows: List[List[Module]] = []
-    current_row = [by_y[0]]
-    for m in by_y[1:]:
-        if abs(m.y - current_row[0].y) < y_tol:
-            current_row.append(m)
-        else:
-            rows.append(current_row)
-            current_row = [m]
-    rows.append(current_row)
+def build_scan_path(scan_modules: List[Module]) -> Tuple[List[Module], int]:
+    """Build scan path using line search, sector change, and line change.
 
-    for row_idx, row_mods in enumerate(rows):
-        row_mods.sort(key=lambda m: m.x)  # left to right
-        for col_idx, m in enumerate(row_mods):
-            m.row = row_idx
-            m.col = col_idx
+    Starting from the topmost-leftmost module, each 'line' collects all
+    unvisited modules of the same type at the exact y position.
 
+    At the end of a line, a **sector change** searches for the nearest
+    unvisited module (any type) ahead in the scan direction whose
+    centre_y is within tolerance.  Success continues the line search in
+    the same direction.
 
-def generate_snake_path(modules: List[Module]) -> List[Module]:
-    """Order modules in a snake pattern: row-by-row, alternating direction."""
-    rows: Dict[int, List[Module]] = {}
-    for m in modules:
-        rows.setdefault(m.row, []).append(m)
+    If sector change fails, a **line change** searches for a same-type
+    module exactly below (same x column, lower y).  If that also fails,
+    a fallback sector change searches for any type below within x and y
+    tolerance.  Success flips the scan direction.
+
+    Tolerance = 0.8 * min(current.size, candidate.size) per axis.
+
+    Returns (path, n_unoptimized) where n_unoptimized counts modules
+    that could not be reached by the structured search and were appended
+    by distance at the end.
+    """
+    if not scan_modules:
+        return [], 0
+
+    modules = list(scan_modules)
+    start = max(modules, key=lambda m: (m.y, -m.x))
+    idx_map = {id(m): i for i, m in enumerate(modules)}
+
+    unvisited = set(range(len(modules)))
     path: List[Module] = []
-    for r in sorted(rows):
-        row_mods = sorted(rows[r], key=lambda m: m.col)
-        if r % 2 == 1:          # odd rows: right-to-left
-            row_mods.reverse()
-        path.extend(row_mods)
-    return path
+    going_right = True
+    starter_idx = idx_map[id(start)]
+
+    # -- helper closures -----------------------------------------------------
+
+    def _sector_change(last: Module, max_d2: float = float('inf')
+                       ) -> Optional[int]:
+        """Unvisited (any type) at similar y, ahead in direction.
+        Favors higher y, then nearest.  Optional distance² limit."""
+        best, best_y, best_d2 = None, -float('inf'), float('inf')
+        for i in unvisited:
+            m = modules[i]
+            if going_right and m.x <= last.x:
+                continue
+            if not going_right and m.x >= last.x:
+                continue
+            if abs(m.y - last.y) >= 0.8 * min(last.sy, m.sy):
+                continue
+            d2 = (m.x - last.x) ** 2 + (m.y - last.y) ** 2
+            if d2 > max_d2:
+                continue
+            if m.y > best_y or (abs(m.y - best_y) < 0.5 and d2 < best_d2):
+                best_y = m.y
+                best_d2 = d2
+                best = i
+        return best
+
+    def _line_change_same_type(last: Module) -> Optional[int]:
+        """Same type, same x column (< 0.5 mm), nearest below."""
+        best, best_y = None, -float('inf')
+        for i in unvisited:
+            m = modules[i]
+            if m.mod_type != last.mod_type or m.y >= last.y:
+                continue
+            if abs(m.x - last.x) > 0.5:
+                continue
+            if m.y > best_y:
+                best_y = m.y
+                best = i
+        return best
+
+    def _line_change_any_type(last: Module) -> Optional[int]:
+        """Any type, below, within x and y tolerance."""
+        best, best_d2 = None, float('inf')
+        for i in unvisited:
+            m = modules[i]
+            if m.y >= last.y:
+                continue
+            if abs(m.x - last.x) >= 0.8 * min(last.sx, m.sx):
+                continue
+            if abs(m.y - last.y) >= 0.8 * min(last.sy, m.sy):
+                continue
+            d2 = (m.x - last.x) ** 2 + (m.y - last.y) ** 2
+            if d2 < best_d2:
+                best_d2 = d2
+                best = i
+        return best
+
+    # -- main loop -----------------------------------------------------------
+
+    while True:
+        # === LINE SEARCH: same type, exact y, contiguous in x ===
+        cur = modules[starter_idx]
+        cands = sorted(
+            [i for i in unvisited
+             if modules[i].mod_type == cur.mod_type
+             and abs(modules[i].y - cur.y) < 0.5],
+            key=lambda i: modules[i].x, reverse=not going_right)
+        line_idx: List[int] = []
+        for i in cands:
+            m = modules[i]
+            if line_idx:
+                prev = modules[line_idx[-1]]
+                if abs(m.x - prev.x) > 1.2 * max(prev.sx, m.sx):
+                    break
+            line_idx.append(i)
+        for i in line_idx:
+            unvisited.discard(i)
+        path.extend([modules[i] for i in line_idx])
+
+        if not unvisited:
+            break
+
+        last = path[-1]
+        # Max reverse distance²: line span + 2 module widths
+        line_xs = [modules[i].x for i in line_idx]
+        line_span = max(line_xs) - min(line_xs) if line_xs else 0
+        max_sx = max(modules[i].sx for i in line_idx) if line_idx else 0
+        rev_limit = (line_span + 2 * max_sx) ** 2
+
+        # === SECTOR CHANGE (forward) ===
+        sc = _sector_change(last)
+        if sc is not None:
+            starter_idx = sc
+            continue                    # same direction
+
+        # === SECTOR CHANGE (reverse) — check before going down ===
+        going_right = not going_right
+        sc_rev = _sector_change(last, max_d2=rev_limit)
+        if sc_rev is not None:
+            starter_idx = sc_rev
+            continue                    # direction already flipped
+        going_right = not going_right   # restore if nothing found
+
+        # === LINE CHANGE: same type exactly under ===
+        lc = _line_change_same_type(last)
+        if lc is not None:
+            starter_idx = lc
+            going_right = not going_right
+            continue
+
+        # === LINE CHANGE fallback: any type below with tolerance ===
+        lc2 = _line_change_any_type(last)
+        if lc2 is not None:
+            starter_idx = lc2
+            going_right = not going_right
+            continue
+
+        # === END OF STRUCTURED SCAN ===
+        break
+
+    # Append any remaining modules ordered by distance from last position
+    n_unoptimized = len(unvisited)
+    if unvisited:
+        last = path[-1]
+        for i in sorted(unvisited,
+                        key=lambda i: (modules[i].x - last.x) ** 2
+                                      + (modules[i].y - last.y) ** 2):
+            path.append(modules[i])
+
+    return path, n_unoptimized
 
 
 def module_to_ptrans(mx: float, my: float) -> Tuple[float, float]:
@@ -437,8 +563,11 @@ class ScanEngine:
     def __init__(self, epics, modules: List[Module], log_fn):
         self.ep = epics
         self.all_modules = modules
-        self.path = generate_snake_path(modules)
+        self.path, n_unopt = build_scan_path(modules)
         self.log = log_fn                # log_fn(msg, level="info")
+        if n_unopt:
+            self.log(f"WARNING: {n_unopt} modules appended with unoptimized "
+                     f"path (no structured route found)", level="warn")
 
         # -- tunables (set before start) --
         self.dwell_time: float = DEFAULT_DWELL
@@ -649,7 +778,6 @@ class SnakeScanGUI:
 
         # Split into scan targets vs display-only
         self.scan_modules = self._filter_scan_modules(0)
-        assign_grid_indices(self.scan_modules)
 
         self.engine = ScanEngine(epics, self.scan_modules, self._log)
 
@@ -661,6 +789,9 @@ class SnakeScanGUI:
 
         self._selected_start_idx = 0
         self._log_lines: List[str] = []
+
+        # module name -> Module for tooltip lookup
+        self._mod_by_name: Dict[str, Module] = {m.name: m for m in all_modules}
 
         # canvas item IDs:  module name -> rectangle id
         self._cell_ids: Dict[str, int] = {}
@@ -789,6 +920,13 @@ class SnakeScanGUI:
         self._canvas.pack(padx=4, pady=4)
         self._canvas.bind("<Button-1>", self._on_canvas_click)
 
+        # click tooltip (shown on module click)
+        self._tooltip = tk.Label(
+            self._canvas, text="", bg="#1c2128", fg=C.TEXT,
+            font=("Consolas", 8), padx=4, pady=2,
+            borderwidth=1, relief="solid", highlightthickness=0)
+        self._tooltip_visible = False
+
         self._compute_canvas_mapping()
         self._draw_modules()
 
@@ -891,30 +1029,72 @@ class SnakeScanGUI:
             coords.extend(self._mod_to_canvas_center(path[i]))
         if len(coords) >= 4:
             self._canvas.create_line(
-                *coords, fill=C.PATH_LINE, width=1,
+                *coords, fill=C.PATH_LINE, width=1.5,
                 smooth=False, tags=("path_preview",))
-        # Raise scan module rectangles above the line so colours stay visible
-        self._canvas.tag_raise("scan")
+            # Line on top of everything so it's visible over modules
+            self._canvas.tag_raise("path_preview")
 
     def _clear_path_preview(self):
         self._canvas.delete("path_preview")
 
     def _on_canvas_click(self, event):
+        # Clear previous highlight and tooltip
+        self._canvas.delete("mod_highlight")
+        self._tooltip.place_forget()
+        self._tooltip_visible = False
+
         items = self._canvas.find_closest(event.x, event.y)
         if not items:
             return
         tags = self._canvas.gettags(items[0])
+        name = None
         for tag in tags:
             if tag.startswith("mod_"):
                 name = tag[4:]
-                if name in self._scan_name_to_idx:
-                    idx = self._scan_name_to_idx[name]
-                    self._selected_start_idx = idx
-                    mod = self.engine.path[idx]
-                    self._start_var.set(mod.name)
-                    self._log(f"Selected start module: {mod.name}")
-                    self._draw_path_preview()
                 break
+        if name is None:
+            return
+
+        mod = self._mod_by_name.get(name)
+        if mod is None:
+            return
+
+        # Set start module if it's a scan module
+        if name in self._scan_name_to_idx:
+            idx = self._scan_name_to_idx[name]
+            self._selected_start_idx = idx
+            self._start_var.set(name)
+            self._log(f"Selected start module: {name}")
+            self._draw_path_preview()
+
+        # Highlight border
+        x0, y0, x1, y1 = self._mod_to_canvas(mod)
+        self._canvas.create_rectangle(
+            x0, y0, x1, y1, outline=C.ACCENT, width=2,
+            tags=("mod_highlight",))
+        self._canvas.tag_raise("mod_highlight")
+
+        # Show tooltip near click
+        px, py = module_to_ptrans(mod.x, mod.y)
+        text = (f"{mod.name} ({mod.mod_type})\n"
+                f"HyCal: ({mod.x:.1f}, {mod.y:.1f})\n"
+                f"ptrans: ({px:.1f}, {py:.1f})")
+        tx = event.x + 12
+        ty = event.y - 10
+        # Keep tooltip within canvas bounds
+        self._tooltip.configure(text=text)
+        self._tooltip.update_idletasks()
+        tw = self._tooltip.winfo_reqwidth()
+        th = self._tooltip.winfo_reqheight()
+        if tx + tw > self.CANVAS_SIZE:
+            tx = event.x - tw - 8
+        if ty + th > self.CANVAS_SIZE:
+            ty = event.y - th - 8
+        if ty < 0:
+            ty = event.y + 16
+        self._tooltip.place(x=tx, y=ty)
+        self._tooltip.lift()
+        self._tooltip_visible = True
 
     def _update_canvas(self):
         eng = self.engine
@@ -964,6 +1144,23 @@ class SnakeScanGUI:
         if idle and not self._canvas.find_withtag("path_preview"):
             self._draw_path_preview()
 
+        # Motor position marker (crosshair)
+        self._canvas.delete("motor_pos")
+        rx = self.ep.get("x_rbv", None)
+        ry = self.ep.get("y_rbv", None)
+        if rx is not None and ry is not None:
+            hx, hy = ptrans_to_module(rx, ry)
+            cx = self._ox + (hx - self._x_min) * self._scale
+            cy = self._oy + (self._y_max - hy) * self._scale
+            r = 5
+            self._canvas.create_line(
+                cx - r, cy, cx + r, cy,
+                fill=C.RED, width=1.5, tags=("motor_pos",))
+            self._canvas.create_line(
+                cx, cy - r, cx, cy + r,
+                fill=C.RED, width=1.5, tags=("motor_pos",))
+            self._canvas.tag_raise("motor_pos")
+
     # -- controls panel ------------------------------------------------------
 
     def _build_controls(self, parent):
@@ -971,19 +1168,28 @@ class SnakeScanGUI:
         sc = ttk.LabelFrame(parent, text=" Scan Control ")
         sc.pack(fill="x", pady=(0, 4))
 
-        # lead-glass layer selector
-        r_lg = tk.Frame(sc, bg=C.BG)
-        r_lg.pack(fill="x", padx=6, pady=2)
-        tk.Label(r_lg, text="LG layers (0-6):", bg=C.BG, fg=C.TEXT,
+        # LG layers + start module on one row
+        r_ls = tk.Frame(sc, bg=C.BG)
+        r_ls.pack(fill="x", padx=6, pady=2)
+        tk.Label(r_ls, text="LG layers:", bg=C.BG, fg=C.TEXT,
                  font=("Consolas", 9)).pack(side="left")
         self._lg_layers_var = tk.IntVar(value=self._lg_layers)
         self._lg_layers_spin = tk.Spinbox(
-            r_lg, from_=0, to=MAX_LG_LAYERS,
+            r_ls, from_=0, to=MAX_LG_LAYERS,
             textvariable=self._lg_layers_var,
-            width=4, bg=C.PANEL, fg=C.TEXT, font=("Consolas", 9),
+            width=3, bg=C.PANEL, fg=C.TEXT, font=("Consolas", 9),
             buttonbackground=C.BORDER, insertbackground=C.TEXT,
             command=self._on_lg_layers_changed)
-        self._lg_layers_spin.pack(side="right")
+        self._lg_layers_spin.pack(side="left", padx=(2, 8))
+        tk.Label(r_ls, text="Start:", bg=C.BG, fg=C.TEXT,
+                 font=("Consolas", 9)).pack(side="left")
+        names = [m.name for m in self.engine.path]
+        self._start_var = tk.StringVar(value=names[0] if names else "")
+        self._start_combo = ttk.Combobox(r_ls, textvariable=self._start_var,
+                                          values=names, width=8,
+                                          font=("Consolas", 9))
+        self._start_combo.pack(side="right")
+        self._start_combo.bind("<<ComboboxSelected>>", self._on_start_selected)
 
         # dwell
         r = tk.Frame(sc, bg=C.BG)
@@ -1007,19 +1213,6 @@ class SnakeScanGUI:
                    width=8, bg=C.PANEL, fg=C.TEXT, font=("Consolas", 9),
                    buttonbackground=C.BORDER,
                    insertbackground=C.TEXT).pack(side="right")
-
-        # start module selector
-        r3 = tk.Frame(sc, bg=C.BG)
-        r3.pack(fill="x", padx=6, pady=2)
-        tk.Label(r3, text="Start module:", bg=C.BG, fg=C.TEXT,
-                 font=("Consolas", 9)).pack(side="left")
-        names = [m.name for m in self.engine.path]
-        self._start_var = tk.StringVar(value=names[0] if names else "")
-        self._start_combo = ttk.Combobox(r3, textvariable=self._start_var,
-                                          values=names, width=10,
-                                          font=("Consolas", 9))
-        self._start_combo.pack(side="right")
-        self._start_combo.bind("<<ComboboxSelected>>", self._on_start_selected)
 
         # buttons
         bf = tk.Frame(sc, bg=C.BG)
@@ -1124,7 +1317,7 @@ class SnakeScanGUI:
                                      bg=C.BG, fg=C.TEXT,
                                      font=("Consolas", 9))
         self._lbl_actual.pack(anchor="w")
-        self._lbl_error = tk.Label(pef, text="Error:    --",
+        self._lbl_error = tk.Label(pef, text="Diff:     --",
                                     bg=C.BG, fg=C.TEXT,
                                     font=("Consolas", 9, "bold"))
         self._lbl_error.pack(anchor="w")
@@ -1172,7 +1365,6 @@ class SnakeScanGUI:
         self._lg_layers = new_layers
         self.scan_modules = self._filter_scan_modules(new_layers)
         self._scan_names = {m.name for m in self.scan_modules}
-        assign_grid_indices(self.scan_modules)
         self.engine = ScanEngine(self.ep, self.scan_modules, self._log)
         self._scan_name_to_idx = {
             m.name: i for i, m in enumerate(self.engine.path)
@@ -1292,26 +1484,27 @@ class SnakeScanGUI:
 
         # position check
         eng = self.engine
-        mod = eng.current_module
-        if mod and eng.state != ScanState.IDLE:
+        rx = self.ep.get("x_rbv", 0.0)
+        ry = self.ep.get("y_rbv", 0.0)
+        self._lbl_actual.configure(
+            text=f"Actual:   ({rx:.3f}, {ry:.3f})")
+
+        # Determine expected position: current scan target or selected module
+        mod = eng.current_module if eng.state != ScanState.IDLE else None
+        if mod is None and eng.path and 0 <= self._selected_start_idx < len(eng.path):
+            mod = eng.path[self._selected_start_idx]
+
+        if mod:
             px, py = module_to_ptrans(mod.x, mod.y)
-            rx = self.ep.get("x_rbv", 0.0)
-            ry = self.ep.get("y_rbv", 0.0)
             err = math.sqrt((rx - px)**2 + (ry - py)**2)
             self._lbl_expected.configure(
                 text=f"Expected: ({px:.3f}, {py:.3f})")
-            self._lbl_actual.configure(
-                text=f"Actual:   ({rx:.3f}, {ry:.3f})")
             err_fg = C.RED if err > eng.pos_threshold else C.GREEN
             self._lbl_error.configure(
-                text=f"Error:    {err:.3f} mm", fg=err_fg)
+                text=f"Diff:     {err:.3f} mm", fg=err_fg)
         else:
-            rx = self.ep.get("x_rbv", 0.0)
-            ry = self.ep.get("y_rbv", 0.0)
             self._lbl_expected.configure(text="Expected: --")
-            self._lbl_actual.configure(
-                text=f"Actual:   ({rx:.3f}, {ry:.3f})")
-            self._lbl_error.configure(text="Error:    --", fg=C.DIM)
+            self._lbl_error.configure(text="Diff:     --", fg=C.DIM)
 
     def _update_scan_info(self):
         eng = self.engine
