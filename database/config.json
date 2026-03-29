@@ -54,7 +54,7 @@
         }
     },
     "lms_monitor": {
-        "accept_trigger_bits": [4],
+        "accept_trigger_bits": [24],
         "warn_threshold": 0.1,
         "warn_min_mean": 100,
         "max_history": 5000,
