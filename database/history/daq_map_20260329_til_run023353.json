@@ -6662,97 +6662,97 @@
   {
     "name": "W701",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 0
   },
   {
     "name": "W773",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 1
   },
   {
     "name": "W702",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 2
   },
   {
     "name": "W706",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 3
   },
   {
     "name": "W805",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 4
   },
   {
     "name": "W806",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 5
   },
   {
     "name": "W807",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 6
   },
   {
     "name": "W839",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 7
   },
   {
     "name": "W735",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 8
   },
   {
     "name": "W840",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 9
   },
   {
     "name": "W736",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 10
   },
   {
     "name": "W841",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 11
   },
   {
     "name": "W740",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 12
   },
   {
     "name": "W873",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 13
   },
   {
     "name": "W874",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 14
   },
   {
     "name": "W875",
     "crate": 4,
-    "slot": 20,
+    "slot": 13,
     "channel": 15
   },
   {
@@ -7310,97 +7310,97 @@
   {
     "name": "G800",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 0
   },
   {
     "name": "G768",
     "crate": 4,
-    "slot": 17,
-    "channel": 15
+    "slot": 20,
+    "channel": 1
   },
   {
     "name": "G801",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 2
   },
   {
     "name": "G829",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 3
   },
   {
     "name": "G830",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 4
   },
   {
     "name": "G798",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 5
   },
   {
     "name": "G831",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 6
   },
   {
     "name": "G859",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 7
   },
   {
     "name": "G860",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 8
   },
   {
     "name": "G828",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 9
   },
   {
     "name": "G861",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 10
   },
   {
     "name": "G889",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 11
   },
   {
     "name": "G890",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 12
   },
   {
     "name": "G858",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 13
   },
   {
     "name": "G891",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 14
   },
   {
     "name": "G888",
     "crate": 4,
-    "slot": 0,
+    "slot": 20,
     "channel": 15
   },
   {
@@ -7670,7 +7670,7 @@
   {
     "name": "W268",
     "crate": 5,
-    "slot": 17,
+    "slot": 5,
     "channel": 12
   },
   {
