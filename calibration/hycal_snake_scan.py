@@ -38,7 +38,6 @@ Requirements
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import random
@@ -46,36 +45,25 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
-from dataclasses import dataclass
 from datetime import datetime
 from enum import IntEnum
 from typing import Dict, List, Optional, Tuple
 
+from scan_utils import (
+    C, Module, load_modules, module_to_ptrans, ptrans_to_module,
+    ptrans_in_limits, filter_scan_modules,
+    BEAM_CENTER_X, BEAM_CENTER_Y, DEFAULT_DB_PATH,
+    PTRANS_X_MIN, PTRANS_X_MAX, PTRANS_Y_MIN, PTRANS_Y_MAX,
+)
+
 
 # ============================================================================
-#  CONSTANTS
+#  SCAN-SPECIFIC CONSTANTS
 # ============================================================================
-
-# Transporter coordinates when the beam hits HyCal centre (0, 0)
-BEAM_CENTER_X: float = -126.75   # mm
-BEAM_CENTER_Y: float = 10.11     # mm
-
-# Transporter travel limits (symmetric about centre)
-_LIMIT_RB_X = -582.65             # right-bottom corner ptrans_x
-_LIMIT_RB_Y = -672.50             # right-bottom corner ptrans_y
-PTRANS_X_MIN = _LIMIT_RB_X                            # -582.65
-PTRANS_X_MAX = 2 * BEAM_CENTER_X - _LIMIT_RB_X        #  329.15
-PTRANS_Y_MIN = _LIMIT_RB_Y                            # -672.50
-PTRANS_Y_MAX = 2 * BEAM_CENTER_Y - _LIMIT_RB_Y        #  692.72
 
 DEFAULT_DWELL = 120.0    # seconds
-DEFAULT_POS_THRESHOLD = 0.5   # mm  -- alert if |RBV - target| exceeds this
+DEFAULT_POS_THRESHOLD = 0.5   # mm
 MOVE_TIMEOUT = 300.0     # seconds per single move
-
-# Default database path (relative to this script)
-DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "..", "database", "hycal_modules.json")
-
 MAX_LG_LAYERS = 2
 
 SPMG_LABELS = {0: "Stop", 1: "Pause", 2: "Move", 3: "Go"}
@@ -92,14 +80,10 @@ class SPMG(IntEnum):
 
 class PV:
     """All EPICS PV names used by this tool."""
-    # ---- writable ----
-    X_VAL  = "ptrans_x.VAL"
-    Y_VAL  = "ptrans_y.VAL"
-    X_SPMG = "ptrans_x.SPMG"
-    Y_SPMG = "ptrans_y.SPMG"
-    # ---- read-only monitoring ----
+    X_VAL  = "ptrans_x.VAL";   Y_VAL  = "ptrans_y.VAL"
+    X_SPMG = "ptrans_x.SPMG";  Y_SPMG = "ptrans_y.SPMG"
     X_ENCODER = "hallb_ptrans_x_encoder"
-    Y_ENCODER = "hallb_ptrans_y_encoder"
+    Y_ENCODER = "hallb_ptrans_y1_encoder"
     X_RBV  = "ptrans_x.RBV";   Y_RBV  = "ptrans_y.RBV"
     X_MOVN = "ptrans_x.MOVN";  Y_MOVN = "ptrans_y.MOVN"
     X_VELO = "ptrans_x.VELO";  Y_VELO = "ptrans_y.VELO"
@@ -113,72 +97,6 @@ class PV:
     X_VBAS = "ptrans_x.VBAS";  Y_VBAS = "ptrans_y.VBAS"
     X_BDST = "ptrans_x.BDST";  Y_BDST = "ptrans_y.BDST"
     X_FRAC = "ptrans_x.FRAC";  Y_FRAC = "ptrans_y.FRAC"
-
-
-# -- Colour palette (dark control-room theme) --------------------------------
-
-class C:
-    BG       = "#0d1117"
-    PANEL    = "#161b22"
-    BORDER   = "#30363d"
-    TEXT     = "#c9d1d9"
-    DIM      = "#8b949e"
-    ACCENT   = "#58a6ff"
-    GREEN    = "#3fb950"
-    YELLOW   = "#d29922"
-    RED      = "#f85149"
-    ORANGE   = "#db6d28"
-    # canvas module states (scan targets)
-    MOD_TODO      = "#21262d"
-    MOD_CURRENT   = "#d29922"
-    MOD_DWELL     = "#3fb950"
-    MOD_DONE      = "#1f6feb"
-    MOD_ERROR     = "#f85149"
-    MOD_SELECTED  = "#db6d28"
-    # display-only module colours
-    MOD_GLASS     = "#162230"
-    MOD_PWO4_BG   = "#1a2a1a"
-    MOD_LMS       = "#2d1f3d"
-    MOD_EXCLUDED  = "#111418"     # greyed-out during active scan
-    MOD_SKIPPED   = "#15181d"     # before start point in path preview
-    PATH_LINE     = "#30506e"     # snake path preview line
-
-
-# ============================================================================
-#  MODULE MAP & SNAKE PATH
-# ============================================================================
-
-@dataclass
-class Module:
-    name: str
-    mod_type: str      # "PbWO4", "PbGlass", "LMS"
-    x: float           # centre x in HyCal frame (mm)
-    y: float           # centre y in HyCal frame (mm)
-    sx: float          # module width  (mm)
-    sy: float          # module height (mm)
-    sector: str = ""   # "Center", "Top", "Right", "Bottom", "Left", "LMS"
-    row: int = 0       # row within sector (1-indexed)
-    col: int = 0       # col within sector (1-indexed)
-
-
-def load_modules(json_path: str) -> List[Module]:
-    """Load all modules from the HyCal module database JSON."""
-    with open(json_path) as f:
-        data = json.load(f)
-    modules: List[Module] = []
-    for entry in data:
-        modules.append(Module(
-            name=entry["n"],
-            mod_type=entry["t"],
-            x=entry["x"],
-            y=entry["y"],
-            sx=entry["sx"],
-            sy=entry["sy"],
-            sector=entry.get("sec", ""),
-            row=entry.get("row", 0),
-            col=entry.get("col", 0),
-        ))
-    return modules
 
 
 def _snake_sector(modules: List[Module], going_right: bool,
@@ -275,21 +193,6 @@ def build_scan_path(scan_modules: List[Module]) -> Tuple[List[Module], int]:
 
     n_unopt = len(scan_modules) - len(path)
     return path, n_unopt
-
-
-def module_to_ptrans(mx: float, my: float) -> Tuple[float, float]:
-    """HyCal-frame module centre --> transporter set-point.
-
-    ptrans_x moves in the same direction as HyCal-x (both increase rightward
-    in beam view), while ptrans_y is inverted (ptrans_y decreases when
-    beam moves up on HyCal).
-    """
-    return (BEAM_CENTER_X + mx, BEAM_CENTER_Y - my)
-
-
-def ptrans_to_module(px: float, py: float) -> Tuple[float, float]:
-    """Transporter position --> beam position on HyCal (HyCal-frame)."""
-    return (px - BEAM_CENTER_X, BEAM_CENTER_Y - py)
 
 
 # ============================================================================
@@ -474,8 +377,7 @@ def epics_move_to(ep, x: float, y: float) -> bool:
 
     Returns False (and does not move) if the target is outside limits.
     """
-    if x < PTRANS_X_MIN or x > PTRANS_X_MAX \
-       or y < PTRANS_Y_MIN or y > PTRANS_Y_MAX:
+    if not ptrans_in_limits(x, y):
         return False
     ep.put("x_val", x)
     ep.put("y_val", y)
@@ -724,12 +626,17 @@ class SnakeScanGUI:
     CANVAS_PAD  = 8
     MOD_SHRINK  = 0.90      # render modules at 90% size for visual gaps
 
+    AUTOGEN = "(autogen)"
+
     def __init__(self, root: tk.Tk, epics, simulation: bool,
-                 all_modules: List[Module]):
+                 all_modules: List[Module],
+                 profiles: Optional[Dict[str, List[str]]] = None):
         self.root = root
         self.ep = epics
         self.simulation = simulation
         self.all_modules = all_modules
+        self._profiles = profiles or {}
+        self._active_profile = self.AUTOGEN
         self._lg_layers = 0
 
         # Precompute PbWO4 bounding box and PbGlass module size
@@ -782,17 +689,8 @@ class SnakeScanGUI:
         self._poll()
 
     def _filter_scan_modules(self, lg_layers: int) -> List[Module]:
-        """All PbWO4 + PbGlass within lg_layers of PbWO4 bounding box."""
-        scan = [m for m in self.all_modules if m.mod_type == "PbWO4"]
-        if lg_layers > 0:
-            margin_x = lg_layers * self._lg_sx
-            margin_y = lg_layers * self._lg_sy
-            for m in self.all_modules:
-                if m.mod_type == "PbGlass" and \
-                   self._pwo4_min_x - margin_x <= m.x <= self._pwo4_max_x + margin_x and \
-                   self._pwo4_min_y - margin_y <= m.y <= self._pwo4_max_y + margin_y:
-                    scan.append(m)
-        return scan
+        return filter_scan_modules(self.all_modules, lg_layers,
+                                   self._lg_sx, self._lg_sy)
 
     def _display_color(self, mod_type: str) -> str:
         """Static colour for display-only (non-scanned) modules."""
@@ -1168,10 +1066,25 @@ class SnakeScanGUI:
         sc = ttk.LabelFrame(parent, text=" Scan Control ")
         sc.pack(fill="x", pady=(0, 4))
 
-        # LG layers (own row)
+        # Path profile selector
+        r_pp = tk.Frame(sc, bg=C.BG)
+        r_pp.pack(fill="x", padx=6, pady=2)
+        tk.Label(r_pp, text="Path:", bg=C.BG, fg=C.TEXT,
+                 font=("Consolas", 9)).pack(side="left")
+        profile_names = [self.AUTOGEN] + sorted(self._profiles.keys())
+        self._profile_var = tk.StringVar(value=self.AUTOGEN)
+        self._profile_combo = ttk.Combobox(
+            r_pp, textvariable=self._profile_var,
+            values=profile_names, width=18, state="readonly",
+            font=("Consolas", 9))
+        self._profile_combo.pack(side="right")
+        self._profile_combo.bind("<<ComboboxSelected>>",
+                                  self._on_path_profile_changed)
+
+        # LG layers (own row, only effective for autogen)
         r_lg = tk.Frame(sc, bg=C.BG)
         r_lg.pack(fill="x", padx=6, pady=2)
-        tk.Label(r_lg, text="LG layers (0-6):", bg=C.BG, fg=C.TEXT,
+        tk.Label(r_lg, text="LG layers (0-2):", bg=C.BG, fg=C.TEXT,
                  font=("Consolas", 9)).pack(side="left")
         self._lg_layers_var = tk.IntVar(value=self._lg_layers)
         self._lg_layers_spin = tk.Spinbox(
@@ -1376,10 +1289,57 @@ class SnakeScanGUI:
                 self._draw_path_preview()
                 break
 
-    def _on_lg_layers_changed(self):
+    def _on_path_profile_changed(self, _event=None):
+        """Switch between autogen and predefined path profiles."""
+        name = self._profile_var.get()
+        if name == self._active_profile:
+            return
+        self._active_profile = name
+
+        if name == self.AUTOGEN:
+            # Re-enable LG layers and rebuild with autogen
+            self._lg_layers_spin.configure(state="normal")
+            self._on_lg_layers_changed(force=True)
+            return
+
+        # Predefined path — disable LG layers (not applicable)
+        self._lg_layers_spin.configure(state="disabled")
+        mod_names = self._profiles.get(name, [])
+        mod_by_name = {m.name: m for m in self.all_modules}
+        # Resolve names to Module objects, skip unknown
+        path_mods = [mod_by_name[n] for n in mod_names if n in mod_by_name]
+        if not path_mods:
+            self._log(f"Profile '{name}' has no valid modules", level="error")
+            return
+
+        self.scan_modules = path_mods
+        self._scan_names = {m.name for m in path_mods}
+        self.engine = ScanEngine(self.ep, path_mods, self._log)
+        # Predefined path: engine.path IS the path (no autogen)
+        self.engine.path = path_mods
+        self._scan_name_to_idx = {
+            m.name: i for i, m in enumerate(self.engine.path)
+        }
+        self._selected_start_idx = 0
+
+        names = [m.name for m in self.engine.path]
+        self._start_combo["values"] = names
+        if names:
+            self._start_var.set(names[0])
+        self._count_entry.configure(to=len(names))
+        self._count_var.set(0)
+
+        self._update_canvas_label()
+        self._display_greyed = False
+        self._draw_modules()
+        self._log(f"Path profile: {name} ({len(path_mods)} modules)")
+
+    def _on_lg_layers_changed(self, force: bool = False):
         """Rebuild scan engine when the user changes LG layers."""
+        if self._active_profile != self.AUTOGEN:
+            return
         new_layers = self._lg_layers_var.get()
-        if new_layers == self._lg_layers:
+        if new_layers == self._lg_layers and not force:
             return
         self._lg_layers = new_layers
         self.scan_modules = self._filter_scan_modules(new_layers)
@@ -1410,9 +1370,29 @@ class SnakeScanGUI:
 
     def _cmd_start(self):
         self._on_start_selected()
+        # Check boundary limits for the scan segment
+        path = self.engine.path
+        start = self._selected_start_idx
+        count = self._count_var.get()
+        end = min(start + count, len(path)) if count > 0 else len(path)
+        oob = []
+        for i in range(start, end):
+            px, py = module_to_ptrans(path[i].x, path[i].y)
+            if not ptrans_in_limits(px, py):
+                oob.append(path[i].name)
+        if oob:
+            names = ", ".join(oob[:5])
+            if len(oob) > 5:
+                names += f", ... ({len(oob)} total)"
+            self._log(f"BLOCKED: {len(oob)} modules outside travel limits: "
+                      f"{names}", level="error")
+            messagebox.showerror("Out of Bounds",
+                                 f"{len(oob)} modules outside transporter "
+                                 f"travel limits:\n{names}\n\n"
+                                 f"Scan not started.")
+            return
         self.engine.dwell_time = self._dwell_var.get()
         self.engine.pos_threshold = self._thresh_var.get()
-        count = self._count_var.get()
         self.engine.start(self._selected_start_idx, count=count)
 
     def _cmd_pause(self):
@@ -1594,13 +1574,29 @@ class SnakeScanGUI:
             state="readonly" if not running else "disabled")
         self._count_entry.configure(
             state="normal" if not running else "disabled")
+        self._profile_combo.configure(
+            state="readonly" if not running else "disabled")
         self._lg_layers_spin.configure(
-            state="normal" if not running else "disabled")
+            state="normal" if (not running and
+                               self._active_profile == self.AUTOGEN)
+            else "disabled")
 
 
 # ============================================================================
 #  MAIN
 # ============================================================================
+
+PATHS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "paths.json")
+
+
+def _load_path_profiles(path: str) -> Dict[str, List[str]]:
+    if os.path.exists(path):
+        import json
+        with open(path) as f:
+            return json.load(f)
+    return {}
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1608,8 +1604,9 @@ def main():
     parser.add_argument("--real", action="store_true",
                         help="Use real EPICS (requires pyepics)")
     parser.add_argument("--database", default=DEFAULT_DB_PATH,
-                        help="Path to hycal_modules.json "
-                             f"(default: {DEFAULT_DB_PATH})")
+                        help="Path to hycal_modules.json")
+    parser.add_argument("--paths", default=PATHS_FILE,
+                        help="Path to paths.json for predefined scan paths")
     args = parser.parse_args()
 
     # Load modules from database
@@ -1620,6 +1617,11 @@ def main():
     print(f"Loaded {len(all_modules)} modules from {args.database}")
     for t, n in sorted(by_type.items()):
         print(f"  {t}: {n}")
+
+    # Load predefined paths
+    profiles = _load_path_profiles(args.paths)
+    if profiles:
+        print(f"Loaded {len(profiles)} path profiles from {args.paths}")
 
     simulation = not args.real
 
@@ -1639,7 +1641,7 @@ def main():
             print("WARNING: many PVs not connected -- check IOC / network")
 
     root = tk.Tk()
-    SnakeScanGUI(root, ep, simulation, all_modules)
+    SnakeScanGUI(root, ep, simulation, all_modules, profiles)
     root.mainloop()
 
 
