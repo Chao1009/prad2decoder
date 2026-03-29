@@ -68,6 +68,11 @@ class RealScalerEPICS:
             return pv.get()
         return None
 
+    def connection_count(self) -> Tuple[int, int]:
+        """Return (connected, total)."""
+        n = sum(1 for pv in self._pvs.values() if pv.connected)
+        return n, len(self._pvs)
+
 
 class SimulatedScalerEPICS:
     """Return random values for testing."""
@@ -80,6 +85,10 @@ class SimulatedScalerEPICS:
 
     def get(self, name: str) -> Optional[float]:
         return self._rng.uniform(0, 1000)
+
+    def connection_count(self) -> Tuple[int, int]:
+        n = len(self._names)
+        return n, n
 
 
 # ============================================================================
@@ -220,6 +229,12 @@ class ScalerMapGUI:
                                    font=("Consolas", 9))
         self._lbl_info.pack(side="right", padx=4)
 
+        # connection status bar
+        self._lbl_conn = tk.Label(self.root, text="Connected: --",
+                                   bg=C.BG, fg=C.DIM,
+                                   font=("Consolas", 8), anchor="w")
+        self._lbl_conn.pack(fill="x", padx=8, pady=(0, 4))
+
     def _compute_mapping(self):
         drawn = [m for m in self.all_modules if m.mod_type != "LMS"]
         if not drawn:
@@ -284,6 +299,11 @@ class ScalerMapGUI:
             v = self.ep.get(m.name)
             if v is not None:
                 self._values[m.name] = float(v)
+
+        # Update connection status
+        n_ok, n_total = self.ep.connection_count()
+        fg = C.GREEN if n_ok == n_total else ("#d29922" if n_ok > 0 else C.DIM)
+        self._lbl_conn.configure(text=f"Connected: {n_ok}/{n_total}", fg=fg)
 
         # Colour range from GUI entries
         vmin = self._range_min_var.get()
