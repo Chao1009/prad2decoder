@@ -1603,26 +1603,27 @@ class SnakeScanGUI:
         eng = self.engine
         running = eng.state in (ScanState.MOVING, ScanState.DWELLING,
                                  ScanState.PAUSED, ScanState.ERROR)
-        self._btn_start.configure(
-            state="disabled" if running else "normal")
-        self._btn_pause.configure(
-            state="normal" if running else "disabled")
-        self._btn_stop.configure(
-            state="normal" if running else "disabled")
-        self._btn_skip.configure(
-            state="normal" if eng.state == ScanState.DWELLING else "disabled")
-        self._btn_ack.configure(
-            state="normal" if eng.state == ScanState.ERROR else "disabled")
-        self._start_combo.configure(
-            state="readonly" if not running else "disabled")
-        self._count_entry.configure(
-            state="normal" if not running else "disabled")
-        self._profile_combo.configure(
-            state="readonly" if not running else "disabled")
-        self._lg_layers_spin.configure(
-            state="normal" if (not running and
-                               self._active_profile == self.AUTOGEN)
-            else "disabled")
+        # Only reconfigure when state actually changes to avoid
+        # clearing the ttk "active" (hover) flag every poll cycle.
+        new_states = {
+            "_btn_start":    "disabled" if running else "normal",
+            "_btn_pause":    "normal" if running else "disabled",
+            "_btn_stop":     "normal" if running else "disabled",
+            "_btn_skip":     "normal" if eng.state == ScanState.DWELLING
+                             else "disabled",
+            "_btn_ack":      "normal" if eng.state == ScanState.ERROR
+                             else "disabled",
+            "_start_combo":  "readonly" if not running else "disabled",
+            "_count_entry":  "normal" if not running else "disabled",
+            "_profile_combo": "readonly" if not running else "disabled",
+            "_lg_layers_spin": "normal" if (not running and
+                                self._active_profile == self.AUTOGEN)
+                               else "disabled",
+        }
+        for attr, desired in new_states.items():
+            widget = getattr(self, attr)
+            if str(widget.cget("state")) != desired:
+                widget.configure(state=desired)
 
 
 # ============================================================================
