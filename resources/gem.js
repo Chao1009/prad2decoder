@@ -35,13 +35,17 @@ let gemConfig = null;
 
 // --- helpers ----------------------------------------------------------------
 
-function gemDetSize(detId) {
-    if (!gemConfig || !gemConfig.layers) return { xSize: 614.4, ySize: 512.0 };
+function gemDetInfo(detId) {
+    const def = { xSize: 614.4, ySize: 512.0, xOff: 0, yOff: 0 };
+    if (!gemConfig || !gemConfig.layers) return def;
     const layer = gemConfig.layers.find(l => l.id === detId);
-    if (!layer) return { xSize: 614.4, ySize: 512.0 };
+    if (!layer) return def;
+    const pos = layer.position || [0, 0, 0];
     return {
         xSize: layer.x_size || layer.x_apvs * 128 * layer.x_pitch,
         ySize: layer.y_size || layer.y_apvs * 128 * layer.y_pitch,
+        xOff:  pos[0] || 0,
+        yOff:  pos[1] || 0,
     };
 }
 
@@ -100,12 +104,12 @@ function plotGemHits(data) {
                 hovertemplate: detName + '<br>x=%{x:.1f} mm<br>y=%{y:.1f} mm<extra></extra>',
             });
 
-            // detector outline — centered around (0,0)
-            const sz = gemDetSize(detId);
+            // detector outline — offset to lab frame position
+            const info = gemDetInfo(detId);
             shapes.push({
                 type: 'rect',
-                x0: -sz.xSize / 2, y0: -sz.ySize / 2,
-                x1:  sz.xSize / 2, y1:  sz.ySize / 2,
+                x0: info.xOff - info.xSize / 2, y0: info.yOff - info.ySize / 2,
+                x1: info.xOff + info.xSize / 2, y1: info.yOff + info.ySize / 2,
                 line: { color: color, width: 1.5, dash: 'dot' },
                 fillcolor: 'rgba(0,0,0,0)',
             });

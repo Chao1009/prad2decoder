@@ -42,6 +42,9 @@ struct AppState {
     gem::GemCluster gem_clusterer;
     bool gem_enabled = false;       // true if gem_map.json loaded successfully
 
+    // GEM per-detector lab-frame transform (same type as HyCal)
+    std::vector<DetectorTransform> gem_transforms;  // indexed by detector id
+
     // GEM occupancy (accumulated per-detector 2D histograms)
     static constexpr int GEM_OCC_NX = 50;
     static constexpr int GEM_OCC_NY = 30;

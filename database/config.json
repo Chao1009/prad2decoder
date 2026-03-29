@@ -12,18 +12,7 @@
             "lms": 2000
         }
     },
-    "runinfo": {
-        "beam_energy": 2200.0,
-        "calibration": {
-            "file": "prad1/prad_calibration.json",
-            "default_adc2mev": 0.078
-        },
-        "target": [0.0, 0.0, 0.0],
-        "hycal": {
-            "position": [0.0, 0.0, 5800.0],
-            "tilting": [0.0, 0.0, 0.0]
-        }
-    },
+    "runinfo": "runinfo/2p2_general.json",
     "waveform": {
         "accept_trigger_bits": [],
         "time_cut": {"min": 160, "max": 220},

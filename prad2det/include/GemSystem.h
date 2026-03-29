@@ -148,6 +148,10 @@ public:
     int GetNApvs() const { return static_cast<int>(apvs_.size()); }
     const ApvConfig& GetApvConfig(int idx) const { return apvs_[idx]; }
 
+    // Compute beam hole X offset from detector center (mm), using match APV strip positions.
+    // Returns 0 if no match APVs found. Uses detector 0 as reference (all identical).
+    float GetHoleXOffset() const;
+
     // Per-APV zero-suppression results (valid after ProcessEvent)
     bool  IsChannelHit(int apv_idx, int ch) const { return apv_work_[apv_idx].hit_pos[ch]; }
     bool  HasApvZsHits(int apv_idx) const {

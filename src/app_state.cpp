@@ -8,6 +8,17 @@
 
 using json = nlohmann::json;
 
+// Load position/tilting from a JSON object into a DetectorTransform.
+static void loadTransform(DetectorTransform &t, const json &j)
+{
+    if (j.contains("position") && j["position"].is_array() && j["position"].size()>=3) {
+        t.x = j["position"][0]; t.y = j["position"][1]; t.z = j["position"][2];
+    }
+    if (j.contains("tilting") && j["tilting"].is_array() && j["tilting"].size()>=3) {
+        t.rx = j["tilting"][0]; t.ry = j["tilting"][1]; t.rz = j["tilting"][2];
+    }
+}
+
 //=============================================================================
 // Initialization
 //=============================================================================
@@ -293,24 +304,26 @@ void AppState::init(const std::string &db_dir,
         }
 
         if (rcfg.contains("runinfo")) {
-            auto &ri = rcfg["runinfo"];
+            // runinfo can be inline object or a string path to an external file
+            json ri;
+            if (rcfg["runinfo"].is_string()) {
+                std::string ri_file = findFile(rcfg["runinfo"].get<std::string>(), db_dir);
+                if (!ri_file.empty()) {
+                    std::ifstream rif(ri_file);
+                    if (rif.is_open()) {
+                        ri = json::parse(rif, nullptr, false, true);
+                        std::cerr << "RunInfo   : loaded from " << ri_file << "\n";
+                    }
+                }
+            } else {
+                ri = rcfg["runinfo"];
+            }
             if (ri.contains("beam_energy")) beam_energy = ri["beam_energy"];
             if (ri.contains("target") && ri["target"].is_array() && ri["target"].size()>=3) {
                 target_x=ri["target"][0]; target_y=ri["target"][1]; target_z=ri["target"][2];
             }
-            if (ri.contains("hycal")) {
-                auto &hc = ri["hycal"];
-                if (hc.contains("position") && hc["position"].is_array() && hc["position"].size()>=3) {
-                    hycal_transform.x=hc["position"][0];
-                    hycal_transform.y=hc["position"][1];
-                    hycal_transform.z=hc["position"][2];
-                }
-                if (hc.contains("tilting") && hc["tilting"].is_array() && hc["tilting"].size()>=3) {
-                    hycal_transform.rx=hc["tilting"][0];
-                    hycal_transform.ry=hc["tilting"][1];
-                    hycal_transform.rz=hc["tilting"][2];
-                }
-            }
+            if (ri.contains("hycal"))
+                loadTransform(hycal_transform, ri["hycal"]);
             if (ri.contains("calibration")) {
                 auto &cal = ri["calibration"];
                 if (cal.contains("default_adc2mev")) adc_to_mev = cal["default_adc2mev"];
@@ -325,6 +338,17 @@ void AppState::init(const std::string &db_dir,
                       << " target=(" << target_x << "," << target_y << "," << target_z
                       << ") HyCal=(" << hycal_transform.x << "," << hycal_transform.y << ","
                       << hycal_transform.z << ")\n";
+
+            // GEM per-detector transforms (same position/tilting format as HyCal)
+            if (gem_enabled && ri.contains("gem") && ri["gem"].is_array()) {
+                gem_transforms.resize(gem_sys.GetNDetectors());
+                for (auto &entry : ri["gem"]) {
+                    int id = entry.value("id", -1);
+                    if (id < 0 || id >= gem_sys.GetNDetectors()) continue;
+                    loadTransform(gem_transforms[id], entry);
+                }
+                std::cerr << "GEM geom  : " << gem_transforms.size() << " detectors configured\n";
+            }
         }
         if (rcfg.contains("elog")) {
             auto &el = rcfg["elog"];
@@ -781,7 +805,7 @@ void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
     gem_sys.ProcessEvent(ssp_evt);
     gem_sys.Reconstruct(gem_clusterer);
 
-    // accumulate occupancy
+    // accumulate occupancy (rotation only, no position offset — each GEM in its own cell)
     std::lock_guard<std::mutex> lk(data_mtx);
     for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
         auto &det = gem_sys.GetDetectors()[d];
@@ -789,8 +813,12 @@ void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
         float ySize = det.planes[1].size;
         float xStep = xSize / GEM_OCC_NX;
         float yStep = ySize / GEM_OCC_NY;
-        for (auto &h : gem_sys.GetHits(d))
-            gem_occupancy[d].fill(h.x, h.y, -xSize/2, xStep, -ySize/2, yStep);
+        bool hasXform = d < (int)gem_transforms.size();
+        for (auto &h : gem_sys.GetHits(d)) {
+            float lx = h.x, ly = h.y;
+            if (hasXform) gem_transforms[d].rotate(h.x, h.y, lx, ly);
+            gem_occupancy[d].fill(lx, ly, -xSize/2, xStep, -ySize/2, yStep);
+        }
     }
 }
 
@@ -828,11 +856,15 @@ nlohmann::json AppState::apiGemHits() const
             dj[pname] = clusters;
         }
 
-        // 2D hits
+        // 2D hits (transformed to lab frame)
+        bool hasXform = d < (int)gem_transforms.size();
         json hits = json::array();
         for (auto &h : gem_sys.GetHits(d)) {
+            float lx, ly, lz;
+            if (hasXform) gem_transforms[d].toLab(h.x, h.y, lx, ly, lz);
+            else { lx = h.x; ly = h.y; lz = 0.f; }
             hits.push_back({
-                {"x", h.x}, {"y", h.y},
+                {"x", lx}, {"y", ly},
                 {"x_charge", h.x_charge}, {"y_charge", h.y_charge},
                 {"x_size", h.x_size}, {"y_size", h.y_size}
             });
@@ -842,11 +874,16 @@ nlohmann::json AppState::apiGemHits() const
     }
     result["detectors"] = detectors;
 
-    // flat list of all 2D hits
+    // flat list of all 2D hits (lab frame)
     json all = json::array();
     for (auto &h : gem_sys.GetAllHits()) {
+        int d = h.det_id;
+        float lx, ly, lz;
+        if (d < (int)gem_transforms.size())
+            gem_transforms[d].toLab(h.x, h.y, lx, ly, lz);
+        else { lx = h.x; ly = h.y; lz = 0.f; }
         all.push_back({
-            {"x", h.x}, {"y", h.y}, {"det", h.det_id},
+            {"x", lx}, {"y", ly}, {"det", d},
             {"x_charge", h.x_charge}, {"y_charge", h.y_charge}
         });
     }
@@ -862,8 +899,9 @@ nlohmann::json AppState::apiGemConfig() const
 
     result["n_detectors"] = gem_sys.GetNDetectors();
     json layers = json::array();
-    for (auto &det : gem_sys.GetDetectors()) {
-        layers.push_back({
+    for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
+        auto &det = gem_sys.GetDetectors()[d];
+        json lj = {
             {"id", det.id},
             {"name", det.name},
             {"type", det.type},
@@ -873,7 +911,13 @@ nlohmann::json AppState::apiGemConfig() const
             {"y_apvs", det.planes[1].n_apvs},
             {"x_size", det.planes[0].size},
             {"y_size", det.planes[1].size}
-        });
+        };
+        if (d < (int)gem_transforms.size()) {
+            auto &t = gem_transforms[d];
+            lj["position"] = {t.x, t.y, t.z};
+            lj["tilting"]  = {t.rx, t.ry, t.rz};
+        }
+        layers.push_back(lj);
     }
     result["layers"] = layers;
     result["occ_nx"] = GEM_OCC_NX;

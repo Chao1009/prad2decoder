@@ -6,6 +6,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <cstring>
 #include <sstream>
 
@@ -191,6 +192,32 @@ void GemSystem::LoadCommonModeRange(const std::string &cm_file)
         apvs_[idx].cm_range_min = cm_min;
         apvs_[idx].cm_range_max = cm_max;
     }
+}
+
+//=============================================================================
+// GetHoleXOffset — beam hole X offset from detector center
+//=============================================================================
+
+float GemSystem::GetHoleXOffset() const
+{
+    if (detectors_.empty()) return 0.f;
+    // scan match APVs on detector 0, X plane — collect their mapped strip numbers
+    int ref_det = detectors_[0].id;
+    float pitch = detectors_[0].planes[0].pitch;
+    float size  = detectors_[0].planes[0].size;
+    int smin = INT_MAX, smax = INT_MIN;
+    for (size_t i = 0; i < apvs_.size(); ++i) {
+        auto &a = apvs_[i];
+        if (a.det_id != ref_det || a.plane_type != 0 || a.match.empty()) continue;
+        for (int ch = 0; ch < APV_STRIP_SIZE; ++ch) {
+            int s = apv_work_[i].strip_map[ch];
+            if (s >= 0) { smin = std::min(smin, s); smax = std::max(smax, s); }
+        }
+    }
+    if (smin > smax) return 0.f;
+    // hole center in detector-local coords (centered on detector midpoint)
+    float hole_center = (smin + smax + 1) * 0.5f * pitch;
+    return hole_center - size * 0.5f;
 }
 
 //=============================================================================

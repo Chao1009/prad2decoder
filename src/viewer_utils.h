@@ -3,6 +3,7 @@
 // viewer_utils.h — shared utilities for prad2_viewer and prad2_monitor
 //=============================================================================
 
+#include "DetectorTransform.h"
 #include "Fadc250Data.h"
 #include "WaveAnalyzer.h"
 
@@ -10,31 +11,6 @@
 #include <string>
 #include <vector>
 #include <cmath>
-
-// --- Detector coordinate transform ------------------------------------------
-// Reusable for HyCal, GEMs, or any planar detector.
-// Transforms detector-plane coordinates (x, y, 0) to lab frame.
-// Convention: rotation applied first (Rx * Ry * Rz), then translation.
-struct DetectorTransform {
-    float x=0, y=0, z=0;               // detector origin in lab frame (mm)
-    float rx=0, ry=0, rz=0;            // tilting angles (degrees)
-
-    // Transform a point from detector plane to lab frame.
-    void toLab(float dx, float dy, float &lx, float &ly, float &lz) const {
-        // convert angles to radians
-        const float DEG = 3.14159265f / 180.f;
-        float cx=std::cos(rx*DEG), sx=std::sin(rx*DEG);
-        float cy=std::cos(ry*DEG), sy=std::sin(ry*DEG);
-        float cz=std::cos(rz*DEG), sz=std::sin(rz*DEG);
-        // R = Rx * Ry * Rz applied to (dx, dy, 0)
-        float px =  cy*cz*dx - cy*sz*dy;
-        float py = (sx*sy*cz + cx*sz)*dx + (-sx*sy*sz + cx*cz)*dy;
-        float pz = (-cx*sy*cz + sx*sz)*dx + (cx*sy*sz + sx*cz)*dy;
-        lx = px + x;
-        ly = py + y;
-        lz = pz + z;
-    }
-};
 
 // --- TI timestamp conversion ------------------------------------------------
 // TI clock runs at 250 MHz → 4 ns per tick
