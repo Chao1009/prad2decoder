@@ -132,6 +132,8 @@ class C:
     MOD_PWO4_BG   = "#1a2a1a"
     MOD_LMS       = "#2d1f3d"
     MOD_EXCLUDED  = "#111418"     # greyed-out during active scan
+    MOD_SKIPPED   = "#15181d"     # before start point in path preview
+    PATH_LINE     = "#30506e"     # snake path preview line
 
 
 # ============================================================================
@@ -623,7 +625,7 @@ class ScanEngine:
 
 class SnakeScanGUI:
 
-    CANVAS_SIZE = 620       # pixels
+    CANVAS_SIZE = 680       # pixels
     CANVAS_PAD  = 8
     MOD_SHRINK  = 0.90      # render modules at 90% size for visual gaps
 
@@ -794,10 +796,10 @@ class SnakeScanGUI:
         leg = tk.Frame(self._canvas_frame, bg=C.BG)
         leg.pack(fill="x", padx=4, pady=(0, 4))
         legend_items = [
-            ("Todo", C.MOD_TODO), ("Moving", C.MOD_CURRENT),
-            ("Dwell", C.MOD_DWELL), ("Done", C.MOD_DONE),
-            ("Error", C.MOD_ERROR), ("Start", C.MOD_SELECTED),
-            ("PbGlass", C.MOD_GLASS),
+            ("Todo", C.MOD_TODO), ("Skipped", C.MOD_SKIPPED),
+            ("Moving", C.MOD_CURRENT), ("Dwell", C.MOD_DWELL),
+            ("Done", C.MOD_DONE), ("Error", C.MOD_ERROR),
+            ("Start", C.MOD_SELECTED), ("PbGlass", C.MOD_GLASS),
         ]
         for label, colour in legend_items:
             tk.Canvas(leg, width=10, height=10, bg=colour,
@@ -816,12 +818,14 @@ class SnakeScanGUI:
 
     def _compute_canvas_mapping(self):
         """Compute scale and offset to map HyCal mm -> canvas pixels."""
-        if not self.all_modules:
+        # Exclude LMS from bounding box (they are off to the side and not drawn)
+        drawn = [m for m in self.all_modules if m.mod_type != "LMS"]
+        if not drawn:
             return
-        x_min = min(m.x - m.sx / 2 for m in self.all_modules)
-        x_max = max(m.x + m.sx / 2 for m in self.all_modules)
-        y_min = min(m.y - m.sy / 2 for m in self.all_modules)
-        y_max = max(m.y + m.sy / 2 for m in self.all_modules)
+        x_min = min(m.x - m.sx / 2 for m in drawn)
+        x_max = max(m.x + m.sx / 2 for m in drawn)
+        y_min = min(m.y - m.sy / 2 for m in drawn)
+        y_max = max(m.y + m.sy / 2 for m in drawn)
 
         usable = self.CANVAS_SIZE - 2 * self.CANVAS_PAD
         self._scale = min(usable / (x_max - x_min),
@@ -841,6 +845,12 @@ class SnakeScanGUI:
         hw = m.sx * self._scale * self.MOD_SHRINK / 2
         hh = m.sy * self._scale * self.MOD_SHRINK / 2
         return (cx - hw, cy - hh, cx + hw, cy + hh)
+
+    def _mod_to_canvas_center(self, m: Module) -> Tuple[float, float]:
+        """Module -> canvas centre point (cx, cy)."""
+        cx = self._ox + (m.x - self._x_min) * self._scale
+        cy = self._oy + (self._y_max - m.y) * self._scale
+        return (cx, cy)
 
     def _draw_modules(self):
         """Draw all modules on the canvas."""
@@ -868,6 +878,27 @@ class SnakeScanGUI:
                 tags=(f"mod_{m.name}", "scan"))
             self._cell_ids[m.name] = rid
 
+    def _draw_path_preview(self):
+        """Draw the projected snake path line from start to end on the canvas."""
+        self._clear_path_preview()
+        path = self.engine.path
+        start = self._selected_start_idx
+        if start >= len(path):
+            return
+        # Build coordinate list for the active segment
+        coords = []
+        for i in range(start, len(path)):
+            coords.extend(self._mod_to_canvas_center(path[i]))
+        if len(coords) >= 4:
+            self._canvas.create_line(
+                *coords, fill=C.PATH_LINE, width=1,
+                smooth=False, tags=("path_preview",))
+        # Raise scan module rectangles above the line so colours stay visible
+        self._canvas.tag_raise("scan")
+
+    def _clear_path_preview(self):
+        self._canvas.delete("path_preview")
+
     def _on_canvas_click(self, event):
         items = self._canvas.find_closest(event.x, event.y)
         if not items:
@@ -882,6 +913,7 @@ class SnakeScanGUI:
                     mod = self.engine.path[idx]
                     self._start_var.set(mod.name)
                     self._log(f"Selected start module: {mod.name}")
+                    self._draw_path_preview()
                 break
 
     def _update_canvas(self):
@@ -892,6 +924,7 @@ class SnakeScanGUI:
         # Grey out / restore display-only modules on state transitions
         if running and not self._display_greyed:
             self._display_greyed = True
+            self._clear_path_preview()
             for m in self.all_modules:
                 if m.name not in self._scan_names and m.name in self._cell_ids:
                     self._canvas.itemconfigure(
@@ -905,6 +938,7 @@ class SnakeScanGUI:
                         fill=self._display_color(m.mod_type))
 
         # Update scan module colours
+        idle = eng.state in (ScanState.IDLE, ScanState.COMPLETED)
         for i, mod in enumerate(eng.path):
             rid = self._cell_ids.get(mod.name)
             if rid is None:
@@ -918,12 +952,17 @@ class SnakeScanGUI:
                 colour = C.MOD_ERROR
             elif i in eng.completed:
                 colour = C.MOD_DONE
-            elif (eng.state == ScanState.IDLE and
-                  i == self._selected_start_idx):
+            elif idle and i == self._selected_start_idx:
                 colour = C.MOD_SELECTED
+            elif idle and i < self._selected_start_idx:
+                colour = C.MOD_SKIPPED
             else:
                 colour = C.MOD_TODO
             self._canvas.itemconfigure(rid, fill=colour)
+
+        # Path preview line (only when idle / completed)
+        if idle and not self._canvas.find_withtag("path_preview"):
+            self._draw_path_preview()
 
     # -- controls panel ------------------------------------------------------
 
@@ -1122,6 +1161,7 @@ class SnakeScanGUI:
         for i, m in enumerate(self.engine.path):
             if m.name == name:
                 self._selected_start_idx = i
+                self._draw_path_preview()
                 break
 
     def _on_lg_layers_changed(self):
