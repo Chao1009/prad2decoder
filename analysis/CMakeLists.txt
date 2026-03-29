@@ -23,6 +23,7 @@ add_analysis_tool(replay_rawdata_m tools/replay_rawdata_m.cpp)
 add_analysis_tool(replay_recon tools/replay_recon.cpp)
 add_analysis_tool(replay_recon_m tools/replay_recon_m.cpp)
 add_analysis_tool(epCalib tools/epCalib.cpp)
+add_analysis_tool(analysis_example tools/analysis_example.cpp)
 
-install(TARGETS replay_rawdata replay_rawdata_m replay_recon replay_recon_m epCalib
+install(TARGETS replay_rawdata replay_rawdata_m replay_recon replay_recon_m epCalib analysis_example
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

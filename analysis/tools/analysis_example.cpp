@@ -1,273 +1,196 @@
 //=============================================================================
-// replay_recon — HyCal and GEM reconstruction replay with physics analysis
+// analysis_example.cpp some examples for offline physics analysis
 //
-// Usage: replay_recon <input.evio> [-o output.root] [-c config.json]
-//                          [-D daq_config.json] [-f max_files] [-p(read prad1)]
+// Usage: analysis_example <input_recon.root> [-o output.root] [-n max_events]
 //
-// Reads EVIO, runs HyCal clustering and GEM reconstruction, fills per-module energy histograms
-// and writes reconstruction results to a ROOT tree.
+// Reads the reconstructed root files, call help functions from PhysicsTools, fills per-module energy histograms
+// and moller event analysis histograms, and saves to output ROOT file.
 //=============================================================================
 
-#include "Replay.h"
 #include "PhysicsTools.h"
 #include "HyCalSystem.h"
-#include "HyCalCluster.h"
-#include "DaqConfig.h"
-#include "WaveAnalyzer.h"
+#include "Replay.h"
 
-#include <nlohmann/json.hpp>
 #include <TFile.h>
 #include <TTree.h>
 #include <iostream>
 #include <fstream>
 #include <string>
-#include <cstdlib>
 #include <getopt.h>
-#include <filesystem>
 #include <vector>
 
 #ifndef DATABASE_DIR
 #define DATABASE_DIR "."
 #endif
 
+//hardcoded beam energy and position for yield histograms, can be made configurable if needed
 float hycal_z = 5646.f; // distance from target to HyCal front face in mm
+float Ebeam = 1100.f; // MeV
+//Todo: get run ID from filename or config
+int run_id = 12345;
 
-std::vector<std::string> getFilesInDir(const std::string &dir_path)
+const int kMaxCl = 100;
+const int kMaxGEMHits = 400;
+
+struct EventVars_Recon {
+    uint32_t event_num = 0;
+    uint32_t trigger_bits = 0;
+    Long64_t timestamp = 0;
+    int n_clusters = 0;
+    float cl_x[kMaxCl];
+    float cl_y[kMaxCl];
+    float cl_energy[kMaxCl];
+    int cl_nblocks[kMaxCl];
+    int cl_center[kMaxCl];
+    // GEM part
+    int n_gem_hits = 0;
+    uint8_t det_id[kMaxGEMHits];
+    float gem_x[kMaxGEMHits];
+    float gem_y[kMaxGEMHits];
+    float gem_x_charge[kMaxGEMHits];
+    float gem_y_charge[kMaxGEMHits];
+    float gem_x_peak[kMaxGEMHits];
+    float gem_y_peak[kMaxGEMHits];
+    int gem_x_size[kMaxGEMHits];
+    int gem_y_size[kMaxGEMHits];
+};
+
+void setupReconBranches(TTree *tree, EventVars_Recon &ev)
 {
-    std::vector<std::string> files;
-    for (auto &entry : std::filesystem::directory_iterator(dir_path)) {
-        if (entry.is_regular_file()) {
-            if (entry.path().filename().string().find(".evio") != std::string::npos)
-                files.push_back(entry.path().string());
-        }
-    }
-    std::sort(files.begin(), files.end());
-    return files;
+    tree->SetBranchAddress("event_num",    &ev.event_num);
+    tree->SetBranchAddress("trigger_bits", &ev.trigger_bits);
+    tree->SetBranchAddress("timestamp",    &ev.timestamp);
+    tree->SetBranchAddress("n_clusters",   &ev.n_clusters);
+    tree->SetBranchAddress("cl_x",         ev.cl_x);
+    tree->SetBranchAddress("cl_y",         ev.cl_y);
+    tree->SetBranchAddress("cl_energy",    ev.cl_energy);
+    tree->SetBranchAddress("cl_nblocks",   ev.cl_nblocks);
+    tree->SetBranchAddress("cl_center",    ev.cl_center);
+    // GEM part
+    tree->SetBranchAddress("n_gem_hits",   &ev.n_gem_hits);
+    tree->SetBranchAddress("det_id",       ev.det_id);
+    tree->SetBranchAddress("gem_x",        ev.gem_x);
+    tree->SetBranchAddress("gem_y",        ev.gem_y);
+    tree->SetBranchAddress("gem_x_charge", ev.gem_x_charge);
+    tree->SetBranchAddress("gem_y_charge", ev.gem_y_charge);
+    tree->SetBranchAddress("gem_x_peak",   ev.gem_x_peak);
+    tree->SetBranchAddress("gem_y_peak",   ev.gem_y_peak);
+    tree->SetBranchAddress("gem_x_size",   ev.gem_x_size);
+    tree->SetBranchAddress("gem_y_size",   ev.gem_y_size);
 }
+
+//analysis histograms and variables
+TH2F *hit_pos = new TH2F("hit_pos", "Hit positions;X (mm);Y (mm)", 250, -500, 500, 250, -500, 500);
+TH1F *one_cluster_energy = new TH1F("one_cluster_energy", "Energy of single-cluster events;Energy (MeV);Counts", 1000, 0, 4000);
+TH1F *two_cluster_energy = new TH1F("two_cluster_energy", "Energy of 2-cluster events;Energy (MeV);Counts", 1000, 0, 4000);
+TH1F *clusters_energy = new TH1F("clusters_energy", "Energy of all clusters;Energy (MeV);Counts", 1000, 0, 4000);
+TH1F *total_energy = new TH1F("total_energy", "Total energy per event;Energy (MeV);Counts", 1000, 0, 4000);
+analysis::PhysicsTools::MollerEvent MollerPair;
+analysis::PhysicsTools::MollerData hycal_mollers;
 
 int main(int argc, char *argv[])
 {
-    std::string input_dir, output, config_file, daq_config_file;
-    std::string db_dir = DATABASE_DIR;
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
-    int max_files = -1;
-    bool prad1 = false; // set to true for PRad1-specific config
-
-    //hardcoded beam energy for yield histograms, can be made configurable if needed
-    float Ebeam = 1100.f; // MeV
-    //Todo: get run ID from filename or config
-    int run_id = 12345;
-
+    std::string input_file, output;
+    
+    int max_events = -1;
     int opt;
-    while ((opt = getopt(argc, argv, "o:c:f:p")) != -1) {
+    while ((opt = getopt(argc, argv, "o:n:")) != -1) {
         switch (opt) {
             case 'o': output = optarg; break;
-            case 'c': config_file = optarg; break;
-            case 'f': max_files = std::atoi(optarg); break;
-            case 'p': prad1 = true; break;
+            case 'n': max_events = std::atoi(optarg); break;
         }
     }
-    if (optind < argc) input_dir = argv[optind];
+    if (optind < argc) input_file = argv[optind];
 
-    if (input_dir.empty()) {
-        std::cerr << "Usage: replay_hycalRecon <input.evio> [-o out.root] "
-                  << "[-c config.json] [-f M] [-p(read prad1)]\n";
+    if (input_file.empty()) {
+        std::cerr << "Usage: replay_hycalRecon <input.evio> [-o out.root] [-n max_events]\n";
         return 1;
-    }
-    // Get list of EVIO files in the directory
-    std::vector<std::string> evio_files = getFilesInDir(input_dir);
-    int num_files = evio_files.size();
-    if(num_files == 0){
-        std::cerr << "No files found in directory: " << input_dir << "\n";
-        return 1;
-    }
-    if (max_files > 0) {
-        num_files = std::min(num_files, max_files);
     }
 
     if (output.empty()) {
-        output = evio_files[0];
-        auto pos = output.find(".evio");
+        output = input_file;
+        auto pos = output.find(".root");
         if (pos != std::string::npos) output = output.substr(0, pos);
-        output += "_recon.root";
+        output += "_result.root";
     }
 
     // --- setup ---
     fdec::HyCalSystem hycal;
-    evc::DaqConfig daq_cfg;
-
-    daq_config_file = db_dir + "/daq_config.json"; // default DAQ config for PRad2
-    std::string daq_map_file = db_dir + "/daq_map.json"; // default DAQ map for PRad2
-    if(prad1 == true){
-        daq_config_file = db_dir + "/prad1/prad_daq_config.json";
-        daq_map_file = db_dir + "/prad1/prad_daq_map.json";
-    }    
-    if (!daq_config_file.empty()) evc::load_daq_config(daq_config_file, daq_cfg);
-    hycal.Init(db_dir + "/hycal_modules.json", daq_map_file);
-    
-    if(prad1 == true) evc::load_pedestals(db_dir + "/prad1/adc1881m_pedestals.json", daq_cfg);
-    
-    std::string calib_file = db_dir + "/prad1/prad_calibration.json";
-    int nmatched = hycal.LoadCalibration(calib_file);
-    if (nmatched >= 0)
-        std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
+    hycal.Init(std::string(DATABASE_DIR) + "/hycal_modules.json",
+               std::string(DATABASE_DIR) + "/daq_map.json");
     analysis::PhysicsTools physics(hycal);
 
-    //analysis histograms and variables
-    TH2F *hit_pos = new TH2F("hit_pos", "Hit positions;X (mm);Y (mm)", 250, -500, 500, 250, -500, 500);
-    TH1F *one_cluster_energy = new TH1F("one_cluster_energy", "Energy of single-cluster events;Energy (MeV);Counts", 1000, 0, 4000);
-    TH1F *two_cluster_energy = new TH1F("two_cluster_energy", "Energy of 2-cluster events;Energy (MeV);Counts", 1000, 0, 4000);
-    TH1F *clusters_energy = new TH1F("clusters_energy", "Energy of all clusters;Energy (MeV);Counts", 1000, 0, 4000);
-    TH1F *total_energy = new TH1F("total_energy", "Total energy per event;Energy (MeV);Counts", 1000, 0, 4000);
-    analysis::PhysicsTools::MollerEvent MollerPair;
-    analysis::PhysicsTools::MollerData hycal_mollers;
+    //setup input ROOT file and tree
+    TFile *infile = TFile::Open(input_file.c_str(), "READ");
+    if (!infile || !infile->IsOpen()) {
+        std::cerr << "Cannot open " << input_file << "\n";
+        return 1;
+    }
+    TTree *tree = (TTree *)infile->Get("recon");
+    if (!tree) {
+        std::cerr << "Cannot find TTree 'recon' in " << input_file << "\n";
+        return 1;
+    }
 
-    //setup output ROOT file and tree
+    EventVars_Recon ev;
+    setupReconBranches(tree, ev);
+
+    //setup output ROOT file
     TFile outfile(output.c_str(), "RECREATE");
-    TTree *tree = new TTree("recon", "HyCal reconstruction");
-    // tree branches
-    int ev_num = 0, n_clusters = 0;
-    static const int kMaxCl = 100;
-    float cl_x[kMaxCl], cl_y[kMaxCl], cl_energy[kMaxCl];
-    int cl_nblocks[kMaxCl], cl_center[kMaxCl];
-    tree->Branch("event_num",  &ev_num, "event_num/I");
-    tree->Branch("n_clusters", &n_clusters, "n_clusters/I");
-    tree->Branch("cl_x",       cl_x,       "cl_x[n_clusters]/F");
-    tree->Branch("cl_y",       cl_y,       "cl_y[n_clusters]/F");
-    tree->Branch("cl_energy",  cl_energy,  "cl_energy[n_clusters]/F");
-    tree->Branch("cl_nblocks", cl_nblocks, "cl_nblocks[n_clusters]/I");
-    tree->Branch("cl_center",  cl_center,  "cl_center[n_clusters]/I");
 
-    // build ROC tag → crate index mapping from DAQ config JSON
-    std::unordered_map<int, int> roc_to_crate;
-    if (!daq_config_file.empty()) {
-        std::cout << "Loading DAQ config from " << daq_config_file << "\n";
-        std::ifstream dcf(daq_config_file);
-        if (dcf.is_open()) {
-            auto dcj = nlohmann::json::parse(dcf, nullptr, false, true);
-            if (dcj.contains("roc_tags") && dcj["roc_tags"].is_array()) {
-                for (auto &entry : dcj["roc_tags"]) {
-                    int tag   = std::stoi(entry.at("tag").get<std::string>(), nullptr, 16);
-                    int crate = entry.at("crate").get<int>();
-                    roc_to_crate[tag] = crate;
-                }
+    int Nentries = tree->GetEntries();
+    Nentries = (max_events > 0) ? std::min(Nentries, max_events) : Nentries;
+    
+    for(int i = 0; i < Nentries; i++) {
+        tree->GetEntry(i);
+        //loop over all the clusters on HyCal
+        if (i % 1000 == 0)
+            std::cerr << "Reading " << i << " events / " << Nentries << " total events\r" << std::flush;
+        int nHits = ev.n_clusters;
+        float sum_energy = 0.f;
+        for (int j = 0; j < nHits; j++) {
+            float theta = std::atan(std::sqrt(ev.cl_x[j] * ev.cl_x[j] + ev.cl_y[j] * ev.cl_y[j]) /hycal_z) * 180.f / 3.14159265f;
+            //fill histograms for energy vs moduleID
+            physics.FillEnergyVsModule(ev.cl_center[j], ev.cl_energy[j]);
+            //fill histograms for clusters energy vs theta
+            physics.FillEnergyVsTheta(theta, ev.cl_energy[j]);
+            //fill histograms for clusters hit positions and energy distribution
+            hit_pos->Fill(ev.cl_x[j], ev.cl_y[j]);
+            clusters_energy->Fill(ev.cl_energy[j]);
+
+            sum_energy += ev.cl_energy[j];
+        }
+        total_energy->Fill(sum_energy);
+
+        // select events with only 1 cluster on HyCal(mostly elastic ep events)
+        if (nHits == 1){
+            physics.FillModuleEnergy(ev.cl_center[0], ev.cl_energy[0]);
+            one_cluster_energy->Fill(ev.cl_energy[0]);
+        }
+
+        //select events with 2 clusters on HyCal (potential Moller events)
+        // no GEM matching for simple quick start
+        if (nHits == 2){
+            two_cluster_energy->Fill(ev.cl_energy[0]);
+            two_cluster_energy->Fill(ev.cl_energy[1]);
+            //try to find good Moller with energy cut
+            if(std::abs(ev.cl_energy[0] + ev.cl_energy[1] - Ebeam) < 3.*Ebeam*0.025/sqrt(Ebeam/1000.f)){
+                //save these 2-cluster events for Moller analysis
+                MollerPair = analysis::PhysicsTools::MollerEvent(
+                                {ev.cl_x[0], ev.cl_y[0], 0.f, ev.cl_energy[0]},
+                                {ev.cl_x[1], ev.cl_y[1], 0.f, ev.cl_energy[1]});
+                hycal_mollers.push_back(MollerPair);
+                //fill Moller phi difference histogram
+                float phi_diff = physics.GetMollerPhiDiff(MollerPair);
+                physics.FillMollerPhiDiff(phi_diff);
+                //fill 2-arm Moller position histogram
+                physics.Fill2armMollerPosHist(MollerPair.first.x, MollerPair.first.y);
+                physics.Fill2armMollerPosHist(MollerPair.second.x, MollerPair.second.y);
             }
         }
     }
 
-    //initialize tools for event decoder and cluster reconstruction
-    fdec::EventData event;
-    fdec::WaveAnalyzer ana;
-    fdec::WaveResult wres;
-    fdec::ClusterConfig cl_cfg;
-    int total = 0;
-
-    std::cout << "Processing " << num_files << " evio files, output will be saved to " << output << "\n";
-    std::cout << "Files: ";
-    for (int f = 0; f < num_files; ++f) std::cout << evio_files[f] << "\n";
-    std::cout << "\n";
-
-    evc::EvChannel ch;
-    ch.SetConfig(daq_cfg);
-    for (int f = 0; f < num_files; ++f) {
-        if (ch.Open(evio_files[f]) != evc::status::success) {
-            std::cerr << "Cannot open " << evio_files[f] << "\n";
-            return 1;
-        }
-        while (ch.Read() == evc::status::success) {
-            if (!ch.Scan()) continue;
-            for (int ie = 0; ie < ch.GetNEvents(); ++ie) {
-                if (!ch.DecodeEvent(ie, event)) continue;
-
-                fdec::HyCalCluster clusterer(hycal);
-                clusterer.SetConfig(cl_cfg);
-                float energy_sum = 0.f;
-                // feed hits
-                for (int r = 0; r < event.nrocs; ++r) {
-                    auto &roc = event.rocs[r];
-                    if (!roc.present) continue;
-                    auto cit = roc_to_crate.find(roc.tag);
-                    if (cit == roc_to_crate.end()) continue;
-                    int crate = cit->second;
-                    for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
-                        if (!roc.slots[s].present) continue;
-                        for (int c = 0; c < 160; ++c) {
-                            if (!(roc.slots[s].channel_mask & (1ull << c))) continue;
-                            auto &cd = roc.slots[s].channels[c];
-                            if (cd.nsamples <= 0) continue;
-                            const auto *mod = hycal.module_by_daq(crate, s, c);
-                            if (!mod || !mod->is_hycal()) continue;
-                            float adc = 0.f;
-                            if(prad1 == true) 
-                                adc = cd.samples[0] * 0.543; //0.543 for prad1 run1308,correct to 1.1GeV
-                            else{
-                                ana.Analyze(cd.samples, cd.nsamples, wres);
-                                if (wres.npeaks <= 0) continue;
-                                adc = wres.peaks[0].integral;
-                            }
-                            float energy = (mod->cal_factor > 0.) ?
-                                static_cast<float>(mod->energize(adc)) : adc * 0.078f;
-                            clusterer.AddHit(mod->index, energy);
-                            energy_sum += energy;
-                        }
-                    }
-                }
-                total_energy->Fill(energy_sum);
-                //if (energy_sum < 0.5 * Ebeam) continue; // skip low-energy events
-                clusterer.FormClusters();
-                std::vector<fdec::ClusterHit> hits;
-                clusterer.ReconstructHits(hits);
-
-                //event reconstrued, fill root tree and histograms
-                ev_num = event.info.event_number;
-                n_clusters = std::min((int)hits.size(), kMaxCl);
-                for (int i = 0; i < n_clusters; ++i) {
-                    cl_x[i]       = hits[i].x;
-                    cl_y[i]       = hits[i].y;
-                    cl_energy[i]  = hits[i].energy;
-                    cl_nblocks[i] = hits[i].nblocks;
-                    cl_center[i]  = hits[i].center_id;
-                    
-                    physics.FillEnergyVsModule(hits[i].center_id, hits[i].energy);
-                    float theta = std::atan(std::sqrt(hits[i].x * hits[i].x + hits[i].y * hits[i].y) /hycal_z) * 180.f / 3.14159265f;
-                    physics.FillEnergyVsTheta(theta, hits[i].energy);
-
-                    hit_pos->Fill(hits[i].x, hits[i].y);
-                    clusters_energy->Fill(hits[i].energy);
-                }
-                tree->Fill();
-                total++;
-
-                if(n_clusters == 1) {
-                    physics.FillModuleEnergy(hits[0].center_id, hits[0].energy);
-                    one_cluster_energy->Fill(hits[0].energy);
-                }
-                if(n_clusters == 2){
-                    two_cluster_energy->Fill(hits[0].energy);
-                    two_cluster_energy->Fill(hits[1].energy);
-                    //try to find good Moller events with 2 clusters
-                    if(std::abs(hits[0].energy + hits[1].energy - Ebeam) < 3.*Ebeam*0.025/sqrt(Ebeam/1000.f)){
-                        MollerPair = analysis::PhysicsTools::MollerEvent(
-                                        {hits[0].x, hits[0].y, 0.f, hits[0].energy},
-                                        {hits[1].x, hits[1].y, 0.f, hits[1].energy});
-                        hycal_mollers.push_back(MollerPair);
-                        float phi_diff = physics.GetMollerPhiDiff(MollerPair);
-                        physics.FillMollerPhiDiff(phi_diff);
-                        physics.Fill2armMollerPosHist(MollerPair.first.x, MollerPair.first.y);
-                        physics.Fill2armMollerPosHist(MollerPair.second.x, MollerPair.second.y);
-                    }
-                }
-
-                if (total % 1000 == 0)
-                    std::cerr << "\r" << total << " events" << std::flush;
-            }
-        }
-    }
-
-    std::cerr << "\r" << total << " events reconstructed -> " << output << "\n";
-    tree->Write();
-
-    //analyze Moller events, fill histograms, save to output ROOT file
+    //analyze Moller events, get ditector position information and z-vertex distribution, fill histograms
     for (int i = 0; i < hycal_mollers.size(); i++) {
         float z = physics.GetMollerZdistance(hycal_mollers[i], Ebeam);
         physics.FillMollerZ(z);
@@ -275,10 +198,10 @@ int main(int argc, char *argv[])
             auto center = physics.GetMollerCenter(hycal_mollers[i-1], hycal_mollers[i]);
             physics.FillMollerXY(center[0], center[1]);
         } 
-
     }
 
-    // write per-module histograms
+    // write histograms into output ROOT file
+    outfile.cd();
     hit_pos->Write();
 
     outfile.mkdir("energy_plots");
@@ -321,5 +244,8 @@ int main(int argc, char *argv[])
 
     outfile.Close();
     physics.Resolution2Database(run_id); // example run ID
+
+    std::cerr << "\r" << Nentries << " events analyzed, the result saved -> " << output << "\n";
+
     return 0;
 }
