@@ -6,11 +6,10 @@ PRad-II, Jefferson Lab Hall B
 
 ### Quick Start
 
-On **clonpc19**:
+On **clasrun@clonpc19**, or any other machine in the counting room:
 
 ```bash
 cd ~/prad2_daq/prad2evviewer
-pip install -r calibration/requirements.txt   # first time only
 ./calibration/hycal_snake_scan.py --real
 ```
 
@@ -18,9 +17,10 @@ pip install -r calibration/requirements.txt   # first time only
 
 1. Select **Path** profile (`(autogen)` or a predefined path from `paths.json`).
 2. For autogen: set **LG layers** (0 = PbWO4 only, 1--2 to include PbGlass).
-3. Set **Start** module and **Count** (0 = scan all from start to end).
-4. Set **Dwell time** and **Pos. threshold**.
-5. Click **Start Scan**.
+3. It's very likely all PbWO4 scan or 2 LG Layers scan, talk to RC if you're not sure about the scan path.
+4. Set **Start** module and **Count** (0 = scan all from start to end).
+5. Set **Dwell time** and **Pos. threshold**.
+6. Click **Start Scan**.
 
 ### Resume After Interruption
 
