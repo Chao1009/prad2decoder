@@ -142,7 +142,7 @@ class ScalerMapGUI:
     def _build_ui(self):
         self.root.title("HyCal Scaler Map" +
                         ("  [SIMULATION]" if self.simulation
-                         else "  [REAL EPICS]"))
+                         else "  [REALTIME]"))
         self.root.configure(bg=C.BG)
 
         style = ttk.Style()
@@ -158,7 +158,7 @@ class ScalerMapGUI:
         top.pack(fill="x")
         tk.Label(top, text="  HYCAL SCALER MAP  ", bg="#0d1520", fg=C.GREEN,
                  font=("Consolas", 13, "bold")).pack(side="left", padx=8)
-        mode_text = "SIMULATION" if self.simulation else "REAL EPICS"
+        mode_text = "SIMULATION" if self.simulation else "REALTIME"
         mode_fg = "#d29922" if self.simulation else C.GREEN
         tk.Label(top, text=mode_text, bg="#0d1520", fg=mode_fg,
                  font=("Consolas", 9, "bold")).pack(side="left", padx=4)
@@ -213,17 +213,21 @@ class ScalerMapGUI:
         tk.Label(ctrl, text="  Min:", bg=C.BG, fg=C.TEXT,
                  font=("Consolas", 9)).pack(side="left")
         self._range_min_var = tk.DoubleVar(value=0)
-        tk.Entry(ctrl, textvariable=self._range_min_var, width=6,
-                 bg=C.PANEL, fg=C.TEXT, font=("Consolas", 9),
-                 insertbackground=C.TEXT, borderwidth=1
-                 ).pack(side="left", padx=2)
+        e_min = tk.Entry(ctrl, textvariable=self._range_min_var, width=6,
+                         bg=C.PANEL, fg=C.TEXT, font=("Consolas", 9),
+                         insertbackground=C.TEXT, borderwidth=1)
+        e_min.pack(side="left", padx=2)
+        e_min.bind("<Return>", lambda _: self._recolor())
         tk.Label(ctrl, text="Max:", bg=C.BG, fg=C.TEXT,
                  font=("Consolas", 9)).pack(side="left")
         self._range_max_var = tk.DoubleVar(value=1000)
-        tk.Entry(ctrl, textvariable=self._range_max_var, width=6,
-                 bg=C.PANEL, fg=C.TEXT, font=("Consolas", 9),
-                 insertbackground=C.TEXT, borderwidth=1
-                 ).pack(side="left", padx=2)
+        e_max = tk.Entry(ctrl, textvariable=self._range_max_var, width=6,
+                         bg=C.PANEL, fg=C.TEXT, font=("Consolas", 9),
+                         insertbackground=C.TEXT, borderwidth=1)
+        e_max.pack(side="left", padx=2)
+        e_max.bind("<Return>", lambda _: self._recolor())
+        ttk.Button(ctrl, text="Apply",
+                   command=self._recolor).pack(side="left", padx=2)
 
         self._lbl_info = tk.Label(ctrl, text="", bg=C.BG, fg=C.TEXT,
                                    font=("Consolas", 9))
@@ -293,30 +297,16 @@ class ScalerMapGUI:
                         tags=("highlight",))
                 break
 
-    def _refresh(self):
-        # Read all values
-        for m in self._scalable:
-            v = self.ep.get(m.name)
-            if v is not None:
-                self._values[m.name] = float(v)
-
-        # Update connection status
-        n_ok, n_total = self.ep.connection_count()
-        fg = C.GREEN if n_ok == n_total else ("#d29922" if n_ok > 0 else C.DIM)
-        self._lbl_conn.configure(text=f"Connected: {n_ok}/{n_total}", fg=fg)
-
-        # Colour range from GUI entries
+    def _recolor(self):
+        """Redraw module colours using current data and range settings."""
         vmin = self._range_min_var.get()
         vmax = self._range_max_var.get()
-        # Show actual data range in top bar
         vals = [v for v in self._values.values()]
         if vals:
             self._lbl_actual_range.configure(
                 text=f"Data: {min(vals):.0f} .. {max(vals):.0f}")
         else:
             self._lbl_actual_range.configure(text="")
-
-        # Update colours
         for m in self._scalable:
             rid = self._cell_ids.get(m.name)
             if rid is None:
@@ -327,6 +317,19 @@ class ScalerMapGUI:
             else:
                 color = "#15181d"
             self._canvas.itemconfigure(rid, fill=color)
+
+    def _refresh(self):
+        """Poll EPICS, update data, then recolour."""
+        for m in self._scalable:
+            v = self.ep.get(m.name)
+            if v is not None:
+                self._values[m.name] = float(v)
+
+        n_ok, n_total = self.ep.connection_count()
+        fg = C.GREEN if n_ok == n_total else ("#d29922" if n_ok > 0 else C.DIM)
+        self._lbl_conn.configure(text=f"Connected: {n_ok}/{n_total}", fg=fg)
+
+        self._recolor()
 
         # Schedule next poll
         if self._polling:
