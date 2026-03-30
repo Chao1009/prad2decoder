@@ -1,9 +1,10 @@
 #pragma once
 //=============================================================================
-// app_state.h — shared application state for prad2_viewer and prad2_monitor
+// app_state.h — shared application state for the event viewer/monitor
 //
 // Owns all configuration, accumulated data (histograms, LMS), and HyCal system.
-// Both viewer and monitor create a single AppState instance and delegate to it.
+// The ViewerServer maintains two AppState instances (file and online) with
+// separate accumulators but identical configuration.
 //=============================================================================
 
 #include "HyCalSystem.h"
@@ -172,23 +173,12 @@ struct AppState {
 
     // ---- Per-event processing ----------------------------------------------
 
-    // Fill DQ histograms + occupancy for one event.
-    void fillHist(fdec::EventData &event,
-                  fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
-
-    // Run clustering on one event, fill cluster_energy_hist.
-    void clusterEvent(fdec::EventData &event,
-                      fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
-
-    // Process LMS data for one event (checks trigger mask internally).
-    void processLms(fdec::EventData &event,
-                    fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
-
     // Process GEM SSP data for one event. Call after DecodeEvent with ssp_evt.
     void processGemEvent(const ssp::SspEventData &ssp_evt);
 
     // Process one fully-decoded event: histograms + clustering + LMS.
-    // Thread-safe (locks internally).
+    // Single pass over all channels (analyzes each channel once).
+    // Thread-safe (acquires data_mtx + lms_mtx internally).
     void processEvent(fdec::EventData &event,
                       fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
 

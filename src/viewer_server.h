@@ -170,9 +170,6 @@ private:
     void sleepMs(int ms);
 #endif
 
-    // ── Config cache ────────────────────────────────────────────────────
-    std::string base_config_str_;   // pre-serialized static config (modules, daq)
-
     // ── HTTP / resource handling ─────────────────────────────────────────
     void setupServer(int port);
     bool serveResource(const std::string &uri, WsServer::connection_ptr con);

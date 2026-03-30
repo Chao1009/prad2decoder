@@ -149,7 +149,6 @@ void ViewerServer::init(const Config &cfg)
     json base_cfg = {
         {"modules", modules_j}, {"daq", daq_j}, {"crate_roc", app_file_.crate_roc_json},
     };
-    base_config_str_ = base_cfg.dump();
     app_file_.base_config = std::move(base_cfg);
     app_online_.base_config = app_file_.base_config;
 

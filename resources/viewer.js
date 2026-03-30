@@ -1916,8 +1916,7 @@ function init(){
         const r=geoCanvas.getBoundingClientRect(),m=hitTest(e.clientX-r.left,e.clientY-r.top);
         if(m!==hoveredModule){
             hoveredModule=m;
-            geoOutlineDirty=true;
-            redrawGeo();
+            drawGeoOutlines();  // outlines only — fills unchanged
         }
         if(m){
             tip.textContent=tooltipText(m);tip.style.display='block';
@@ -1927,7 +1926,7 @@ function init(){
     // click is now handled via geoHandleClick (called from mouseup when drag threshold not exceeded)
     geoCanvas.addEventListener('mouseleave',()=>{
         hoveredModule=null;tip.style.display='none';
-        geoOutlineDirty=true; redrawGeo();
+        drawGeoOutlines();
     });
     document.addEventListener('keydown',e=>{
         if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
