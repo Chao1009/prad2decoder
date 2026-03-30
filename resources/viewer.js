@@ -2033,7 +2033,7 @@ function applyConfig(data){
     if(hcb) hcb.checked=histEnabled;
 
     // show/hide mode-specific UI
-    document.getElementById('nav-file').style.display   = mode==='file'?'flex':'none';
+    document.getElementById('nav-file').style.display   = mode!=='online'?'flex':'none';
     document.getElementById('nav-online').style.display = mode==='online'?'flex':'none';
     document.getElementById('btn-open').style.display='';
 
