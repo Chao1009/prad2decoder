@@ -822,16 +822,183 @@ void AppState::recordSyncTime(uint32_t unix_time, uint64_t last_ti_ts)
 void AppState::processEvent(fdec::EventData &event,
                             fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
-    {
+    // --- check which consumers need this event ---
+    bool do_hist = (waveform_trigger_mask == 0) ||
+                   (event.info.trigger_bits & waveform_trigger_mask);
+    bool do_cluster = (cluster_trigger_mask == 0) ||
+                      (event.info.trigger_bits & cluster_trigger_mask);
+    bool do_lms = (lms_trigger_mask != 0) &&
+                  (event.info.trigger_bits & lms_trigger_mask);
+
+    if (!do_hist && !do_cluster && !do_lms) {
         std::lock_guard<std::mutex> lk(data_mtx);
-        fillHist(event, ana, wres);
-        clusterEvent(event, ana, wres);
         events_processed++;
+        return;
     }
-    {
-        std::lock_guard<std::mutex> lk(lms_mtx);
-        processLms(event, ana, wres);
+
+    bool is_adc1881m = (daq_cfg.adc_format == "adc1881m");
+
+    // clustering setup (stack-allocated, per-event)
+    fdec::HyCalCluster clusterer(hycal);
+    if (do_cluster) clusterer.SetConfig(cluster_cfg);
+
+    // LMS timing
+    double lms_time = 0;
+
+    // acquire both locks for the merged pass
+    std::unique_lock<std::mutex> lk1(data_mtx, std::defer_lock);
+    std::unique_lock<std::mutex> lk2(lms_mtx, std::defer_lock);
+    std::lock(lk1, lk2);
+
+    if (do_lms) {
+        if (lms_first_ts == 0) lms_first_ts = event.info.timestamp;
+        lms_time = static_cast<double>(event.info.timestamp - lms_first_ts) * TI_TICK_SEC;
     }
+
+    // --- single pass: analyze once per channel, feed all consumers ---
+    for (int r = 0; r < event.nrocs; ++r) {
+        auto &roc = event.rocs[r];
+        if (!roc.present) continue;
+
+        // crate lookup (needed by cluster + LMS consumers)
+        int crate = -1;
+        if (do_cluster || do_lms) {
+            auto cit = roc_to_crate.find(roc.tag);
+            if (cit != roc_to_crate.end()) crate = cit->second;
+        }
+
+        for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
+            if (!roc.slots[s].present) continue;
+            auto &slot = roc.slots[s];
+            for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
+                if (!(slot.channel_mask & (1ull << c))) continue;
+                auto &cd = slot.channels[c];
+                if (cd.nsamples <= 0) continue;
+
+                // ── analyze ONCE ──
+                float peak_in_window = -1;
+                if (!is_adc1881m) {
+                    ana.Analyze(cd.samples, cd.nsamples, wres);
+                    peak_in_window = bestPeakInWindow(wres, hist_cfg.threshold,
+                                                       hist_cfg.time_min, hist_cfg.time_max);
+                } else {
+                    wres.npeaks = 0;
+                    peak_in_window = cd.samples[0];
+                }
+
+                // ── histogram consumer ──
+                if (do_hist && !is_adc1881m) {
+                    std::string key = std::to_string(roc.tag) + "_"
+                                   + std::to_string(s) + "_" + std::to_string(c);
+                    bool has_peak = false, has_peak_tcut = false;
+                    float best = -1;
+                    for (int p = 0; p < wres.npeaks; ++p) {
+                        auto &pk = wres.peaks[p];
+                        if (pk.height < hist_cfg.threshold) continue;
+                        has_peak = true;
+                        if (pk.time >= hist_cfg.time_min && pk.time <= hist_cfg.time_max) {
+                            has_peak_tcut = true;
+                            if (pk.integral > best) best = pk.integral;
+                        }
+                    }
+                    if (best >= 0) {
+                        auto &h = histograms[key];
+                        if (h.bins.empty()) h.init(hist_nbins);
+                        h.fill(best, hist_cfg.bin_min, hist_cfg.bin_step);
+                    }
+                    for (int p = 0; p < wres.npeaks; ++p) {
+                        auto &pk = wres.peaks[p];
+                        if (pk.height < hist_cfg.threshold) continue;
+                        auto &ph = pos_histograms[key];
+                        if (ph.bins.empty()) ph.init(pos_nbins);
+                        ph.fill(pk.time, hist_cfg.pos_min, hist_cfg.pos_step);
+                    }
+                    if (has_peak)      occupancy[key]++;
+                    if (has_peak_tcut) occupancy_tcut[key]++;
+                }
+
+                // ── cluster consumer ──
+                if (do_cluster && crate >= 0) {
+                    const auto *mod = hycal.module_by_daq(crate, s, c);
+                    if (mod && mod->is_hycal()) {
+                        float adc_val = is_adc1881m ? (float)cd.samples[0] : peak_in_window;
+                        if (adc_val > 0) {
+                            float energy = (mod->cal_factor > 0.)
+                                ? static_cast<float>(mod->energize(adc_val))
+                                : adc_val * adc_to_mev;
+                            clusterer.AddHit(mod->index, energy);
+                        }
+                    }
+                }
+
+                // ── LMS consumer ──
+                if (do_lms && crate >= 0) {
+                    const auto *mod = hycal.module_by_daq(crate, s, c);
+                    if (mod) {
+                        float val = is_adc1881m ? (float)cd.samples[0] : peak_in_window;
+                        if (val > 0) {
+                            auto &hist = lms_history[mod->index];
+                            if (static_cast<int>(hist.size()) < lms_max_history)
+                                hist.push_back({lms_time, val});
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- post-loop: clustering + physics histograms ---
+    if (do_cluster) {
+        clusterer.FormClusters();
+        std::vector<fdec::ClusterHit> reco_hits;
+        clusterer.ReconstructHits(reco_hits);
+
+        struct ClusterInfo { float lx, ly, lz, theta; };
+        std::vector<ClusterInfo> cinfo(reco_hits.size());
+        for (size_t i = 0; i < reco_hits.size(); ++i) {
+            auto &rh = reco_hits[i];
+            auto &ci = cinfo[i];
+            hycal_transform.toLab(rh.x, rh.y, ci.lx, ci.ly, ci.lz);
+            float dx = ci.lx - target_x, dy = ci.ly - target_y, dz = ci.lz - target_z;
+            float rv = std::sqrt(dx*dx + dy*dy);
+            ci.theta = std::atan2(rv, dz) * (180.f / 3.14159265f);
+        }
+
+        for (size_t i = 0; i < reco_hits.size(); ++i) {
+            cluster_energy_hist.fill(reco_hits[i].energy, cl_hist_min, cl_hist_step);
+            nblocks_hist.fill(reco_hits[i].nblocks, nblocks_hist_min, nblocks_hist_step);
+        }
+        nclusters_hist.fill(reco_hits.size(), nclusters_hist_min, nclusters_hist_step);
+        cluster_events_processed++;
+
+        bool physics_accept = (physics_trigger_mask == 0) ||
+            (event.info.trigger_bits & physics_trigger_mask);
+        if (physics_accept) {
+            for (size_t i = 0; i < reco_hits.size(); ++i) {
+                energy_angle_hist.fill(cinfo[i].theta, reco_hits[i].energy,
+                    ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+            }
+            if (reco_hits.size() == 2 && beam_energy > 0) {
+                float esum = reco_hits[0].energy + reco_hits[1].energy;
+                bool energy_ok = std::abs(esum - beam_energy) < moller_energy_tol * beam_energy;
+                bool angle_ok = false;
+                for (int j = 0; j < 2; ++j)
+                    if (cinfo[j].theta >= moller_angle_min && cinfo[j].theta <= moller_angle_max)
+                        angle_ok = true;
+                if (energy_ok && angle_ok) {
+                    moller_events++;
+                    for (int j = 0; j < 2; ++j) {
+                        moller_xy_hist.fill(cinfo[j].lx, cinfo[j].ly,
+                            moller_xy_x_min, moller_xy_x_step, moller_xy_y_min, moller_xy_y_step);
+                        moller_energy_hist.fill(reco_hits[j].energy, moller_e_min, moller_e_step);
+                    }
+                }
+            }
+        }
+    }
+
+    events_processed++;
+    if (do_lms) lms_events++;
 }
 
 void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)

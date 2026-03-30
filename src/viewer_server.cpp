@@ -441,11 +441,8 @@ void ViewerServer::buildHistograms(const std::string &path)
             progress_.current = app_file_.events_processed.load() + 1;
             last_ti_ts = event.info.timestamp;
 
-            app_file_.fillHist(event, ana, wres);
-            app_file_.clusterEvent(event, ana, wres);
-            app_file_.processLms(event, ana, wres);
+            app_file_.processEvent(event, ana, wres);
             app_file_.processGemEvent(ssp_evt);
-            app_file_.events_processed++;
         }
     }
     ch.Close();
