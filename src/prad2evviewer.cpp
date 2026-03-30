@@ -128,15 +128,11 @@ private slots:
 #ifdef WITH_ET
     void onToggleOnline() {
         if (server_->mode() == "online") {
-            // switch back to file mode — ViewerServer handles clearing
-            // We POST to the server API so the frontend gets the WebSocket notification
             view_->page()->runJavaScript(
                 "fetch('/api/mode/file',{method:'POST'})");
-            etAction_->setText("Go &Online");
         } else {
-            view_->page()->runJavaScript(
-                "fetch('/api/mode/online',{method:'POST'})");
-            etAction_->setText("Go to &File Viewer");
+            // open the ET connection dialog in the web frontend
+            view_->page()->runJavaScript("openEtDialog()");
         }
     }
 #endif

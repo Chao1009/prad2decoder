@@ -157,7 +157,6 @@ if(BUILD_GUI)
     target_link_libraries(prad2_client PRIVATE Qt5::Widgets Qt5::WebEngineWidgets)
     set_target_properties(prad2_client PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-        AUTOMOC ON
     )
 endif()
 

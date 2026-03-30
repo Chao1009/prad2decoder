@@ -542,8 +542,9 @@ void ViewerServer::etReaderThread()
         const int max_retry = 30000;
         int retry_count = 0;
         auto retry_start = std::chrono::steady_clock::now();
+        int gen = et_generation_.load();
 
-        while (running_ && et_active_) {
+        while (running_ && et_active_ && et_generation_.load() == gen) {
             if (retry_count == 0) {
                 std::cerr << "ET: connecting to " << et_cfg_.host << ":" << et_cfg_.port
                           << "  " << et_cfg_.et_file << " ...\n";
@@ -581,12 +582,13 @@ void ViewerServer::etReaderThread()
             wsBroadcast("{\"type\":\"status\",\"connected\":true}");
             std::cerr << "ET: connected, reading events\n";
 
+            int gen = et_generation_.load();
             auto last_ring_push = std::chrono::steady_clock::now();
             constexpr auto ring_interval = std::chrono::milliseconds(50);
             auto last_lms_notify = last_ring_push;
             constexpr auto lms_notify_interval = std::chrono::milliseconds(200);
 
-            while (running_ && et_active_) {
+            while (running_ && et_active_ && et_generation_.load() == gen) {
                 auto st = ch.Read();
                 if (st == status::empty) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -742,10 +744,15 @@ json ViewerServer::buildConfig()
     cfg["et_available"] = true;
     cfg["et_connected"] = et_connected_.load();
     cfg["ring_buffer_size"] = ring_size_;
+    cfg["et_config"] = {
+        {"host", et_cfg_.host}, {"port", et_cfg_.port},
+        {"et_file", et_cfg_.et_file}, {"station", et_cfg_.station},
+    };
 #else
     cfg["et_available"] = false;
     cfg["et_connected"] = false;
     cfg["ring_buffer_size"] = 0;
+    cfg["et_config"] = json::object();
 #endif
     cfg["file_available"] = !cfg_.data_dir.empty() || (data != nullptr);
     cfg["total_events"] = data ? (int)data->index.size() : 0;
@@ -826,8 +833,22 @@ void ViewerServer::onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
     // --- mode switching ---
     if (uri == "/api/mode/online") {
 #ifdef WITH_ET
-        std::lock_guard<std::mutex> lk(mode_mtx_);
-        if (mode_.load() != Mode::Online) {
+        {
+            std::lock_guard<std::mutex> lk(mode_mtx_);
+            // apply optional ET config overrides (serialised by mode_mtx_)
+            std::string body = con->get_request_body();
+            if (!body.empty()) {
+                auto j = json::parse(body, nullptr, false);
+                if (!j.is_discarded()) {
+                    if (j.contains("host"))    et_cfg_.host    = j["host"];
+                    if (j.contains("port"))    et_cfg_.port    = j["port"];
+                    if (j.contains("et_file")) et_cfg_.et_file = j["et_file"];
+                    if (j.contains("station")) et_cfg_.station = j["station"];
+                }
+            }
+            // bump generation so ET reader reconnects with new config
+            if (mode_.load() == Mode::Online)
+                et_generation_++;
             et_active_ = true;
             setMode(Mode::Online);
         }

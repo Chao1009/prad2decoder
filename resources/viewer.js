@@ -1753,13 +1753,42 @@ function init(){
         });
     };
 
-    // mode toggle button
+    // mode toggle button — opens ET dialog when going online
     document.getElementById('btn-mode-toggle').onclick=()=>{
         if(mode==='online'){
             fetch('/api/mode/file',{method:'POST'});
         } else {
-            fetch('/api/mode/online',{method:'POST'});
+            openEtDialog();
         }
+    };
+
+    // ET connect dialog
+    const etBackdrop=document.getElementById('et-backdrop');
+    const etDialog=document.getElementById('et-dialog');
+    document.getElementById('et-dialog-close').onclick=()=>closeEtDialog();
+    document.getElementById('et-cancel').onclick=()=>closeEtDialog();
+    etBackdrop.onclick=()=>closeEtDialog();
+    document.getElementById('et-connect').onclick=()=>{
+        const cfg={
+            host:    document.getElementById('et-input-host').value,
+            port:    parseInt(document.getElementById('et-input-port').value)||11111,
+            et_file: document.getElementById('et-input-file').value,
+            station: document.getElementById('et-input-station').value,
+        };
+        document.getElementById('et-status-msg').textContent='Connecting...';
+        fetch('/api/mode/online',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(cfg),
+        }).then(r=>r.json()).then(d=>{
+            if(d.error){
+                document.getElementById('et-status-msg').textContent='Error: '+d.error;
+            } else {
+                closeEtDialog();
+            }
+        }).catch(()=>{
+            document.getElementById('et-status-msg').textContent='Connection failed';
+        });
     };
 
     // geo mouse
@@ -1872,6 +1901,23 @@ function fetchConfigAndApply(){
     fetch('/api/config').then(r=>r.json()).then(applyConfig);
 }
 
+// ET connection dialog
+function openEtDialog(){
+    // populate fields with current ET config from last /api/config
+    const etc=window._etConfig||{};
+    document.getElementById('et-input-host').value=etc.host||'localhost';
+    document.getElementById('et-input-port').value=etc.port||11111;
+    document.getElementById('et-input-file').value=etc.et_file||'/tmp/et_sys_prad2';
+    document.getElementById('et-input-station').value=etc.station||'prad2_monitor';
+    document.getElementById('et-status-msg').textContent='';
+    document.getElementById('et-backdrop').classList.add('open');
+    document.getElementById('et-dialog').classList.add('open');
+}
+function closeEtDialog(){
+    document.getElementById('et-backdrop').classList.remove('open');
+    document.getElementById('et-dialog').classList.remove('open');
+}
+
 function applyConfig(data){
     const crateRoc=data.crate_roc||{};
     const rawMods=data.modules||[],rawDaq=data.daq||[];
@@ -1934,6 +1980,7 @@ function applyConfig(data){
     updateTimeCutLabel();
     mode=data.mode||'file';
     etAvailable=data.et_available||false;
+    if(data.et_config) window._etConfig=data.et_config;
     fileAvailable=data.file_available||false;
     const appTitle=mode==='online'?'PRad-II HyCal Monitor':'PRad-II HyCal Event Viewer';
     document.title=appTitle;

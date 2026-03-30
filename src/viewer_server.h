@@ -163,6 +163,7 @@ private:
 
     std::atomic<bool> et_active_{false};
     std::atomic<bool> et_connected_{false};
+    std::atomic<int>  et_generation_{0};    // bumped to trigger reconnect
     std::thread et_thread_;
 
     void etReaderThread();
