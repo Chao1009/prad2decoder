@@ -415,9 +415,30 @@ const PC_EPICS={responsive:true,displayModeBar:true,
     modeBarButtonsToRemove:['sendDataToCloud','lasso2d','select2d'],
     displaylogo:false};
 
+// ── Plotly plot registry ──────────────────────────────────────────────
+// All Plotly divs register here with their tab and default layout.
+// Provides unified init, resize-by-tab, and resize-all.
+const plotRegistry=[];  // [{id, tab, layout, config}]
+
+function registerPlot(id, tab, title, config){
+    const layout={...PL};
+    if(title) layout.title={text:title, font:{size:10,color:'#555'}};
+    plotRegistry.push({id, tab, layout, config: config||PC2});
+}
+
+function initRegisteredPlots(){
+    for(const p of plotRegistry)
+        Plotly.newPlot(p.id, [], p.layout, p.config);
+}
+
+function resizePlotsForTab(tab){
+    for(const p of plotRegistry)
+        if(p.tab===tab) try{Plotly.Plots.resize(p.id);}catch(e){}
+}
+
 function resizeAllPlots(){
-    for(const id of['waveform-div','inthist-div','poshist-div','cl-energy-hist','cl-nclust-hist','cl-nblocks-hist','lms-plot'])
-        try{Plotly.Plots.resize(id);}catch(e){}
+    for(const p of plotRegistry)
+        try{Plotly.Plots.resize(p.id);}catch(e){}
 }
 
 // =========================================================================
@@ -1027,36 +1048,29 @@ function switchTab(tab){
     document.getElementById('physics-outer').style.display    = tab==='physics' ? 'flex' : 'none';
     document.getElementById('gem-outer').style.display        = tab==='gem' ? 'flex' : 'none';
 
-    if(tab==='cluster') {
-        loadClusterData(currentEvent);
-        setTimeout(()=>{
-            try{Plotly.Plots.resize('cl-energy-hist');}catch(e){}
-            try{Plotly.Plots.resize('cl-nclust-hist');}catch(e){}
-            try{Plotly.Plots.resize('cl-nblocks-hist');}catch(e){}
-            plotClHist(); plotClStatHists();
-        }, 50);
-    } else if(tab==='lms') {
-        fetchLmsSummary();
-        setTimeout(()=>{
-            try{Plotly.Plots.resize('lms-plot');}catch(e){}
-        }, 50);
-    } else if(tab==='epics') {
-        fetchEpicsChannels();
-        fetchEpicsLatest();
-        fetchAllEpicsSlots();
-        setTimeout(()=>{
-            for(let i=0;i<EPICS_NUM_SLOTS;i++) try{Plotly.Plots.resize('epics-plot-'+i);}catch(e){}
-        }, 50);
-    } else if(tab==='physics') {
-        fetchPhysics();
-        setTimeout(()=>resizePhysics(),50);
-    } else if(tab==='gem') {
-        fetchGemData();
-        fetchGemAccum();
-        setTimeout(()=>resizeGem(),50);
-    } else {
-        drawGeo();
-    }
+    // --- per-tab actions: fetch data + resize after layout settles ---
+    const tabActions = {
+        dq:      { hasGeo: true },
+        cluster: { hasGeo: true,
+                   fetch(){ loadClusterData(currentEvent); },
+                   after(){ plotClHist(); plotClStatHists(); } },
+        lms:     { hasGeo: true,
+                   fetch(){ fetchLmsSummary(); } },
+        epics:   { fetch(){ fetchEpicsChannels(); fetchEpicsLatest(); fetchAllEpicsSlots(); } },
+        physics: { fetch(){ fetchPhysics(); } },
+        gem:     { fetch(){ fetchGemData(); fetchGemAccum(); },
+                   after(){ resizeGem(); } },
+    };
+    const action = tabActions[tab] || tabActions.dq;
+
+    if (action.fetch) action.fetch();
+
+    // after layout settles: resize geo (for geo tabs) + registered Plotly plots + custom after()
+    setTimeout(()=>{
+        if (action.hasGeo) resizeGeo();
+        resizePlotsForTab(tab);
+        if (action.after) action.after();
+    }, 50);
     updateStatusBar();
 }
 
@@ -1530,9 +1544,9 @@ function init(){
         paletteIdx=(paletteIdx+1)%PALETTE_NAMES.length;
         drawColorBar(); redrawGeo();
     };
-    Plotly.newPlot('waveform-div',[],{...PL,xaxis:{...PL.xaxis,title:'Sample'},yaxis:{...PL.yaxis,title:'ADC'}},PC2);
-    Plotly.newPlot('inthist-div',[],{...PL,title:{text:'Integral Histogram',font:{size:10,color:'#555'}}},PC2);
-    Plotly.newPlot('poshist-div',[],{...PL,title:{text:'Position Histogram',font:{size:10,color:'#555'}}},PC2);
+    registerPlot('waveform-div', 'dq', null);
+    registerPlot('inthist-div',  'dq', 'Integral Histogram');
+    registerPlot('poshist-div',  'dq', 'Position Histogram');
 
     // --- copy data buttons ---
     function setupCopyBtn(btnId, getData) {
@@ -1593,19 +1607,14 @@ function init(){
         drawColorBar(); redrawGeo();
     };
 
-    // cluster energy histogram
-    Plotly.newPlot('cl-energy-hist',[],{...PL,title:{text:'Cluster Energy',font:{size:10,color:'#555'}}},PC2);
+    registerPlot('cl-energy-hist',  'cluster', 'Cluster Energy');
+    registerPlot('cl-nclust-hist', 'cluster', 'Clusters per Event');
+    registerPlot('cl-nblocks-hist','cluster', 'Blocks per Cluster');
+    registerPlot('gem-ncl-hist',   'gem',     'GEM Clusters / Event');
+    registerPlot('gem-theta-hist', 'gem',     'GEM Hit Angle');
     setupCopyBtn('btn-copy-cl-hist', ()=>currentClHist);
     setupCopyBtn('btn-copy-nclust', ()=>currentNclustHist);
     setupCopyBtn('btn-copy-nblocks', ()=>currentNblocksHist);
-
-    // cluster stat histograms init
-    Plotly.newPlot('cl-nclust-hist',[],{...PL,title:{text:'Clusters per Event',font:{size:10,color:'#555'}}},PC2);
-    Plotly.newPlot('cl-nblocks-hist',[],{...PL,title:{text:'Blocks per Cluster',font:{size:10,color:'#555'}}},PC2);
-
-    // GEM histograms init + copy
-    Plotly.newPlot('gem-ncl-hist',[],{...PL,title:{text:'GEM Clusters / Event',font:{size:10,color:'#555'}}},PC2);
-    Plotly.newPlot('gem-theta-hist',[],{...PL,title:{text:'GEM Hit Angle',font:{size:10,color:'#555'}}},PC2);
     setupCopyBtn('btn-copy-gem-ncl', ()=>currentGemNclHist);
     setupCopyBtn('btn-copy-gem-theta', ()=>currentGemThetaHist);
 
@@ -1645,8 +1654,15 @@ function init(){
         ()=>0,
         80, 80, ()=>{try{Plotly.Plots.resize('cl-energy-hist');}catch(e){}});
 
-    // LMS plot init + divider
-    Plotly.newPlot('lms-plot',[],{...PL,title:{text:'LMS History',font:{size:10,color:'#555'}}},PC2);
+    registerPlot('lms-plot', 'lms', 'LMS History');
+    registerPlot('physics-plot',       'physics', null, PC_EPICS);
+    registerPlot('moller-xy-plot',     'physics', null, PC_EPICS);
+    registerPlot('moller-energy-plot', 'physics', null, PC_EPICS);
+    for(let i=0;i<EPICS_NUM_SLOTS;i++)
+        registerPlot('epics-plot-'+i, 'epics', null, PC_EPICS);
+
+    initRegisteredPlots();
+
     setupDivider('div-lms-ht','y',
         ()=>document.getElementById('lms-plot-panel'),
         ()=>document.getElementById('lms-panel'),
