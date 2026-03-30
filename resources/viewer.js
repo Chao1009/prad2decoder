@@ -178,7 +178,7 @@ function initGeo(){
         offsetX=cx-(cx-offsetX)*factor;
         offsetY=cy-(cy-offsetY)*factor;
         scale*=factor;
-        regeoDq();
+        redrawGeo();
     },{passive:false});
 
     // pan with left-click drag (with threshold to distinguish from click)
@@ -198,7 +198,7 @@ function initGeo(){
         offsetX+=e.clientX-geoDragX;
         offsetY+=e.clientY-geoDragY;
         geoDragX=e.clientX; geoDragY=e.clientY;
-        regeoDq();
+        redrawGeo();
     });
     window.addEventListener('mouseup',e=>{
         if(!geoDragging) return;
@@ -215,19 +215,19 @@ function initGeo(){
     geoCanvas.addEventListener('dblclick',e=>{
         e.preventDefault();
         if(modules.length) fitView();
-        regeoDq();
+        redrawGeo();
     });
 
     // reset view button
     document.getElementById('btn-reset-view').onclick=()=>{
         if(modules.length) fitView();
-        regeoDq();
+        redrawGeo();
     };
 }
 
 function resetGeoView(){
     if(modules.length) fitView();
-    regeoDq();
+    redrawGeo();
 }
 function resizeGeo(){
     canvasW=geoWrap.clientWidth; canvasH=geoWrap.clientHeight;
@@ -235,7 +235,7 @@ function resizeGeo(){
     geoCanvas.width=canvasW; geoCanvas.height=canvasH;
     geoOutlineCanvas.width=canvasW; geoOutlineCanvas.height=canvasH;
     if(modules.length && !geoViewInit){ fitView(); geoViewInit=true; }
-    regeoDq();
+    redrawGeo();
 }
 function fitView(){
     const m=15;let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
@@ -243,7 +243,7 @@ function fitView(){
     scale=Math.min((canvasW-2*m)/(x1-x0),(canvasH-2*m)/(y1-y0));
     offsetX=canvasW/2-(x0+x1)/2*scale; offsetY=canvasH/2+(y0+y1)/2*scale;
 }
-function regeoDq(){
+function redrawGeo(){
     if(activeTab==='cluster') geoCluster();
     else if(activeTab==='lms') geoLms();
     else geoDq();
@@ -899,8 +899,7 @@ function connectWebSocket() {
                 // throttle occupancy + cluster hist refresh to ~0.5 Hz
                 if (now - lastOccFetch > refreshHistMs) {
                     lastOccFetch = now;
-                    fetchOccupancy();
-                    fetchClHist();
+                    if(histEnabled) { fetchOccupancy(); fetchClHist(); }
                     if(activeTab==='physics') fetchPhysics();
                     if(activeTab==='gem') fetchGemAccum();
                 }
@@ -911,7 +910,7 @@ function connectWebSocket() {
                 initClHist(); plotClHist(); plotClStatHists();
                 if (selectedModule) showHistograms(selectedModule);
                 clearPhysicsFrontend();
-                regeoDq();
+                redrawGeo();
                 if(activeTab==='gem') fetchGemAccum();
             } else if (msg.type === 'lms_event') {
                 // throttle LMS refresh to ~0.5 Hz
@@ -944,7 +943,7 @@ function connectWebSocket() {
                 clearEpicsFrontend();
             } else if (msg.type === 'mode_changed') {
                 if (msg.mode && msg.mode !== mode) {
-                    // switching to a different AppState — re-fetch everything
+                    clearFrontend();
                     fetchConfigAndApply();
                 }
             }
@@ -1074,14 +1073,14 @@ function pollProgress() {
                 const hcb = document.getElementById('hist-checkbox');
                 if (hcb) hcb.checked = histEnabled;
                 document.getElementById('ev-total').textContent = `/ ${totalEvents}`;
-                updateHeaderInfo(cfg);
+    
                 updateHeaderStats();
                 if (histEnabled) { fetchOccupancy(); fetchClHist(); }
                 fetchEpicsChannels(); fetchEpicsLatest();
                 if(activeTab==='epics') fetchAllEpicsSlots();
                 if(activeTab==='physics') fetchPhysics();
                 syncDqRange();
-                regeoDq();
+                redrawGeo();
                 if (totalEvents > 0) loadEvent(1);
             });
             return;
@@ -1109,7 +1108,6 @@ function fetchOccupancy() {
     }).catch(() => {});
 }
 
-function updateHeaderInfo(cfg) {}
 
 let sampleCount=0;
 function updateHeaderStats(){
@@ -1528,7 +1526,7 @@ function init(){
     drawColorBar(); initGeo();
     document.getElementById('colorbar-canvas').onclick=()=>{
         paletteIdx=(paletteIdx+1)%PALETTE_NAMES.length;
-        drawColorBar(); regeoDq();
+        drawColorBar(); redrawGeo();
     };
     registerPlot('waveform-div', 'dq', null);
     registerPlot('inthist-div',  'dq', 'Integral Histogram');
@@ -1586,11 +1584,11 @@ function init(){
     document.getElementById('cl-log-scale').onchange=()=>{ if(activeTab==='cluster') geoCluster(); };
     document.getElementById('cl-colorbar-canvas').onclick=()=>{
         paletteIdx=(paletteIdx+1)%PALETTE_NAMES.length;
-        drawColorBar(); regeoDq();
+        drawColorBar(); redrawGeo();
     };
     document.getElementById('lms-colorbar-canvas').onclick=()=>{
         paletteIdx=(paletteIdx+1)%PALETTE_NAMES.length;
-        drawColorBar(); regeoDq();
+        drawColorBar(); redrawGeo();
     };
 
     registerPlot('cl-energy-hist',  'cluster', 'Cluster Energy');
@@ -1696,8 +1694,12 @@ function init(){
     document.getElementById('file-backdrop').onclick = closeFileDialog;
     document.getElementById('file-filter').oninput = e => renderFileList(e.target.value);
     document.addEventListener('keydown', e => {
-        if (e.key === 'Escape' && document.getElementById('file-dialog').classList.contains('open'))
-            closeFileDialog();
+        if (e.key === 'Escape') {
+            if (document.getElementById('file-dialog').classList.contains('open'))
+                closeFileDialog();
+            if (document.getElementById('et-dialog').classList.contains('open'))
+                closeEtDialog();
+        }
     });
 
     // --- range editing ---
@@ -1762,44 +1764,6 @@ function init(){
 
     // Clear All — resets all tabs' data for new run
     document.getElementById('btn-clear-all').onclick=()=>{
-        function clearFrontend(){
-            // DQ: clear occupancy + copy data + event channels
-            occData={}; occTcutData={}; occTotal=0;
-            eventChannels={};
-            currentWaveform=null;
-            currentHist={};
-            if(selectedModule) showHistograms(selectedModule);
-
-            // Clustering: clear all bins + caches + copy data + UI
-            initClHist(); plotClHist(); plotClStatHists();
-            clusterData=null; clusterEvent=-1; selectedCluster=-1;
-            currentNclustHist=null; currentNblocksHist=null;
-            document.getElementById('cl-select').innerHTML='<option value="all">All</option>';
-            document.getElementById('cl-detail-header').innerHTML=
-                '<span class="cl-info-text">Click a module or select a cluster</span>';
-            document.getElementById('cl-tbody').innerHTML='';
-
-            // LMS: clear all state + plots + table
-            lmsSummaryData=null; lmsSelectedModule=-1; currentLmsData=null;
-            Plotly.react('lms-plot',[],{...PL,title:{text:'LMS History',font:{size:10,color:'#555'}}},PC2);
-            document.getElementById('lms-detail-header').innerHTML=
-                '<span class="cl-info-text">Click a module to view LMS history</span>';
-            document.getElementById('lms-tbody').innerHTML='';
-
-            // GEM: clear histogram copy data
-            currentGemNclHist=null; currentGemThetaHist=null;
-
-            // EPICS + Physics: clear
-            clearEpicsFrontend();
-            clearPhysicsFrontend();
-
-            // Reset counters
-            sampleCount=0;
-            updateHeaderStats();
-            regeoDq();
-            document.getElementById('status-bar').textContent='All data cleared — ready for new run';
-        }
-
         // always clear server-side, then frontend
         Promise.all([
             fetch('/api/hist/clear').then(r=>r.json()),
@@ -1941,16 +1905,34 @@ function init(){
 }
 window.addEventListener('DOMContentLoaded',init);
 
-// clear frontend-only state (called before mode switch or Clear All)
-function clearFrontendState(){
+// Reset all frontend state (used by Clear All and mode switching)
+function clearFrontend(){
     occData={}; occTcutData={}; occTotal=0;
-    sampleCount=0;
+    eventChannels={}; currentWaveform=null; currentHist={};
+    if(selectedModule) showHistograms(selectedModule);
+
     initClHist(); plotClHist(); plotClStatHists();
+    clusterData=null; clusterEvent=-1; selectedCluster=-1;
+    currentNclustHist=null; currentNblocksHist=null;
+    document.getElementById('cl-select').innerHTML='<option value="all">All</option>';
+    document.getElementById('cl-detail-header').innerHTML=
+        '<span class="cl-info-text">Click a module or select a cluster</span>';
+    document.getElementById('cl-tbody').innerHTML='';
+
     lmsSummaryData=null; lmsSelectedModule=-1; currentLmsData=null;
+    Plotly.react('lms-plot',[],{...PL,title:{text:'LMS History',font:{size:10,color:'#555'}}},PC2);
+    document.getElementById('lms-detail-header').innerHTML=
+        '<span class="cl-info-text">Click a module to view LMS history</span>';
+    document.getElementById('lms-tbody').innerHTML='';
+
+    currentGemNclHist=null; currentGemThetaHist=null;
     clearEpicsFrontend();
     clearPhysicsFrontend();
+
+    sampleCount=0;
     updateHeaderStats();
-    regeoDq();
+    redrawGeo();
+    document.getElementById('status-bar').textContent='';
 }
 
 // fetch /api/config and reconfigure the UI
@@ -2055,21 +2037,18 @@ function applyConfig(data){
     document.getElementById('nav-online').style.display = mode==='online'?'flex':'none';
     document.getElementById('btn-open').style.display='';
 
-    // mode toggle button
+    // mode toggle button — visible whenever ET is available
     const toggleBtn=document.getElementById('btn-mode-toggle');
-    if(etAvailable && fileAvailable){
+    if(etAvailable){
         toggleBtn.style.display='';
         toggleBtn.textContent=mode==='online'?'View Files':'Go Online';
-    } else if(etAvailable && mode!=='online'){
-        toggleBtn.style.display='';
-        toggleBtn.textContent='Go Online';
     } else {
         toggleBtn.style.display='none';
     }
 
     if(mode==='file'){
         document.getElementById('ev-total').textContent=`/ ${totalEvents}`;
-        updateHeaderInfo(data);
+
         updateHeaderStats();
         if(histEnabled) { fetchOccupancy(); fetchClHist(); }
         fetchEpicsChannels(); fetchEpicsLatest();
