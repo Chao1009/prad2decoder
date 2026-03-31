@@ -31,8 +31,8 @@
         "trigger_word":       1,
         "time_low_word":      2,
         "time_high_word":     3,
-        "time_high_mask":     "0xFFFF0000",
-        "time_high_shift":    16,
+        "time_high_mask":     "0x0000FFFF",
+        "time_high_shift":    0,
         "trigger_type_word":  5,
         "trigger_type_shift": 0,
         "trigger_type_mask":  "0xFFFFFFFF"
