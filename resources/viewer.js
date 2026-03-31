@@ -603,22 +603,26 @@ function init(){
         ()=>document.getElementById('geo-panel'),
         ()=>document.querySelector('.main'),
         ()=>0, 300, 350, ()=>{resizeGeo();resizeAllPlots();});
-    // 2. horizontal: top-panel (histograms) ↔ bottom-panel
-    setupDivider('div-tb','y',
-        ()=>document.getElementById('top-panel'),
-        ()=>document.getElementById('detail-panel'),
-        ()=>document.getElementById('detail-header').offsetHeight,
-        120, 120, resizeAllPlots);
-    // 3. horizontal inside top-panel: inthist ↔ poshist
-    setupDivider('div-hist','y',
-        ()=>document.getElementById('inthist-div').parentElement,
-        ()=>document.getElementById('top-panel'),
-        ()=>0, 60, 60, resizeAllPlots);
-    // 4. vertical inside bottom-panel: table ↔ waveform
-    setupDivider('div-tw','x',
-        ()=>document.getElementById('table-wrap'),
-        ()=>document.getElementById('bottom-panel'),
-        ()=>0, 150, 200, resizeAllPlots);
+    // 2-4. horizontal dividers between the 4 DQ cells
+    // Each divider resizes the cell above it; offset = top of that cell relative to container
+    function dqDivider(divId, cellId, prevCellIds){
+        setupDivider(divId, 'y',
+            ()=>document.getElementById(cellId),
+            ()=>document.getElementById('detail-panel'),
+            ()=>{
+                // offset = header + all cells/dividers above this cell
+                let off=document.getElementById('detail-header').offsetHeight;
+                for(const id of prevCellIds){
+                    const el=document.getElementById(id);
+                    if(el) off+=el.offsetHeight;
+                }
+                return off;
+            },
+            60, 60, resizeAllPlots);
+    }
+    dqDivider('div-dq-1','dq-cell-inthist',[]);
+    dqDivider('div-dq-2','dq-cell-poshist',['dq-cell-inthist','div-dq-1']);
+    dqDivider('div-dq-3','dq-cell-waveform',['dq-cell-inthist','div-dq-1','dq-cell-poshist','div-dq-2']);
 
     // --- tab switching ---
     document.querySelectorAll('.tab').forEach(t=>{
