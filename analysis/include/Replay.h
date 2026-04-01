@@ -7,8 +7,7 @@
 //=============================================================================
 
 #include "EvChannel.h"
-#include "Fadc250Data.h"
-#include "SspData.h"
+#include "EventData.h"
 #include "WaveAnalyzer.h"
 #include "DaqConfig.h"
 #include "load_daq_config.h"
@@ -20,6 +19,10 @@
 #include <unordered_map>
 
 namespace analysis {
+
+// Aliases for the shared replay data structures
+using EventVars       = prad2::RawEventData;
+using EventVars_Recon = prad2::ReconEventData;
 
 class Replay
 {
@@ -43,63 +46,6 @@ public:
                             bool prad1 = false);
 
 private:
-    // per-event data (sized to worst case, reused)
-    static constexpr int kMaxCh = fdec::MAX_ROCS * fdec::MAX_SLOTS * 16;
-    static constexpr int GEMkMaxCH = ssp::MAX_MPDS * ssp::MAX_APVS_PER_MPD * ssp::APV_STRIP_SIZE;
-    static constexpr int kMaxCl = 100;
-    static constexpr int kMaxGEMHits = 400;
-
-    struct EventVars {
-        int     event_num = 0;
-        uint32_t trigger = 0;
-        Long64_t timestamp = 0;
-        int     nch = 0;
-        uint8_t crate[kMaxCh] = {};
-        uint8_t slot[kMaxCh] = {};
-        uint8_t channel[kMaxCh] = {};
-        int     module_id[kMaxCh] = {};
-        uint8_t nsamples[kMaxCh] = {};
-        int     samples[kMaxCh][fdec::MAX_SAMPLES] = {};
-        float   ped_mean[kMaxCh] = {};
-        float   ped_rms[kMaxCh] = {};
-        float   integral[kMaxCh] = {};
-        uint8_t npeaks[kMaxCh] = {};
-        float   peak_height[kMaxCh][fdec::MAX_PEAKS] = {};
-        float   peak_time[kMaxCh][fdec::MAX_PEAKS] = {};
-        float   peak_integral[kMaxCh][fdec::MAX_PEAKS] = {};
-        // GEM part
-        int     gem_nch = 0;
-        uint8_t mpd_crate[GEMkMaxCH] = {};
-        uint8_t mpd_fiber[GEMkMaxCH] = {};
-        uint8_t apv[GEMkMaxCH] = {};
-        uint8_t strip[GEMkMaxCH] = {};
-        float   ssp_samples[GEMkMaxCH][ssp::SSP_TIME_SAMPLES] = {};
-    };
-
-    struct EventVars_Recon {
-        int event_num = 0;
-        uint32_t trigger_bits = 0;
-        Long64_t timestamp = 0;
-        int n_clusters = 0;
-        float cl_x[kMaxCl];
-        float cl_y[kMaxCl];
-        float cl_energy[kMaxCl];
-        int cl_nblocks[kMaxCl];
-        int cl_center[kMaxCl];
-        // GEM part
-        int n_gem_hits = 0;
-        uint8_t det_id[kMaxGEMHits];
-        float gem_x[kMaxGEMHits];
-        float gem_y[kMaxGEMHits];
-        float gem_x_charge[kMaxGEMHits];
-        float gem_y_charge[kMaxGEMHits];
-        float gem_x_peak[kMaxGEMHits];
-        float gem_y_peak[kMaxGEMHits];
-        int gem_x_size[kMaxGEMHits];
-        int gem_y_size[kMaxGEMHits];
-
-    };
-
     void setupBranches(TTree *tree, EventVars &ev, bool write_peaks);
     void clearEvent(EventVars &ev);
 

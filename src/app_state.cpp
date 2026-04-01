@@ -1,4 +1,5 @@
 #include "app_state.h"
+#include "data_source.h"
 #include "load_daq_config.h"
 
 #include <fstream>
@@ -857,6 +858,84 @@ void AppState::processEvent(fdec::EventData &event,
 
     events_processed++;
     if (do_lms) lms_events++;
+}
+
+void AppState::processReconEvent(const ReconEventData &recon)
+{
+    bool do_cluster = (cluster_trigger_mask == 0) ||
+                      (recon.trigger_bits & cluster_trigger_mask);
+    bool do_physics = (physics_trigger_mask == 0) ||
+                      (recon.trigger_bits & physics_trigger_mask);
+
+    std::lock_guard<std::mutex> lk(data_mtx);
+    events_processed++;
+
+    if (do_cluster && !recon.clusters.empty()) {
+        for (auto &cl : recon.clusters) {
+            cluster_energy_hist.fill(cl.energy, cl_hist_min, cl_hist_step);
+            nblocks_hist.fill(cl.nblocks, nblocks_hist_min, nblocks_hist_step);
+        }
+        nclusters_hist.fill(recon.clusters.size(), nclusters_hist_min, nclusters_hist_step);
+        cluster_events_processed++;
+    }
+
+    if (do_physics && !recon.clusters.empty()) {
+        struct CI { float lx, ly, lz, theta; };
+        std::vector<CI> cinfo(recon.clusters.size());
+        for (size_t i = 0; i < recon.clusters.size(); ++i) {
+            auto &cl = recon.clusters[i];
+            auto &ci = cinfo[i];
+            hycal_transform.toLab(cl.x, cl.y, ci.lx, ci.ly, ci.lz);
+            float dx = ci.lx - target_x, dy = ci.ly - target_y, dz = ci.lz - target_z;
+            float r = std::sqrt(dx*dx + dy*dy);
+            ci.theta = std::atan2(r, dz) * (180.f / 3.14159265f);
+        }
+        for (size_t i = 0; i < recon.clusters.size(); ++i)
+            energy_angle_hist.fill(cinfo[i].theta, recon.clusters[i].energy,
+                ea_angle_min, ea_angle_step, ea_energy_min, ea_energy_step);
+
+        if (recon.clusters.size() == 2 && beam_energy > 0) {
+            float esum = recon.clusters[0].energy + recon.clusters[1].energy;
+            bool energy_ok = std::abs(esum - beam_energy) < moller_energy_tol * beam_energy;
+            bool angle_ok = false;
+            for (int j = 0; j < 2; ++j)
+                if (cinfo[j].theta >= moller_angle_min && cinfo[j].theta <= moller_angle_max)
+                    angle_ok = true;
+            if (energy_ok && angle_ok) {
+                moller_events++;
+                for (int j = 0; j < 2; ++j) {
+                    moller_xy_hist.fill(cinfo[j].lx, cinfo[j].ly,
+                        moller_xy_x_min, moller_xy_x_step, moller_xy_y_min, moller_xy_y_step);
+                    moller_energy_hist.fill(recon.clusters[j].energy, moller_e_min, moller_e_step);
+                }
+            }
+        }
+    }
+}
+
+json AppState::encodeReconClustersJson(const ReconEventData &recon, int ev_id)
+{
+    json hits_j = json::object();
+    json cl_arr = json::array();
+
+    for (size_t i = 0; i < recon.clusters.size(); ++i) {
+        auto &cl = recon.clusters[i];
+        std::string center_name;
+        if (cl.center_id >= 0 && cl.center_id < hycal.module_count())
+            center_name = hycal.module(cl.center_id).name;
+        hits_j[std::to_string(cl.center_id)] =
+            std::round(cl.energy * 100) / 100;
+        cl_arr.push_back({
+            {"id", (int)i}, {"center", center_name},
+            {"center_id", cl.center_id},
+            {"x", std::round(cl.x * 10) / 10},
+            {"y", std::round(cl.y * 10) / 10},
+            {"energy", std::round(cl.energy * 10) / 10},
+            {"nblocks", cl.nblocks}, {"npos", 0},
+            {"modules", json::array({cl.center_id})},
+        });
+    }
+    return {{"event", ev_id}, {"hits", hits_j}, {"clusters", cl_arr}};
 }
 
 void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)

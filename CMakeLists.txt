@@ -105,11 +105,27 @@ target_compile_definitions(ts_dump PRIVATE DATABASE_DIR="${DATABASE_DIR}")
 set_target_properties(ts_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ---------------------------------------------------------------------------
+# ROOT viewer support (optional, for viewing ROOT replay files)
+# ---------------------------------------------------------------------------
+option(WITH_ROOT "Enable ROOT file viewing support" OFF)
+if(WITH_ROOT)
+    find_package(ROOT 6.0 REQUIRED CONFIG COMPONENTS Core Tree RIO)
+    include(${ROOT_USE_FILE})
+    message(STATUS "ROOT viewer: ${ROOT_VERSION}")
+endif()
+
+# ---------------------------------------------------------------------------
 # Server library (shared between prad2_server and prad2evviewer)
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)
 
-add_library(prad2srv STATIC src/viewer_server.cpp src/app_state.cpp)
+set(SRV_SOURCES src/viewer_server.cpp src/app_state.cpp
+    src/data_source.cpp src/evio_data_source.cpp)
+if(WITH_ROOT)
+    list(APPEND SRV_SOURCES src/root_data_source.cpp)
+endif()
+
+add_library(prad2srv STATIC ${SRV_SOURCES})
 target_include_directories(prad2srv PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(prad2srv PUBLIC
     prad2dec
@@ -120,6 +136,10 @@ target_link_libraries(prad2srv PUBLIC
 )
 if(WITH_ET)
     target_compile_definitions(prad2srv PUBLIC WITH_ET)
+endif()
+if(WITH_ROOT)
+    target_compile_definitions(prad2srv PUBLIC WITH_ROOT)
+    target_link_libraries(prad2srv PUBLIC ROOT::Core ROOT::Tree ROOT::RIO)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -210,6 +230,7 @@ message(STATUS "  Build type   : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Database     : ${DATABASE_DIR}")
 message(STATUS "  Resources    : ${RESOURCE_DIR}")
 message(STATUS "  ET support   : ${WITH_ET}")
+message(STATUS "  ROOT viewer  : ${WITH_ROOT}")
 message(STATUS "  Analysis     : ${BUILD_ANALYSIS}")
 message(STATUS "  Qt GUI       : ${BUILD_GUI}")
 message(STATUS "----------------------------------------------------")

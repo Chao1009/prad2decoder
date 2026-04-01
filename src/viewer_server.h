@@ -6,7 +6,7 @@
 // Mode switching between "idle", "file", and "online" via API or user actions.
 // =========================================================================
 
-#include "EvChannel.h"
+#include "data_source.h"
 #include "app_state.h"
 
 #include <nlohmann/json.hpp>
@@ -25,11 +25,10 @@
 
 // ── Shared types ─────────────────────────────────────────────────────────
 
-struct EventIndex { int buffer_num, sub_event; };
-
 struct FileData {
     std::string filepath;
-    std::vector<EventIndex> index;
+    int event_count = 0;
+    DataSourceCaps caps;
 };
 
 struct Progress {
@@ -124,23 +123,16 @@ private:
     std::shared_ptr<FileData> file_data_;
     std::mutex file_data_mtx_;
 
-    struct CachedReader {
-        evc::EvChannel ch;
-        std::string filepath;
-        int current_buf = 0;
-        std::mutex mtx;
-        std::string seekTo(const std::string &path, int buf_num,
-                           const evc::DaqConfig &cfg);
-        void invalidate();
-    } reader_;
+    std::unique_ptr<DataSource> data_source_;
+    std::mutex data_source_mtx_;
+    std::unordered_map<int, uint32_t> crate_to_roc_;  // for ROOT data sources
 
     mutable Progress progress_;
     std::atomic<bool> hist_enabled_{false};
     std::thread load_thread_;
     std::mutex load_mtx_;
 
-    void buildIndex(const std::string &path, std::vector<EventIndex> &index);
-    void buildHistograms(const std::string &path);
+    void buildHistograms();
     void loadFileInternal(const std::string &filepath);
 
     std::string decodeRawEvent(int ev1, fdec::EventData &event,

@@ -216,7 +216,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                     for (int c = 0; c < 16; ++c) {
                         if (!(roc.slots[s].channel_mask & (1ull << c))) continue;
                         auto &cd = roc.slots[s].channels[c];
-                        if (cd.nsamples <= 0 || nch >= kMaxCh) continue;
+                        if (cd.nsamples <= 0 || nch >= prad2::kMaxChannels) continue;
 
                         ev->crate[nch]   = crate;
                         ev->slot[nch]    = s;
@@ -256,7 +256,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                     int idx = -1; // find APV index in GemSystem if needed
                     for (int s = 0; s < ssp::APV_STRIP_SIZE; ++s) {
                         if (!apv.hasStrip(s)) continue;
-                        if (gem_ch >= GEMkMaxCH) continue;
+                        if (gem_ch >= prad2::kMaxGemStrips) continue;
                         
                         ev->mpd_crate[gem_ch] = mpd.crate_id;
                         ev->mpd_fiber[gem_ch] = mpd.mpd_id;
@@ -432,7 +432,7 @@ if(!prad1){
             std::vector<fdec::ClusterHit> hits;
             clusterer.ReconstructHits(hits);
             //HyCal event reconstrued, fill root tree and histograms
-            ev->n_clusters = std::min((int)hits.size(), kMaxCl);
+            ev->n_clusters = std::min((int)hits.size(), prad2::kMaxClusters);
             for (int i = 0; i < ev->n_clusters; ++i) {
                 ev->cl_x[i]       = hits[i].x;
                 ev->cl_y[i]       = hits[i].y;
@@ -454,8 +454,8 @@ if(!prad1){
                 std::cerr << "Warning: GEM system not initialized, skipping GEM reconstruction\n";
             }
             auto &all_hits = gem_sys->GetAllHits();
-            ev->n_gem_hits = all_hits.size();
-            for (int i = 0; i < ev->n_gem_hits && i < kMaxCl; i++) {
+            ev->n_gem_hits = std::min((int)all_hits.size(), prad2::kMaxGemHits);
+            for (int i = 0; i < ev->n_gem_hits; i++) {
                 auto &h = all_hits[i];
                 ev->det_id[i] = h.det_id;
                 ev->gem_x[i] = h.x;

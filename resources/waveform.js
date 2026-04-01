@@ -13,6 +13,14 @@ let wfRequestId = 0;  // sequence guard for async waveform fetches
 // =========================================================================
 function showWaveform(mod){
     selectedModule=mod;
+
+    // no waveform data available for this source type
+    if(!sourceCaps.has_waveforms){
+        document.getElementById('detail-header').innerHTML=
+            `<span class="mod-name">${mod.n}</span> <span class="mod-daq">No waveform data for this file type</span>`;
+        showHistograms(mod); redrawGeo(); return;
+    }
+
     const key=`${mod.roc}_${mod.sl}_${mod.ch}`;
     const d=eventChannels[key];
     const pedInfo=d?` &nbsp; Ped: ${d.pm.toFixed(1)} ± ${d.pr.toFixed(1)}`:'';

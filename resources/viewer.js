@@ -13,6 +13,7 @@ function crateName(r){return CRATE_NAME[r]||`ROC 0x${r.toString(16)}`;}
 let histEnabled=false, histConfig={};
 let mode='idle';    // 'idle', 'file', or 'online'
 let etAvailable=false, fileAvailable=false;
+let sourceCaps={type:'',has_waveforms:true,has_peaks:true,has_clusters:true,has_epics:true};
 let ws=null;        // WebSocket connection (always connected)
 let autoFollow=true; // auto-load latest event
 let lastEventFetch=0, lastHistFetch=0, lastRingFetch=0, lastOccFetch=0, lastLmsFetch=0;
@@ -1075,6 +1076,7 @@ function applyConfig(data){
     etAvailable=data.et_available||false;
     if(data.et_config) window._etConfig=data.et_config;
     fileAvailable=data.file_available||false;
+    if(data.source) sourceCaps=data.source;
     const appTitle=mode==='online'?'PRad-II HyCal Monitor':'PRad-II HyCal Event Viewer';
     document.title=appTitle;
     document.getElementById('app-title').textContent=appTitle;
@@ -1098,6 +1100,18 @@ function applyConfig(data){
         toggleBtn.textContent=mode==='online'?'View Files':'Go Online';
     } else {
         toggleBtn.style.display='none';
+    }
+
+    // hide tabs based on data source capabilities
+    document.querySelectorAll('.tab').forEach(t=>{
+        const tab=t.dataset.tab;
+        if(tab==='lms')    t.style.display=sourceCaps.has_waveforms?'':'none';
+        if(tab==='epics')  t.style.display=sourceCaps.has_epics?'':'none';
+    });
+
+    // auto-switch to cluster tab if source has no waveform data
+    if(!sourceCaps.has_waveforms && activeTab==='dq'){
+        switchTab('cluster');
     }
 
     if(mode==='file'){

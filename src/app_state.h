@@ -7,6 +7,9 @@
 // separate accumulators but identical configuration.
 //=============================================================================
 
+// forward declaration (full definition in data_source.h)
+struct ReconEventData;
+
 #include "HyCalSystem.h"
 #include "HyCalCluster.h"
 #include "EpicsStore.h"
@@ -184,6 +187,10 @@ struct AppState {
     void processEvent(fdec::EventData &event,
                       fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
 
+    // Process a pre-computed recon event (from ROOT recon files).
+    // Fills cluster/physics histograms from pre-computed clusters.
+    void processReconEvent(const struct ReconEventData &recon);
+
     // Encode one decoded event as JSON.
     // include_samples=false: summaries only (peaks + pedestal, ~20KB).
     // include_samples=true:  full waveforms included (~800KB, used for ring buffer).
@@ -198,6 +205,9 @@ struct AppState {
     // Compute clusters for one decoded event, return JSON response.
     nlohmann::json computeClustersJson(fdec::EventData &event, int ev_id,
                                        fdec::WaveAnalyzer &ana, fdec::WaveResult &wres);
+
+    // Encode pre-computed recon clusters (from ROOT recon files) as JSON.
+    nlohmann::json encodeReconClustersJson(const struct ReconEventData &recon, int ev_id);
 
     // Record a sync event's absolute time. Call when a Sync event is scanned.
     // last_ti_ts is the TI timestamp of the most recent physics event.

@@ -44,37 +44,6 @@ void Progress::setFile(const std::string &f)
     target_file = f;
 }
 
-// =========================================================================
-// CachedReader
-// =========================================================================
-
-std::string ViewerServer::CachedReader::seekTo(
-    const std::string &path, int buf_num, const DaqConfig &cfg)
-{
-    if (path != filepath || buf_num < current_buf) {
-        ch.Close();
-        ch.SetConfig(cfg);
-        if (ch.Open(path) != status::success) {
-            filepath.clear(); current_buf = 0;
-            return "cannot open file";
-        }
-        filepath = path;
-        current_buf = 0;
-    }
-    while (current_buf < buf_num) {
-        if (ch.Read() != status::success) {
-            ch.Close(); filepath.clear(); current_buf = 0;
-            return "read error";
-        }
-        current_buf++;
-    }
-    return "";
-}
-
-void ViewerServer::CachedReader::invalidate()
-{
-    ch.Close(); filepath.clear(); current_buf = 0;
-}
 
 // =========================================================================
 // ViewerServer — lifecycle
@@ -151,6 +120,10 @@ void ViewerServer::init(const Config &cfg)
     };
     app_file_.base_config = std::move(base_cfg);
     app_online_.base_config = app_file_.base_config;
+
+    // --- build crate→ROC tag map for ROOT data sources ---
+    for (auto &[k, v] : app_file_.crate_roc_json.items())
+        crate_to_roc_[std::stoi(k)] = v.get<uint32_t>();
 
     // --- validate resources ---
     if (readFile(res_dir_ + "/viewer.html").empty())
@@ -230,10 +203,11 @@ void ViewerServer::run()
 #endif
     }
 
-    auto data = file_data_;
+    std::shared_ptr<FileData> data;
+    { std::lock_guard<std::mutex> lk(file_data_mtx_); data = file_data_; }
     std::cout << "Server at http://localhost:" << port_ << "\n"
               << "  Mode: " << mode() << "\n"
-              << "  " << (data ? data->index.size() : 0) << " events"
+              << "  " << (data ? data->event_count : 0) << " events"
               << (hist_enabled_ ? ", histograms enabled" : "")
               << (!cfg_.data_dir.empty() ? ", file browser enabled" : "")
               << "\n  Ctrl+C to stop\n";
@@ -364,88 +338,82 @@ void ViewerServer::loadFileInternal(const std::string &filepath)
     data->filepath = filepath;
 
     std::cerr << "Loading: " << filepath << "\n";
-    buildIndex(filepath, data->index);
-    std::cerr << "  Indexed " << data->index.size() << " events\n";
+
+    // create and open the appropriate data source
+    progress_.phase = 1;
+    auto source = createDataSource(filepath, app_file_.daq_cfg, crate_to_roc_);
+    if (!source) {
+        std::cerr << "  Error: unsupported file type\n";
+        progress_.loading = false; return;
+    }
+    std::string err = source->open(filepath);
+    if (!err.empty()) {
+        std::cerr << "  Error: " << err << "\n";
+        progress_.loading = false; return;
+    }
+
+    data->event_count = source->eventCount();
+    data->caps = source->capabilities();
+    std::cerr << "  Indexed " << data->event_count << " events"
+              << " (source: " << data->caps.source_type << ")\n";
+
+    // install the new data source before building histograms
+    // (buildHistograms reads data_source_; loadFileInternal runs on the load
+    // thread, and HTTP threads acquire data_source_mtx_ for random access)
+    { std::lock_guard<std::mutex> lk(data_source_mtx_); data_source_ = std::move(source); }
 
     if (hist_enabled_) {
-        progress_.total = (int)data->index.size();
-        buildHistograms(filepath);
-        std::cerr << "  Histograms: " << app_file_.events_processed.load() << " events"
-                  << ", clusters: " << app_file_.cluster_events_processed
-                  << ", LMS: " << app_file_.lms_events.load() << "\n";
+        progress_.total = data->event_count;
+        buildHistograms();
     }
 
     { std::lock_guard<std::mutex> lk(file_data_mtx_); file_data_ = data; }
-    { std::lock_guard<std::mutex> lk(reader_.mtx); reader_.invalidate(); }
 
     progress_.loading = false;
     progress_.phase = 0;
     std::cerr << "  Ready\n";
 }
 
-void ViewerServer::buildIndex(const std::string &path,
-                              std::vector<EventIndex> &index)
-{
-    index.clear();
-    EvChannel ch;
-    ch.SetConfig(app_file_.daq_cfg);
-    if (ch.Open(path) != status::success) return;
-    progress_.phase = 1; progress_.current = 0;
-    int buf = 0;
-    while (ch.Read() == status::success) {
-        ++buf; progress_.current = buf;
-        if (!ch.Scan()) continue;
-        for (int i = 0; i < ch.GetNEvents(); ++i)
-            index.push_back({buf, i});
-    }
-    ch.Close();
-    progress_.total = (int)index.size();
-}
-
-void ViewerServer::buildHistograms(const std::string &path)
+void ViewerServer::buildHistograms()
 {
     app_file_.clearHistograms();
     app_file_.clearLms();
     app_file_.clearEpics();
 
-    EvChannel ch;
-    ch.SetConfig(app_file_.daq_cfg);
-    if (ch.Open(path) != status::success) return;
+    if (!data_source_) return;
 
-    auto event_ptr = std::make_unique<fdec::EventData>();
-    auto &event = *event_ptr;
-    auto ssp_ptr = std::make_unique<ssp::SspEventData>();
-    auto &ssp_evt = *ssp_ptr;
     fdec::WaveAnalyzer ana;
     ana.cfg.min_peak_ratio = app_file_.hist_cfg.min_peak_ratio;
     fdec::WaveResult wres;
 
     progress_.phase = 2; progress_.current = 0;
-    int buf = 0;
-    uint64_t last_ti_ts = 0;
-    while (ch.Read() == status::success) {
-        ++buf;
-        if (!ch.Scan()) continue;
-        if (app_file_.sync_unix == 0) {
-            uint32_t ct = ch.GetControlTime();
-            if (ct != 0) app_file_.recordSyncTime(ct, last_ti_ts);
-        }
-        if (ch.GetEventType() == EventType::Epics) {
-            std::string text = ch.ExtractEpicsText();
-            if (!text.empty())
-                app_file_.processEpics(text, app_file_.events_processed.load(), last_ti_ts);
-        }
-        for (int i = 0; i < ch.GetNEvents(); ++i) {
-            ssp_evt.clear();
-            if (!ch.DecodeEvent(i, event, &ssp_evt)) continue;
-            progress_.current = app_file_.events_processed.load() + 1;
-            last_ti_ts = event.info.timestamp;
 
+    data_source_->iterateAll(
+        // physics events (EVIO / ROOT raw)
+        [&](int idx, fdec::EventData &event, ssp::SspEventData *ssp) {
+            progress_.current = app_file_.events_processed.load() + 1;
             app_file_.processEvent(event, ana, wres);
-            app_file_.processGemEvent(ssp_evt);
+            if (ssp) app_file_.processGemEvent(*ssp);
+        },
+        // recon events (ROOT recon)
+        [&](int idx, const ReconEventData &recon) {
+            progress_.current = app_file_.events_processed.load() + 1;
+            app_file_.processReconEvent(recon);
+        },
+        // control events (sync/prestart/go)
+        [&](uint32_t unix_time, uint64_t last_ti_ts) {
+            if (app_file_.sync_unix == 0)
+                app_file_.recordSyncTime(unix_time, last_ti_ts);
+        },
+        // EPICS events
+        [&](const std::string &text, int32_t ev_num, uint64_t ts) {
+            app_file_.processEpics(text, app_file_.events_processed.load(), ts);
         }
-    }
-    ch.Close();
+    );
+
+    std::cerr << "  Histograms: " << app_file_.events_processed.load() << " events"
+              << ", clusters: " << app_file_.cluster_events_processed
+              << ", LMS: " << app_file_.lms_events.load() << "\n";
 }
 
 // =========================================================================
@@ -459,20 +427,29 @@ std::string ViewerServer::decodeRawEvent(int ev1, fdec::EventData &event,
     { std::lock_guard<std::mutex> lk(file_data_mtx_); data = file_data_; }
     if (!data) return "no file loaded";
     int idx = ev1 - 1;
-    if (idx < 0 || idx >= (int)data->index.size()) return "event out of range";
+    if (idx < 0 || idx >= data->event_count) return "event out of range";
 
-    auto &ei = data->index[idx];
-    std::lock_guard<std::mutex> lk(reader_.mtx);
-    std::string err = reader_.seekTo(data->filepath, ei.buffer_num, app_file_.daq_cfg);
-    if (!err.empty()) return err;
-    if (!reader_.ch.Scan()) return "scan error";
-    if (ssp_evt) ssp_evt->clear();
-    if (!reader_.ch.DecodeEvent(ei.sub_event, event, ssp_evt)) return "decode error";
-    return "";
+    std::lock_guard<std::mutex> lk(data_source_mtx_);
+    if (!data_source_) return "no data source";
+    return data_source_->decodeEvent(idx, event, ssp_evt);
 }
 
 json ViewerServer::decodeEvent(int ev1)
 {
+    // check if this is a recon source (no per-channel data)
+    std::shared_ptr<FileData> data;
+    { std::lock_guard<std::mutex> lk(file_data_mtx_); data = file_data_; }
+    if (data && data->caps.source_type == "root_recon") {
+        // return minimal event info + empty channels
+        ReconEventData recon;
+        { std::lock_guard<std::mutex> lk(data_source_mtx_);
+          if (!data_source_ || !data_source_->decodeReconEvent(ev1 - 1, recon))
+              return {{"error", "decode error"}}; }
+        return {{"event", ev1}, {"channels", json::object()},
+                {"event_number", recon.event_num},
+                {"trigger_bits", recon.trigger_bits}};
+    }
+
     auto event_ptr = std::make_unique<fdec::EventData>();
     auto &event = *event_ptr;
     auto ssp_ptr = std::make_unique<ssp::SspEventData>();
@@ -489,6 +466,17 @@ json ViewerServer::decodeEvent(int ev1)
 
 json ViewerServer::computeClusters(int ev1)
 {
+    // recon source: return pre-computed clusters
+    std::shared_ptr<FileData> data;
+    { std::lock_guard<std::mutex> lk(file_data_mtx_); data = file_data_; }
+    if (data && data->caps.source_type == "root_recon") {
+        ReconEventData recon;
+        { std::lock_guard<std::mutex> lk(data_source_mtx_);
+          if (!data_source_ || !data_source_->decodeReconEvent(ev1 - 1, recon))
+              return {{"error", "decode error"}}; }
+        return app_file_.encodeReconClustersJson(recon, ev1);
+    }
+
     auto event_ptr = std::make_unique<fdec::EventData>();
     auto &event = *event_ptr;
     auto ssp_ptr = std::make_unique<ssp::SspEventData>();
@@ -700,7 +688,8 @@ json ViewerServer::listFiles()
         for (auto &entry : fs::recursive_directory_iterator(
                  root, fs::directory_options::skip_permission_denied)) {
             if (!entry.is_regular_file()) continue;
-            if (entry.path().filename().string().find(".evio") == std::string::npos)
+            auto fn = entry.path().filename().string();
+            if (fn.find(".evio") == std::string::npos && fn.find(".root") == std::string::npos)
                 continue;
             auto rel = fs::relative(entry.path(), root).string();
             auto sz = entry.file_size();
@@ -752,11 +741,26 @@ json ViewerServer::buildConfig()
     cfg["et_config"] = json::object();
 #endif
     cfg["file_available"] = !cfg_.data_dir.empty() || (data != nullptr);
-    cfg["total_events"] = data ? (int)data->index.size() : 0;
+    cfg["total_events"] = data ? data->event_count : 0;
     cfg["current_file"] = data ? data->filepath : "";
     cfg["data_dir_enabled"] = !cfg_.data_dir.empty();
     cfg["data_dir"] = cfg_.data_dir;
     cfg["hist_enabled"] = (mode_.load() == Mode::Online) ? true : hist_enabled_.load();
+
+    // data source capabilities
+    DataSourceCaps caps = data ? data->caps : DataSourceCaps{};
+    cfg["source"] = {
+        {"type", caps.source_type},
+        {"has_waveforms", caps.has_waveforms},
+        {"has_peaks", caps.has_peaks},
+        {"has_pedestals", caps.has_pedestals},
+        {"has_clusters", caps.has_clusters},
+        {"has_gem_raw", caps.has_gem_raw},
+        {"has_gem_hits", caps.has_gem_hits},
+        {"has_epics", caps.has_epics},
+        {"has_sync", caps.has_sync},
+    };
+
     app.fillConfigJson(cfg);
     return cfg;
 }
