@@ -1689,7 +1689,7 @@ class SnakeScanGUI:
             px, py = module_to_ptrans(mod.x, mod.y)
             err = math.sqrt((rx - px)**2 + (ry - py)**2)
             self._lbl_expected.configure(
-                text=f"Expected: {mod.name} ({px:.3f}, {py:.3f})")
+                text=f"Expected: ({px:.3f}, {py:.3f}) {mod.name}")
             if scanning:
                 err_fg = C.RED if err > eng.pos_threshold else C.GREEN
                 self._lbl_error.configure(
