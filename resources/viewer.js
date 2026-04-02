@@ -429,9 +429,10 @@ function pollProgress() {
         }
         const pct = data.total > 0 ? Math.round(100 * data.current / data.total) : 0;
         const phaseText = data.phase === 'indexing' ? 'Indexing events' : 'Building histograms';
-        document.getElementById('progress-bar').style.width = `${Math.min(pct, 100)}%`;
-        document.getElementById('progress-text').textContent =
-            `${phaseText}... ${data.current}` + (data.total > 0 ? ` / ${data.total}` : '');
+        document.getElementById('progress-bar').style.width = data.total > 0 ? `${Math.min(pct, 100)}%` : '100%';
+        document.getElementById('progress-text').textContent = data.total > 0
+            ? `${phaseText}... ${data.current} / ${data.total}`
+            : `${phaseText}...`;
         setTimeout(pollProgress, 300);
     }).catch(() => setTimeout(pollProgress, 1000));
 }
