@@ -25,11 +25,16 @@ std::string EvioDataSource::open(const std::string &path)
         return "cannot open file";
 
     int buf = 0;
+    fdec::EventInfo info;
     while (ch.Read() == status::success) {
         ++buf;
         if (!ch.Scan()) continue;
-        for (int i = 0; i < ch.GetNEvents(); ++i)
+        for (int i = 0; i < ch.GetNEvents(); ++i) {
             index_.push_back({buf, i});
+            info.clear();
+            ch.GetEventInfo(i, info);
+            event_numbers_.push_back(info.event_number);
+        }
     }
     ch.Close();
     return "";
@@ -38,6 +43,7 @@ std::string EvioDataSource::open(const std::string &path)
 void EvioDataSource::close()
 {
     index_.clear();
+    event_numbers_.clear();
     invalidateReader();
     filepath_.clear();
 }

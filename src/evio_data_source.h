@@ -23,6 +23,8 @@ public:
     std::string decodeEvent(int index, fdec::EventData &evt,
                              ssp::SspEventData *ssp = nullptr) override;
 
+    const std::vector<int32_t> &eventNumbers() const override { return event_numbers_; }
+
     void iterateAll(EventCallback ev_cb, ReconCallback recon_cb,
                     ControlCallback ctrl_cb, EpicsCallback epics_cb) override;
 
@@ -32,6 +34,7 @@ private:
 
     struct EvioIndex { int buffer_num, sub_event; };
     std::vector<EvioIndex> index_;
+    std::vector<int32_t> event_numbers_;  // parallel to index_: DAQ event number per event
 
     // cached sequential reader for random access
     evc::EvChannel reader_;
