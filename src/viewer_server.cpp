@@ -386,6 +386,11 @@ void ViewerServer::loadFileInternal(const std::string &filepath)
     // thread, and HTTP threads acquire data_source_mtx_ for random access)
     { std::lock_guard<std::mutex> lk(data_source_mtx_); data_source_ = std::move(source); }
 
+    // always reset accumulators when opening a new file
+    app_file_.clearHistograms();
+    app_file_.clearLms();
+    app_file_.clearEpics();
+
     if (hist_enabled_) {
         progress_.total = data->event_count;
         buildHistograms();

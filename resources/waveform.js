@@ -159,11 +159,6 @@ function renderWaveform(mod, key, d, samples){
 // Histograms
 // =========================================================================
 function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, logXId, logYId){
-    if(!histEnabled){
-        currentHist[divId]=null;
-        Plotly.react(divId,[],{...PL,title:{text:'--hist not enabled',font:{size:10,color:'#444'}}},PC2);
-        return;
-    }
     fetch(url).then(r=>r.json()).then(data=>{
         if(data.error||!data.bins||!data.bins.length){
             currentHist[divId]=null;
