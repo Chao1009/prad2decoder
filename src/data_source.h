@@ -71,13 +71,6 @@ public:
     // Total number of physics events (available after open).
     virtual int eventCount() const = 0;
 
-    // Ordered list of DAQ event numbers (index i → event_number for event i).
-    // Empty if the source does not support event number indexing.
-    virtual const std::vector<int32_t> &eventNumbers() const {
-        static const std::vector<int32_t> empty;
-        return empty;
-    }
-
     // Decode event by 0-based index into EventData.
     // For recon sources, fills only EventInfo fields (nrocs=0).
     // Returns empty string on success, error message on failure.

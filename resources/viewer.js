@@ -4,7 +4,6 @@
 // =========================================================================
 let modules=[], totalEvents=0, currentEvent=1;
 let currentEventNumber=0, currentTriggerBits=0;  // DAQ event number + trigger from last loaded event
-let hasEventNumbers=false;  // true when file has DAQ event number indexing
 let eventChannels={};
 let selectedModule=null, hoveredModule=null;
 const PC=['#00b4d8','#ff6b6b','#51cf66','#ffd43b','#cc5de8','#ff922b','#20c997','#f06595'];
@@ -129,10 +128,8 @@ function geoHandleClick(cx,cy){
 // =========================================================================
 let eventRequestId = 0;  // increments on each fetch, stale responses ignored
 
-// Build sample label: "Evt. 99" (file mode with event numbers) or "Sample 100 (Evt. 99)"
+// Build sample label: "Sample 100 (Evt. 99)"
 function sampleLabel(){
-    if(mode==='file' && hasEventNumbers && currentEventNumber)
-        return `Evt. ${currentEventNumber}`;
     const evn=currentEventNumber?` (Evt. ${currentEventNumber})`:'';
     return `Sample ${currentEvent}${evn}`;
 }
@@ -170,11 +167,6 @@ function loadEventData(reqId, data) {
     currentTriggerBits = data.trigger_bits || 0;
     eventChannels = data.channels || {};
     if(mode==='online') sampleCount++;
-    // show event number in nav input when available
-    if(mode==='file') {
-        document.getElementById('ev-input').value =
-            hasEventNumbers && currentEventNumber ? currentEventNumber : currentEvent;
-    }
     updateStatusBar();
     updateHeaderStats();
     if(activeTab==='cluster'){
@@ -199,16 +191,9 @@ function loadEventData(reqId, data) {
 function loadEvent(evnum) {
     currentEvent = evnum;
     const reqId = ++eventRequestId;
-    document.getElementById('status-bar').textContent = `Loading event ${evnum}...`;
+    if (mode === 'file') document.getElementById('ev-input').value = evnum;
+    document.getElementById('status-bar').textContent = `Loading sample ${evnum}...`;
     fetch(`/api/event/${evnum}`).then(r => r.json()).then(d => loadEventData(reqId, d))
-        .catch(err => { document.getElementById('status-bar').textContent = `Error: ${err}`; });
-}
-
-// Load event by DAQ event number (file mode with event number index)
-function loadEventByNumber(evnum) {
-    const reqId = ++eventRequestId;
-    document.getElementById('status-bar').textContent = `Loading evt. ${evnum}...`;
-    fetch(`/api/event/bynum/${evnum}`).then(r => r.json()).then(d => loadEventData(reqId, d))
         .catch(err => { document.getElementById('status-bar').textContent = `Error: ${err}`; });
 }
 
@@ -724,16 +709,7 @@ function init(){
     // --- file mode nav ---
     document.getElementById('btn-prev').onclick=()=>{if(currentEvent>1)loadEvent(currentEvent-1);};
     document.getElementById('btn-next').onclick=()=>{if(currentEvent<totalEvents)loadEvent(currentEvent+1);};
-    document.getElementById('ev-input').onchange=e=>{
-        const v=parseInt(e.target.value);
-        if(!v) return;
-        if(hasEventNumbers){
-            // input is a DAQ event number — let server resolve to index
-            loadEventByNumber(v);
-        } else {
-            if(v>=1&&v<=totalEvents) loadEvent(v);
-        }
-    };
+    document.getElementById('ev-input').onchange=e=>{const v=parseInt(e.target.value);if(v>=1&&v<=totalEvents)loadEvent(v);};
     document.getElementById('color-metric').onchange=()=>{syncDqRange();geoDq();};
     document.getElementById('log-scale').onchange=geoDq;
     document.getElementById('time-cut').onchange=geoDq;
@@ -1020,7 +996,6 @@ function applyConfig(data){
                 roc:crateRoc[String(d.crate)]||0,sl:d.slot,ch:d.channel});}
     }
     totalEvents=data.total_events||0;
-    hasEventNumbers=data.has_event_numbers||false;
     histEnabled=data.hist_enabled||false;
     histConfig=data.hist||{};
     // cluster histogram configs
@@ -1112,8 +1087,7 @@ function applyConfig(data){
     }
 
     if(mode==='file'){
-        document.getElementById('ev-total').textContent=
-            hasEventNumbers ? `(${totalEvents} evts)` : `/ ${totalEvents}`;
+        document.getElementById('ev-total').textContent=`/ ${totalEvents}`;
 
         updateHeaderStats();
         if(histEnabled) { fetchOccupancy(); fetchClHist(); }

@@ -30,10 +30,6 @@ struct FileData {
     std::string filepath;
     int event_count = 0;
     DataSourceCaps caps;
-
-    // event number indexing (index i → DAQ event_number)
-    std::vector<int32_t> event_numbers;
-    std::unordered_map<int32_t, int> evnum_to_index;  // event_number → 1-based index
 };
 
 struct Progress {

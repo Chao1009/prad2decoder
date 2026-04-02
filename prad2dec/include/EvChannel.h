@@ -104,9 +104,6 @@ public:
     // Returns empty string if no EPICS data found.
     std::string ExtractEpicsText() const;
 
-    // Lightweight event info extraction (trigger bank + TI only, no FADC decode).
-    bool GetEventInfo(int event_idx, fdec::EventInfo &info) const;
-
     // debug
     void PrintTree(std::ostream &os) const;
 

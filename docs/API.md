@@ -24,8 +24,7 @@ All responses are JSON unless noted otherwise. The server also pushes real-time 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/event/<n>` | Decoded event `n` (1-based index in file mode; seq number in online mode) |
-| GET | `/api/event/bynum/<evnum>` | Look up event by DAQ event number (file mode) |
+| GET | `/api/event/<n>` | Decoded event `n` (1-based in file mode; seq number in online mode) |
 | GET | `/api/event/latest` | Latest event from the ring buffer (online mode) |
 | GET | `/api/waveform/<n>/<roc_slot_ch>` | On-demand waveform samples for a single channel (file mode) |
 | GET | `/api/clusters/<n>` | Cluster reconstruction for event `n` |

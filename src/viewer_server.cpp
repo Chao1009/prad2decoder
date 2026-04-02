@@ -369,15 +369,6 @@ void ViewerServer::loadFileInternal(const std::string &filepath)
 
     data->event_count = source->eventCount();
     data->caps = source->capabilities();
-
-    // build event number map (DAQ event_number ↔ 1-based index)
-    const auto &evnums = source->eventNumbers();
-    if (!evnums.empty()) {
-        data->event_numbers = evnums;
-        for (int i = 0; i < (int)evnums.size(); ++i)
-            data->evnum_to_index[evnums[i]] = i + 1;  // 1-based
-    }
-
     std::cerr << "  Indexed " << data->event_count << " events"
               << " (source: " << data->caps.source_type << ")\n";
 
@@ -896,7 +887,6 @@ json ViewerServer::buildConfig()
     cfg["file_available"] = !cfg_.data_dir.empty() || (data != nullptr);
     cfg["total_events"] = data ? data->event_count : 0;
     cfg["current_file"] = data ? data->filepath : "";
-    cfg["has_event_numbers"] = data && !data->event_numbers.empty();
     cfg["data_dir_enabled"] = !cfg_.data_dir.empty();
     cfg["data_dir"] = cfg_.data_dir;
     cfg["hist_enabled"] = (mode_.load() == Mode::Online) ? true : hist_enabled_.load();
@@ -1048,21 +1038,6 @@ void ViewerServer::onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         }
 #endif
         reply("{\"error\":\"not in online mode\"}"); return;
-    }
-
-    // --- event/bynum/<evnum> (file mode — look up by DAQ event number) ---
-    if (uri.rfind("/api/event/bynum/", 0) == 0) {
-        int32_t evnum = std::atoi(uri.c_str() + 17);
-        std::shared_ptr<FileData> data;
-        { std::lock_guard<std::mutex> lk(file_data_mtx_); data = file_data_; }
-        if (!data || data->evnum_to_index.empty()) {
-            reply("{\"error\":\"no event number index\"}"); return;
-        }
-        auto it = data->evnum_to_index.find(evnum);
-        if (it == data->evnum_to_index.end()) {
-            reply("{\"error\":\"event number not found\"}"); return;
-        }
-        reply(decodeEvent(it->second).dump()); return;
     }
 
     // --- event/<n> (mode-dependent) ---

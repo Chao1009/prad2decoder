@@ -571,20 +571,6 @@ std::string EvChannel::ExtractEpicsText() const
 }
 
 // === PrintTree ==============================================================
-bool EvChannel::GetEventInfo(int i, fdec::EventInfo &info) const
-{
-    info.clear();
-    if (i < 0 || i >= nevents) return false;
-
-    BankHeader evh(&buffer[0]);
-    info.event_tag = evh.tag;
-    info.type      = static_cast<uint8_t>(evtype);
-
-    if (!decodeTriggerBank(i, info))
-        decodeTI(info);
-    return true;
-}
-
 void EvChannel::PrintTree(std::ostream &os) const
 {
     for (auto &n : nodes) {
