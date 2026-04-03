@@ -189,19 +189,29 @@
         </div>
 
         <!-- 4 vertical regions with adjustable dividers -->
-        <div class="dq-cell" id="dq-cell-inthist">
-            <div id="inthist-div" style="width:100%;height:100%"></div>
+        <div class="dq-cell" id="dq-cell-heighthist">
+            <div id="heighthist-div" style="width:100%;height:100%"></div>
             <div class="hist-controls">
-                <label><input type="checkbox" id="inthist-logx"> LogX</label>
-                <label><input type="checkbox" id="inthist-logy"> LogY</label>
-                <button id="btn-copy-inthist" class="copy-btn" title="Copy histogram data">copy</button>
+                <label><input type="checkbox" id="heighthist-logy"> LogY</label>
+                <button id="btn-copy-heighthist" class="copy-btn" title="Copy histogram data">copy</button>
             </div>
         </div>
         <div class="hdiv" id="div-dq-1"></div>
-        <div class="dq-cell" id="dq-cell-poshist">
-            <div id="poshist-div" style="width:100%;height:100%"></div>
-            <div class="hist-controls">
-                <button id="btn-copy-poshist" class="copy-btn" title="Copy histogram data">copy</button>
+        <div class="dq-cell" id="dq-cell-histrow">
+            <div class="dq-hist-row">
+                <div class="dq-hist-cell">
+                    <div id="inthist-div" style="width:100%;height:100%"></div>
+                    <div class="hist-controls">
+                        <label><input type="checkbox" id="inthist-logy"> LogY</label>
+                        <button id="btn-copy-inthist" class="copy-btn" title="Copy histogram data">copy</button>
+                    </div>
+                </div>
+                <div class="dq-hist-cell">
+                    <div id="poshist-div" style="width:100%;height:100%"></div>
+                    <div class="hist-controls">
+                        <button id="btn-copy-poshist" class="copy-btn" title="Copy histogram data">copy</button>
+                    </div>
+                </div>
             </div>
         </div>
         <div class="hdiv" id="div-dq-2"></div>
@@ -231,7 +241,6 @@
         <div class="cl-hist-panel" id="cl-hist-panel">
             <div id="cl-energy-hist" style="width:100%;height:100%"></div>
             <div class="hist-controls">
-                <label><input type="checkbox" id="clhist-logx"> LogX</label>
                 <label><input type="checkbox" id="clhist-logy"> LogY</label>
                 <button id="btn-copy-cl-hist" class="copy-btn" title="Copy histogram data">copy</button>
             </div>

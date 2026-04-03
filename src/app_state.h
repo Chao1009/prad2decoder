@@ -72,8 +72,9 @@ struct AppState {
     // ---- Configuration (set once at startup, then read-only) ---------------
     HistConfig hist_cfg;
     TriggerFilter waveform_trigger;
-    int hist_nbins = 0;
-    int pos_nbins  = 0;
+    int hist_nbins   = 0;
+    int pos_nbins    = 0;
+    int height_nbins = 0;
 
     evc::DaqConfig daq_cfg;
     fdec::HyCalSystem hycal;
@@ -175,6 +176,7 @@ struct AppState {
     mutable std::mutex data_mtx;
     std::map<std::string, Histogram> histograms;
     std::map<std::string, Histogram> pos_histograms;
+    std::map<std::string, Histogram> height_histograms;
     std::map<std::string, int>       occupancy;
     std::map<std::string, int>       occupancy_tcut;
     std::atomic<int>                 events_processed{0};
@@ -260,7 +262,8 @@ struct AppState {
     void clearLms();          // locks lms_mtx
 
     // ---- API response builders (thread-safe) -------------------------------
-    nlohmann::json apiHist(bool integral, const std::string &key) const;
+    // type: 0=integral, 1=position, 2=height
+    nlohmann::json apiHist(int type, const std::string &key) const;
     nlohmann::json apiClusterHist() const;
     nlohmann::json apiOccupancy() const;
     nlohmann::json apiColorRanges() const;

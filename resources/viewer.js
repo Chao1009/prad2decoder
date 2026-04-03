@@ -89,6 +89,7 @@ function geoHandleClick(cx,cy){
             document.getElementById('detail-header').innerHTML=
                 '<div class="empty-msg">Click a module to view details</div>';
             Plotly.react('waveform-div',[],{...PL,xaxis:{...PL.xaxis,title:'Sample'},yaxis:{...PL.yaxis,title:'ADC'}},PC2);
+            Plotly.react('heighthist-div',[],{...PL,title:{text:'Height Histogram',font:{size:10,color:'#555'}}},PC2);
             Plotly.react('inthist-div',[],{...PL,title:{text:'Integral Histogram',font:{size:10,color:'#555'}}},PC2);
             Plotly.react('poshist-div',[],{...PL,title:{text:'Position Histogram',font:{size:10,color:'#555'}}},PC2);
             document.getElementById('peaks-tbody').innerHTML='';
@@ -551,6 +552,7 @@ function init(){
         drawColorBar(); redrawGeo();
     };
     registerPlot('waveform-div', 'dq', null);
+    registerPlot('heighthist-div','dq', 'Height Histogram');
     registerPlot('inthist-div',  'dq', 'Integral Histogram');
     registerPlot('poshist-div',  'dq', 'Position Histogram');
 
@@ -567,6 +569,7 @@ function init(){
         };
     }
     setupCopyBtn('btn-copy-wf', ()=>currentWaveform);
+    setupCopyBtn('btn-copy-heighthist', ()=>currentHist['heighthist-div']);
     setupCopyBtn('btn-copy-inthist', ()=>currentHist['inthist-div']);
     setupCopyBtn('btn-copy-poshist', ()=>currentHist['poshist-div']);
 
@@ -593,9 +596,9 @@ function init(){
             },
             60, 60, resizeAllPlots);
     }
-    dqDivider('div-dq-1','dq-cell-inthist',[]);
-    dqDivider('div-dq-2','dq-cell-poshist',['dq-cell-inthist','div-dq-1']);
-    dqDivider('div-dq-3','dq-cell-waveform',['dq-cell-inthist','div-dq-1','dq-cell-poshist','div-dq-2']);
+    dqDivider('div-dq-1','dq-cell-heighthist',[]);
+    dqDivider('div-dq-2','dq-cell-histrow',['dq-cell-heighthist','div-dq-1']);
+    dqDivider('div-dq-3','dq-cell-waveform',['dq-cell-heighthist','div-dq-1','dq-cell-histrow','div-dq-2']);
 
     // --- tab switching ---
     document.querySelectorAll('.tab').forEach(t=>{
@@ -652,9 +655,8 @@ function init(){
     };
 
     // histogram log-scale toggles
-    document.getElementById('inthist-logx').onchange=()=>{ if(selectedModule) showHistograms(selectedModule); };
+    document.getElementById('heighthist-logy').onchange=()=>{ if(selectedModule) showHistograms(selectedModule); };
     document.getElementById('inthist-logy').onchange=()=>{ if(selectedModule) showHistograms(selectedModule); };
-    document.getElementById('clhist-logx').onchange=plotClHist;
     document.getElementById('clhist-logy').onchange=plotClHist;
     setupCopyBtn('btn-copy-lms', ()=>currentLmsData);
 

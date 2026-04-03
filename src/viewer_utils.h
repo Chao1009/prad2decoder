@@ -75,6 +75,9 @@ struct HistConfig {
     float pos_min   = 0;
     float pos_max   = 400;
     float pos_step  = 4;
+    float height_min  = 0;
+    float height_max  = 4000;
+    float height_step = 10;
     float min_peak_ratio = 0.3f;
 };
 

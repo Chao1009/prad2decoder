@@ -158,7 +158,7 @@ function renderWaveform(mod, key, d, samples){
 // =========================================================================
 // Histograms
 // =========================================================================
-function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, logXId, logYId){
+function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, logYId){
     fetch(url).then(r=>r.json()).then(data=>{
         if(data.error||!data.bins||!data.bins.length){
             currentHist[divId]=null;
@@ -179,8 +179,7 @@ function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, 
             hovertemplate:'%{x:.0f}: %{y}<extra></extra>',
         }],{...PL,
             title:{text:`${title}<br><span style="font-size:9px;color:#888">${stats}</span>`,font:{size:10,color:'#ccc'}},
-            xaxis:{...PL.xaxis,title:xTitle,range:[xMin,xMax],
-                type:logXId&&document.getElementById(logXId).checked?'log':'linear'},
+            xaxis:{...PL.xaxis,title:xTitle,range:[xMin,xMax]},
             yaxis:{...PL.yaxis,title:'Counts',
                 type:logYId&&document.getElementById(logYId).checked?'log':'linear'},
             bargap:0.05,
@@ -202,9 +201,12 @@ function showHistograms(mod){
     lastHistFetch = Date.now();
     lastHistModule = key;
     const h=histConfig;
+    fetchAndPlotHist('heighthist-div',`/api/heighthist/${key}`,
+        `${mod.n} Peak Height [${h.time_min||170}-${h.time_max||190} ns]`,
+        'Peak Height', h.height_min||0, h.height_step||10, '#e599f7', 'heighthist-logy');
     fetchAndPlotHist('inthist-div',`/api/hist/${key}`,
         `${mod.n} Integral [${h.time_min||170}-${h.time_max||190} ns]`,
-        'Peak Integral', h.bin_min||0, h.bin_step||100, '#00b4d8', 'inthist-logx', 'inthist-logy');
+        'Peak Integral', h.bin_min||0, h.bin_step||100, '#00b4d8', 'inthist-logy');
     fetchAndPlotHist('poshist-div',`/api/poshist/${key}`,
         `${mod.n} Peak Position`,
         'Time (ns)', h.pos_min||0, h.pos_step||4, '#51cf66');

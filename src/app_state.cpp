@@ -94,6 +94,12 @@ void AppState::init(const std::string &db_dir,
             if (th.contains("max"))  hist_cfg.pos_max  = th["max"];
             if (th.contains("step")) hist_cfg.pos_step = th["step"];
         }
+        if (w.contains("height_hist")) {
+            auto &hh = w["height_hist"];
+            if (hh.contains("min"))  hist_cfg.height_min  = hh["min"];
+            if (hh.contains("max"))  hist_cfg.height_max  = hh["max"];
+            if (hh.contains("step")) hist_cfg.height_step = hh["step"];
+        }
         if (w.contains("thresholds")) {
             auto &t = w["thresholds"];
             if (t.contains("min_peak_height"))          hist_cfg.threshold      = t["min_peak_height"];
@@ -114,6 +120,9 @@ void AppState::init(const std::string &db_dir,
             if (h.contains("pos_min"))   hist_cfg.pos_min   = h["pos_min"];
             if (h.contains("pos_max"))   hist_cfg.pos_max   = h["pos_max"];
             if (h.contains("pos_step"))  hist_cfg.pos_step  = h["pos_step"];
+            if (h.contains("height_min"))  hist_cfg.height_min  = h["height_min"];
+            if (h.contains("height_max"))  hist_cfg.height_max  = h["height_max"];
+            if (h.contains("height_step")) hist_cfg.height_step = h["height_step"];
             if (h.contains("min_peak_ratio")) hist_cfg.min_peak_ratio = h["min_peak_ratio"];
         }
     };
@@ -140,6 +149,8 @@ void AppState::init(const std::string &db_dir,
         (hist_cfg.bin_max - hist_cfg.bin_min) / hist_cfg.bin_step));
     pos_nbins = std::max(1, (int)std::ceil(
         (hist_cfg.pos_max - hist_cfg.pos_min) / hist_cfg.pos_step));
+    height_nbins = std::max(1, (int)std::ceil(
+        (hist_cfg.height_max - hist_cfg.height_min) / hist_cfg.height_step));
     std::cerr << "Waveform  : time_cut=[" << hist_cfg.time_min << "," << hist_cfg.time_max
               << "] threshold=" << hist_cfg.threshold
               << " " << waveform_trigger << "\n";
@@ -734,20 +745,23 @@ void AppState::processEvent(fdec::EventData &event,
                     std::string key = std::to_string(roc.tag) + "_"
                                    + std::to_string(s) + "_" + std::to_string(c);
                     bool has_peak = false, has_peak_tcut = false;
-                    float best = -1;
+                    float best = -1, best_height = -1;
                     for (int p = 0; p < wres.npeaks; ++p) {
                         auto &pk = wres.peaks[p];
                         if (pk.height < hist_cfg.threshold) continue;
                         has_peak = true;
                         if (pk.time >= hist_cfg.time_min && pk.time <= hist_cfg.time_max) {
                             has_peak_tcut = true;
-                            if (pk.integral > best) best = pk.integral;
+                            if (pk.integral > best) { best = pk.integral; best_height = pk.height; }
                         }
                     }
                     if (best >= 0) {
                         auto &h = histograms[key];
                         if (h.bins.empty()) h.init(hist_nbins);
                         h.fill(best, hist_cfg.bin_min, hist_cfg.bin_step);
+                        auto &hh = height_histograms[key];
+                        if (hh.bins.empty()) hh.init(height_nbins);
+                        hh.fill(best_height, hist_cfg.height_min, hist_cfg.height_step);
                     }
                     for (int p = 0; p < wres.npeaks; ++p) {
                         auto &pk = wres.peaks[p];
@@ -1089,8 +1103,9 @@ nlohmann::json AppState::apiGemHist() const
 void AppState::clearHistograms()
 {
     std::lock_guard<std::mutex> lk(data_mtx);
-    for (auto &[k, h] : histograms)     h.clear();
-    for (auto &[k, h] : pos_histograms) h.clear();
+    for (auto &[k, h] : histograms)        h.clear();
+    for (auto &[k, h] : pos_histograms)   h.clear();
+    for (auto &[k, h] : height_histograms) h.clear();
     occupancy.clear();
     occupancy_tcut.clear();
     events_processed = 0;
@@ -1131,11 +1146,11 @@ json AppState::apiColorRanges() const
     return obj;
 }
 
-json AppState::apiHist(bool integral, const std::string &key) const
+json AppState::apiHist(int type, const std::string &key) const
 {
     std::lock_guard<std::mutex> lk(data_mtx);
-    auto &hmap = integral ? histograms : pos_histograms;
-    int nbins = integral ? hist_nbins : pos_nbins;
+    auto &hmap = (type == 0) ? histograms : (type == 1) ? pos_histograms : height_histograms;
+    int nbins  = (type == 0) ? hist_nbins : (type == 1) ? pos_nbins : height_nbins;
     auto it = hmap.find(key);
     if (it == hmap.end())
         return {{"bins", std::vector<int>(nbins, 0)}, {"underflow", 0}, {"overflow", 0},
@@ -1437,6 +1452,8 @@ void AppState::fillConfigJson(json &cfg) const
         {"bin_step", hist_cfg.bin_step}, {"threshold", hist_cfg.threshold},
         {"pos_min", hist_cfg.pos_min}, {"pos_max", hist_cfg.pos_max},
         {"pos_step", hist_cfg.pos_step},
+        {"height_min", hist_cfg.height_min}, {"height_max", hist_cfg.height_max},
+        {"height_step", hist_cfg.height_step},
     };
     cfg["cluster_hist"] = {{"min", cl_hist_min}, {"max", cl_hist_max}, {"step", cl_hist_step}};
     cfg["nclusters_hist"] = {{"min", nclusters_hist_min}, {"max", nclusters_hist_max}, {"step", nclusters_hist_step}};
@@ -1493,9 +1510,11 @@ AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
     if (uri == "/api/cluster_hist")
         return {true, apiClusterHist().dump()};
     if (uri.rfind("/api/hist/", 0) == 0)
-        return {true, apiHist(true, uri.substr(10)).dump()};
+        return {true, apiHist(0, uri.substr(10)).dump()};
     if (uri.rfind("/api/poshist/", 0) == 0)
-        return {true, apiHist(false, uri.substr(13)).dump()};
+        return {true, apiHist(1, uri.substr(13)).dump()};
+    if (uri.rfind("/api/heighthist/", 0) == 0)
+        return {true, apiHist(2, uri.substr(16)).dump()};
     if (uri == "/api/lms/refs")
         return {true, apiLmsRefChannels().dump()};
     if (uri.rfind("/api/lms/", 0) == 0) {
