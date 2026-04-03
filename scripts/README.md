@@ -27,11 +27,11 @@ Pedestals must be measured **before the first DAQ run of each shift** while DAQ 
 1. Make sure the DAQ is **stopped**.
 2. Launch: `python scripts/hycal_pedestal_monitor.py`
 3. Click **Measure Pedestals** and confirm. The tool SSHs to `adchycal1`--`adchycal7` and runs `faV3peds` (takes a few minutes).
-4. Inspect the two maps (left: current mean, right: difference from original) and the report panel for flagged channels:
+4. Inspect the two maps (left: current mean, right: difference from configured) and the report panel for flagged channels:
    - `DEAD` -- avg < 1, rms < 0.1
    - `OUT OF RANGE` -- mean outside 50--300
    - `HIGH RMS` -- sigma > 1.5
-   - `DRIFT` -- shifted > 3 counts from original
+   - `DRIFT` -- shifted > 3 counts from configured
 5. Click **Save Report** to save for the shift log.
 6. If new issues appear, notify the run coordinator before starting data taking.
 

@@ -23,6 +23,7 @@ import random
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -53,11 +54,13 @@ NUM_CRATES = 7
 CRATE_NAMES = [f"adchycal{i}" for i in range(1, NUM_CRATES + 1)]
 CHANNELS_PER_SLOT = 16
 
-# Display ranges for the two maps  (adjust as needed)
+# Display ranges for the maps  (adjust as needed)
 DISPLAY_PED_MIN = 50.0
 DISPLAY_PED_MAX = 300.0
 DISPLAY_DELTA_MIN = -3.0
 DISPLAY_DELTA_MAX = 3.0
+DISPLAY_RMS_MIN = 0.0
+DISPLAY_RMS_MAX = 1.5
 
 # Thresholds for flagging irregular channels  (adjust as needed)
 THRESH_PED_MIN = 50.0       # acceptable pedestal mean lower bound
@@ -65,7 +68,7 @@ THRESH_PED_MAX = 300.0      # acceptable pedestal mean upper bound
 THRESH_DEAD_AVG = 1.0       # avg below this AND rms below THRESH_DEAD_RMS -> DEAD
 THRESH_DEAD_RMS = 0.1       # rms below this AND avg below THRESH_DEAD_AVG -> DEAD
 THRESH_HIGH_RMS = 1.5       # rms above this -> HIGH RMS
-THRESH_DRIFT = 3.0          # |current - original| above this -> DRIFT
+THRESH_DRIFT = 3.0          # |current - configured| above this -> DRIFT
 
 # LMS / V module positions below HyCal  (name -> centre-x)
 _BOTTOM_Y = -640.0
@@ -81,6 +84,11 @@ _LMS_V_XPOS = {
 # ===========================================================================
 
 PALETTES = {
+    "rainbow": [
+        (0.00, ( 30,  58,  95)), (0.25, ( 59, 130, 246)),
+        (0.50, ( 45, 212, 160)), (0.75, (234, 179,   8)),
+        (1.00, (245, 101, 101)),
+    ],
     "viridis": [
         (0.00, (68,   1,  84)), (0.25, (59,  82, 139)),
         (0.50, (33, 145, 140)), (0.75, (94, 201,  98)),
@@ -250,7 +258,7 @@ def parse_measurement_stdout(
 
 def find_irregular_channels(
     measured: Dict[str, dict],
-    original: Dict[str, float],
+    configured: Dict[str, float],
     daq_map: Dict[Tuple[int, int, int], str],
 ) -> List[str]:
     """Return formatted lines describing flagged channels."""
@@ -276,11 +284,11 @@ def find_irregular_channels(
             issues.append(f"  HIGH RMS      {mod:<6s}  {loc}  "
                           f"avg={avg:.2f}  rms={rms:.3f}")
 
-        if mod in original and not (avg < THRESH_DEAD_AVG and rms < THRESH_DEAD_RMS):
-            delta = avg - original[mod]
+        if mod in configured and not (avg < THRESH_DEAD_AVG and rms < THRESH_DEAD_RMS):
+            delta = avg - configured[mod]
             if abs(delta) > THRESH_DRIFT:
                 issues.append(f"  DRIFT         {mod:<6s}  {loc}  "
-                              f"cur={avg:.2f}  orig={original[mod]:.2f}  "
+                              f"cur={avg:.2f}  conf={configured[mod]:.2f}  "
                               f"delta={delta:+.2f}")
     return issues
 
@@ -288,6 +296,37 @@ def find_irregular_channels(
 # ===========================================================================
 #  Colour helpers
 # ===========================================================================
+
+def _time_ago(epoch: float) -> str:
+    """Format seconds-since-epoch as a human-readable 'X ago' string."""
+    delta = int(time.time() - epoch)
+    if delta < 0:
+        return "just now"
+    if delta < 60:
+        return f"{delta}s ago"
+    mins = delta // 60
+    if mins < 60:
+        return f"{mins}min ago"
+    hours = mins // 60
+    mins_r = mins % 60
+    if hours < 24:
+        return f"{hours}h {mins_r}min ago" if mins_r else f"{hours}h ago"
+    days = hours // 24
+    hours_r = hours % 24
+    return f"{days}d {hours_r}h ago" if hours_r else f"{days}d ago"
+
+
+def _latest_ped_mtime() -> Optional[float]:
+    """Return the most recent mtime among pedestal latest files, or None."""
+    newest = None
+    for cname in CRATE_NAMES:
+        fp = PEDESTALS_DIR / f"{cname}_latest.cnf"
+        if fp.exists():
+            mt = fp.stat().st_mtime
+            if newest is None or mt > newest:
+                newest = mt
+    return newest
+
 
 def _lerp(a: int, b: int, t: float) -> int:
     return int(a + (b - a) * t)
@@ -534,9 +573,11 @@ class PedestalMonitorWindow(QMainWindow):
         self._modules = modules
         self._daq_map = daq_map
         self._sim = sim
-        self._palette_idx = 0
+        self._palette_idx_left = 0
+        self._palette_idx_right = 0
+        self._right_mode = "delta"   # "delta" or "rms"
 
-        self._original: Dict[str, float] = {}
+        self._configured: Dict[str, float] = {}
         self._latest: Dict[str, float] = {}
         self._measured: Dict[str, dict] = {}
 
@@ -581,9 +622,10 @@ class PedestalMonitorWindow(QMainWindow):
         ml.setSpacing(8)
         self._map_left = HyCalMapWidget()
         self._map_right = HyCalMapWidget()
-        for m in (self._map_left, self._map_right):
-            m.module_hovered.connect(self._on_hover)
-            m.palette_clicked.connect(self._cycle_palette)
+        self._map_left.module_hovered.connect(self._on_hover)
+        self._map_right.module_hovered.connect(self._on_hover)
+        self._map_left.palette_clicked.connect(self._cycle_palette_left)
+        self._map_right.palette_clicked.connect(self._cycle_palette_right)
         ml.addWidget(self._map_left)
         ml.addWidget(self._map_right)
         root.addWidget(maps, stretch=1)
@@ -596,8 +638,19 @@ class PedestalMonitorWindow(QMainWindow):
         rng.addWidget(self._left_min)
         rng.addWidget(self._slabel("-"))
         rng.addWidget(self._left_max)
-        rng.addSpacing(30)
-        rng.addWidget(self._slabel("Delta range:"))
+        rng.addSpacing(20)
+
+        # Right panel mode toggle
+        self._right_mode_btn = QPushButton("Delta")
+        self._right_mode_btn.setFixedWidth(60)
+        self._right_mode_btn.setStyleSheet(
+            "QPushButton{background:#21262d;color:#58a6ff;"
+            "border:1px solid #30363d;padding:3px 8px;"
+            "font:bold 10px Monospace;border-radius:3px;}"
+            "QPushButton:hover{background:#30363d;}")
+        self._right_mode_btn.clicked.connect(self._toggle_right_mode)
+        rng.addWidget(self._right_mode_btn)
+        rng.addWidget(self._slabel("range:"))
         self._right_min = self._sedit(f"{DISPLAY_DELTA_MIN:.1f}")
         self._right_max = self._sedit(f"{DISPLAY_DELTA_MAX:.1f}")
         rng.addWidget(self._right_min)
@@ -697,12 +750,31 @@ class PedestalMonitorWindow(QMainWindow):
             pal.setColor(role, QColor(colour))
         self.setPalette(pal)
 
-    # ---- palette cycling ----
+    # ---- palette cycling (independent per map) ----
 
-    def _cycle_palette(self):
-        self._palette_idx = (self._palette_idx + 1) % len(PALETTES)
-        self._map_left.set_palette(self._palette_idx)
-        self._map_right.set_palette(self._palette_idx)
+    def _cycle_palette_left(self):
+        self._palette_idx_left = (self._palette_idx_left + 1) % len(PALETTES)
+        self._map_left.set_palette(self._palette_idx_left)
+
+    def _cycle_palette_right(self):
+        self._palette_idx_right = (self._palette_idx_right + 1) % len(PALETTES)
+        self._map_right.set_palette(self._palette_idx_right)
+
+    # ---- right panel mode toggle ----
+
+    def _toggle_right_mode(self):
+        if self._right_mode == "delta":
+            self._right_mode = "rms"
+            self._right_mode_btn.setText("RMS")
+            self._right_min.setText(f"{DISPLAY_RMS_MIN:.1f}")
+            self._right_max.setText(f"{DISPLAY_RMS_MAX:.1f}")
+        else:
+            self._right_mode = "delta"
+            self._right_mode_btn.setText("Delta")
+            self._right_min.setText(f"{DISPLAY_DELTA_MIN:.1f}")
+            self._right_max.setText(f"{DISPLAY_DELTA_MAX:.1f}")
+        self._update_right_map()
+        self._apply_ranges()
 
     # ---- range editing ----
 
@@ -729,25 +801,29 @@ class PedestalMonitorWindow(QMainWindow):
             self._load_sim_data()
             return
         if ORIGINAL_PED_DIR.exists():
-            self._original = read_all_pedestals(
+            self._configured = read_all_pedestals(
                 ORIGINAL_PED_DIR, "_ped.cnf", self._daq_map)
         else:
-            self._original = {}
+            self._configured = {}
         if PEDESTALS_DIR.exists():
             self._latest = read_all_pedestals(
                 PEDESTALS_DIR, "_latest.cnf", self._daq_map)
         else:
             self._latest = {}
-        n_o, n_l = len(self._original), len(self._latest)
+        n_o, n_l = len(self._configured), len(self._latest)
+        age = ""
+        mt = _latest_ped_mtime()
+        if mt is not None:
+            age = f"    (measured {_time_ago(mt)})"
         self._status_lbl.setText(
-            f"Loaded {n_o} original, {n_l} latest channels")
+            f"Loaded {n_o} configured, {n_l} latest channels{age}")
         self._set_status_style("idle")
         self._update_maps()
         self._update_report()
 
     def _load_sim_data(self):
         rng = random.Random(42)
-        self._original.clear()
+        self._configured.clear()
         self._latest.clear()
         self._measured.clear()
         all_names: List[str] = []
@@ -756,19 +832,19 @@ class PedestalMonitorWindow(QMainWindow):
             all_names.append(n)
             o = rng.gauss(160, 25)
             l = o + rng.gauss(0, 1.0)
-            self._original[n] = o
+            self._configured[n] = o
             self._latest[n] = l
             self._measured[n] = {
                 "avg": l, "rms": abs(rng.gauss(0.7, 0.15)),
                 "min": int(l) - 3, "max": int(l) + 3,
             }
         for n in rng.sample(all_names, min(15, len(all_names))):
-            self._original[n] = 0.0
+            self._configured[n] = 0.0
             self._latest[n] = 0.0
             self._measured[n].update(avg=0.0, rms=0.0)
         for n in rng.sample(all_names, 3):
             val = rng.choice([rng.uniform(10, 40), rng.uniform(320, 500)])
-            self._original[n] = val
+            self._configured[n] = val
             self._latest[n] = val + rng.gauss(0, 0.5)
             self._measured[n].update(avg=self._latest[n],
                                      rms=abs(rng.gauss(0.7, 0.2)))
@@ -778,7 +854,7 @@ class PedestalMonitorWindow(QMainWindow):
         for n in rng.sample(all_names, 4):
             if self._measured[n]["avg"] >= THRESH_PED_MIN:
                 drift = rng.choice([-1, 1]) * rng.uniform(4.0, 12.0)
-                self._latest[n] = self._original[n] + drift
+                self._latest[n] = self._configured[n] + drift
                 self._measured[n]["avg"] = self._latest[n]
         self._update_maps()
         self._update_report()
@@ -787,29 +863,43 @@ class PedestalMonitorWindow(QMainWindow):
 
     def _update_maps(self):
         has_latest = bool(self._latest)
-        cur = self._latest if has_latest else self._original
-        label = "Current" if has_latest else "Original"
+        cur = self._latest if has_latest else self._configured
+        label = "Current" if has_latest else "Configured"
 
         self._map_left.set_data(
             self._modules, cur, f"{label} Pedestal Mean",
             DISPLAY_PED_MIN, DISPLAY_PED_MAX)
+        self._map_left.set_palette(self._palette_idx_left)
 
-        if has_latest and self._original:
-            delta = {n: cur[n] - self._original[n]
-                     for n in cur if n in self._original}
+        self._update_right_map()
+
+    def _update_right_map(self):
+        has_latest = bool(self._latest)
+        cur = self._latest if has_latest else self._configured
+
+        if self._right_mode == "rms" and self._measured:
+            rms = {n: d["rms"] for n, d in self._measured.items()}
+            self._map_right.set_data(
+                self._modules, rms, "Pedestal RMS (from measurement)",
+                DISPLAY_RMS_MIN, DISPLAY_RMS_MAX)
+        elif has_latest and self._configured:
+            delta = {n: cur[n] - self._configured[n]
+                     for n in cur if n in self._configured}
             self._map_right.set_data(
                 self._modules, delta,
-                "Mean Difference (Current \u2212 Original)",
+                "Mean Difference (Current \u2212 Configured)",
                 DISPLAY_DELTA_MIN, DISPLAY_DELTA_MAX)
+        elif self._right_mode == "rms":
+            self._map_right.set_data(
+                self._modules, {},
+                "Pedestal RMS (no measurement data)",
+                DISPLAY_RMS_MIN, DISPLAY_RMS_MAX)
         else:
             self._map_right.set_data(
                 self._modules, {},
                 "Mean Difference (no comparison data)",
                 DISPLAY_DELTA_MIN, DISPLAY_DELTA_MAX)
-
-        # Apply current palette
-        self._map_left.set_palette(self._palette_idx)
-        self._map_right.set_palette(self._palette_idx)
+        self._map_right.set_palette(self._palette_idx_right)
 
     def _update_report(self):
         lines: List[str] = []
@@ -829,14 +919,14 @@ class PedestalMonitorWindow(QMainWindow):
             else:
                 lines.append(f"{label}: {len(vals)} ch, ALL dead")
 
-        if self._original:
-            _stats("Original", self._original)
+        if self._configured:
+            _stats("Configured", self._configured)
         if self._latest:
             _stats("Current ", self._latest)
 
         if self._measured:
             issues = find_irregular_channels(
-                self._measured, self._original, self._daq_map)
+                self._measured, self._configured, self._daq_map)
             lines.append("")
             if issues:
                 lines.append(f"IRREGULAR CHANNELS  ({len(issues)} flagged):")
@@ -855,11 +945,11 @@ class PedestalMonitorWindow(QMainWindow):
                 break
         if name in self._latest:
             parts.append(f"ped: {self._latest[name]:.2f}")
-        elif name in self._original:
-            parts.append(f"ped: {self._original[name]:.2f}")
-        if name in self._original and name in self._latest:
-            delta = self._latest[name] - self._original[name]
-            parts.append(f"orig: {self._original[name]:.2f}")
+        elif name in self._configured:
+            parts.append(f"ped: {self._configured[name]:.2f}")
+        if name in self._configured and name in self._latest:
+            delta = self._latest[name] - self._configured[name]
+            parts.append(f"conf: {self._configured[name]:.2f}")
             parts.append(f"delta: {delta:+.2f}")
         if name in self._measured:
             parts.append(f"rms: {self._measured[name]['rms']:.3f}")

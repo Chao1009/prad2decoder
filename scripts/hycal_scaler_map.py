@@ -39,7 +39,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DB_DIR = SCRIPT_DIR / ".." / "database"
 MODULES_JSON = DB_DIR / "hycal_modules.json"
 
-SCALER_PREFIX = "B_DET_HYCAL_FADC_"
+SCALER_PV = "B_DET_HYCAL_FADC_{label}:c"
 POLL_INTERVAL_MS = 10_000   # 10 seconds
 
 
@@ -77,7 +77,7 @@ class RealScalerEPICS:
         self._pvs: Dict[str, object] = {}
         for m in modules:
             if m.mod_type in ("PbWO4", "PbGlass"):
-                pv = _epics.PV(SCALER_PREFIX + m.name, connection_timeout=2.0)
+                pv = _epics.PV(SCALER_PV.format(label=m.name), connection_timeout=2.0)
                 self._pvs[m.name] = pv
 
     def get(self, name: str) -> Optional[float]:
