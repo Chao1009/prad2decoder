@@ -362,6 +362,7 @@ class ScalerMapWindow(QMainWindow):
         self._values: Dict[str, float] = {}
         self._polling = True
         self._palette_idx = 0
+        self._auto_range_on = True
 
         self._build_ui()
 
@@ -423,8 +424,10 @@ class ScalerMapWindow(QMainWindow):
         ctrl.addWidget(self._max_edit)
         ctrl.addWidget(self._make_btn("Apply", "#c9d1d9",
                                       self._apply_range))
-        ctrl.addWidget(self._make_btn("Auto", "#d29922",
-                                      self._auto_range))
+        self._auto_btn = self._make_btn("Auto Scale", "#d29922",
+                                        self._toggle_auto_range)
+        ctrl.addWidget(self._auto_btn)
+        self._update_auto_btn()
         self._log_btn = self._make_btn("Log: OFF", "#8b949e",
                                        self._toggle_log)
         ctrl.addWidget(self._log_btn)
@@ -496,6 +499,9 @@ class ScalerMapWindow(QMainWindow):
                 self._values[m.name] = float(v)
         self._map.set_values(self._values)
 
+        if self._auto_range_on and self._values:
+            self._do_auto_range()
+
         n_ok, n_total = self._ep.connection_count()
         fg = "#3fb950" if n_ok == n_total else (
              "#d29922" if n_ok > 0 else "#8b949e")
@@ -528,13 +534,35 @@ class ScalerMapWindow(QMainWindow):
             vmax = float(self._max_edit.text())
             if vmin < vmax:
                 self._map.set_range(vmin, vmax)
+                self._auto_range_on = False
+                self._update_auto_btn()
         except ValueError:
             pass
 
-    def _auto_range(self):
+    def _toggle_auto_range(self):
+        self._auto_range_on = not self._auto_range_on
+        self._update_auto_btn()
+        if self._auto_range_on:
+            self._do_auto_range()
+
+    def _do_auto_range(self):
         vmin, vmax = self._map.auto_range()
         self._min_edit.setText(f"{vmin:.0f}")
         self._max_edit.setText(f"{vmax:.0f}")
+
+    def _update_auto_btn(self):
+        if self._auto_range_on:
+            self._auto_btn.setStyleSheet(
+                "QPushButton{background:#d29922;color:#0d1117;"
+                "border:1px solid #d29922;padding:5px 14px;"
+                "font:bold 11px Monospace;border-radius:4px;}"
+                "QPushButton:hover{background:#e0a82b;}")
+        else:
+            self._auto_btn.setStyleSheet(
+                "QPushButton{background:#21262d;color:#d29922;"
+                "border:1px solid #30363d;padding:5px 14px;"
+                "font:bold 11px Monospace;border-radius:4px;}"
+                "QPushButton:hover{background:#30363d;}")
 
     def _cycle_palette(self):
         self._palette_idx = (self._palette_idx + 1) % len(PALETTES)
