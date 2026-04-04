@@ -1085,6 +1085,27 @@ void ViewerServer::onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         reply(decodeEvent(evnum).dump()); return;
     }
 
+    // --- trigger_types/<from>/<count> (batch trigger_type query for filter scanning) ---
+    if (uri.rfind("/api/trigger_types/", 0) == 0) {
+        std::string rest = uri.substr(18);
+        auto slash = rest.find('/');
+        int from = std::atoi(rest.c_str());
+        int count = (slash != std::string::npos) ? std::atoi(rest.c_str() + slash + 1) : 100;
+        count = std::min(count, 1000);  // cap batch size
+
+        json arr = json::array();
+        std::lock_guard<std::mutex> lk(data_source_mtx_);
+        if (data_source_) {
+            auto event_ptr = std::make_unique<fdec::EventData>();
+            for (int i = from; i < from + count; ++i) {
+                std::string err = data_source_->decodeEvent(i - 1, *event_ptr, nullptr);
+                if (err.empty())
+                    arr.push_back({{"ev", i}, {"tt", event_ptr->info.trigger_type}});
+            }
+        }
+        reply(arr.dump()); return;
+    }
+
     // --- waveform/<n>/<key> (file mode only — on-demand single-channel samples) ---
     if (uri.rfind("/api/waveform/", 0) == 0) {
         // parse /api/waveform/<evnum>/<roc_slot_ch>

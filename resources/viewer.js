@@ -254,6 +254,37 @@ function restoreTrigFilterFromTab(){
     }
 }
 
+// scan for next event passing the trigger filter using batch trigger_type query.
+// single HTTP request fetches trigger_types for up to 500 events at once.
+function findNextMatchingEvent(from, dir){
+    const batchSize=500;
+    const start = dir>0 ? from+1 : Math.max(1, from-batchSize);
+    const count = dir>0 ? Math.min(batchSize, totalEvents-from) : from-start;
+    if(count<=0){
+        document.getElementById('status-bar').textContent='No matching event (trigger filter active)';
+        return;
+    }
+    document.getElementById('status-bar').textContent='Scanning for matching event...';
+    fetch(`/api/trigger_types/${start}/${count}`).then(r=>r.json()).then(arr=>{
+        if(!Array.isArray(arr)||!arr.length){
+            document.getElementById('status-bar').textContent='No matching event (trigger filter active)';
+            return;
+        }
+        // scan in navigation direction
+        const ordered = dir>0 ? arr : arr.slice().reverse();
+        for(const item of ordered){
+            if(passesTriggerFilter(item.tt)){
+                loadEvent(item.ev);
+                return;
+            }
+        }
+        document.getElementById('status-bar').textContent=
+            `No matching event within ${batchSize} (trigger filter active)`;
+    }).catch(()=>{
+        document.getElementById('status-bar').textContent='Error scanning events';
+    });
+}
+
 function passesTriggerFilter(triggerType){
     const tf=trigFilter();
     if(tf.reject.has(triggerType)) return false;
@@ -271,21 +302,15 @@ function loadEventData(reqId, data) {
         return;
     }
 
-    // trigger filter: if event doesn't pass, auto-skip in nav direction
+    // trigger filter: if event doesn't pass, ask server for next matching event
     const tf=trigFilter();
     if (tf.accept.size || tf.reject.size) {
         const tt = data.trigger_type || 0;
         if (!passesTriggerFilter(tt)) {
             if (mode==='file') {
-                const next = data.event + navDirection;
-                if (next >= 1 && next <= totalEvents) {
-                    loadEvent(next);
-                } else {
-                    document.getElementById('status-bar').textContent =
-                        `No matching event (trigger filter active)`;
-                }
+                // scan ahead locally to find next valid event without per-event fetches
+                findNextMatchingEvent(data.event, navDirection);
             }
-            // in online mode, just discard this event silently
             return;
         }
     }
