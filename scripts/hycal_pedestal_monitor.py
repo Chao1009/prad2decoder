@@ -316,11 +316,11 @@ def _time_ago(epoch: float) -> str:
     return f"{days}d {hours_r}h ago" if hours_r else f"{days}d ago"
 
 
-def _latest_ped_mtime() -> Optional[float]:
-    """Return the most recent mtime among pedestal latest files, or None."""
+def _ped_mtime(ped_dir: Path, suffix: str) -> Optional[float]:
+    """Return the most recent mtime among pedestal files in *ped_dir*, or None."""
     newest = None
     for cname in CRATE_NAMES:
-        fp = PEDESTALS_DIR / f"{cname}_latest.cnf"
+        fp = ped_dir / f"{cname}{suffix}"
         if fp.exists():
             mt = fp.stat().st_mtime
             if newest is None or mt > newest:
@@ -810,11 +810,19 @@ class PedestalMonitorWindow(QMainWindow):
                 PEDESTALS_DIR, "_latest.cnf", self._daq_map)
         else:
             self._latest = {}
+
+        # If configured files are newer than latest, latest is stale
+        mt_conf = _ped_mtime(ORIGINAL_PED_DIR, "_ped.cnf")
+        mt_latest = _ped_mtime(PEDESTALS_DIR, "_latest.cnf")
+        if mt_conf and mt_latest and mt_conf > mt_latest:
+            self._latest.clear()
+
         n_o, n_l = len(self._configured), len(self._latest)
         age = ""
-        mt = _latest_ped_mtime()
-        if mt is not None:
-            age = f"    (measured {_time_ago(mt)})"
+        if mt_latest is not None and self._latest:
+            age = f"    (measured {_time_ago(mt_latest)})"
+        elif mt_latest is not None and not self._latest:
+            age = f"    (latest stale -- configured files are newer)"
         self._status_lbl.setText(
             f"Loaded {n_o} configured, {n_l} latest channels{age}")
         self._set_status_style("idle")
