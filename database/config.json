@@ -21,6 +21,7 @@
         "accept_trigger_bits": [],
         "reject_trigger_bits": [],
         "time_cut": {"min": 160, "max": 220},
+        "height_hist": {"min": 0, "max": 4000, "step": 10},
         "integral_hist": {"min": 0, "max": 20000, "step": 100},
         "time_hist": {"min": 0, "max": 400, "step": 4},
         "thresholds": {
@@ -107,6 +108,11 @@
         "tags": ["AutoReport", "PRad2"],
         "cert": "/usr/share/logbook-certs/logbook.cert",
         "key": "/usr/share/logbook-certs/logbook.key"
+    },
+    "ref_lines": {
+        "height_hist": [
+            {"axis": "x", "pos": 2800, "lw": 2, "ls": "dash", "layer":"above", "color": "#ff6"}
+        ]
     },
     "color_ranges": {
         "dq:integral":  [0, 10000],

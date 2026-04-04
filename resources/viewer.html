@@ -387,11 +387,12 @@ function linesToShapes(lines){
     if(!lines||!lines.length) return [];
     return lines.map(function(l){
         var color=l.color||'#ff6', width=l.lw||1, dash=l.ls||'solid';
+        var layer=l.layer||'above';
         if(l.axis==='y')
             return {type:'line',y0:l.pos,y1:l.pos,x0:0,x1:1,xref:'paper',
-                    line:{color:color,width:width,dash:dash}};
+                    line:{color:color,width:width,dash:dash},layer:layer};
         return {type:'line',x0:l.pos,x1:l.pos,y0:0,y1:1,yref:'paper',
-                line:{color:color,width:width,dash:dash}};
+                line:{color:color,width:width,dash:dash},layer:layer};
     });
 }
 function refShapes(key){ return linesToShapes(refLines[key]); }

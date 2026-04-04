@@ -877,28 +877,30 @@ class PedestalMonitorWindow(QMainWindow):
         has_latest = bool(self._latest)
         cur = self._latest if has_latest else self._configured
 
-        if self._right_mode == "rms" and self._measured:
-            rms = {n: d["rms"] for n, d in self._measured.items()}
-            self._map_right.set_data(
-                self._modules, rms, "Pedestal RMS (from measurement)",
-                DISPLAY_RMS_MIN, DISPLAY_RMS_MAX)
-        elif has_latest and self._configured:
-            delta = {n: cur[n] - self._configured[n]
-                     for n in cur if n in self._configured}
-            self._map_right.set_data(
-                self._modules, delta,
-                "Mean Difference (Current \u2212 Configured)",
-                DISPLAY_DELTA_MIN, DISPLAY_DELTA_MAX)
-        elif self._right_mode == "rms":
-            self._map_right.set_data(
-                self._modules, {},
-                "Pedestal RMS (no measurement data)",
-                DISPLAY_RMS_MIN, DISPLAY_RMS_MAX)
+        if self._right_mode == "rms":
+            if self._measured:
+                rms = {n: d["rms"] for n, d in self._measured.items()}
+                self._map_right.set_data(
+                    self._modules, rms, "Pedestal RMS (from measurement)",
+                    DISPLAY_RMS_MIN, DISPLAY_RMS_MAX)
+            else:
+                self._map_right.set_data(
+                    self._modules, {},
+                    "Pedestal RMS (no measurement data)",
+                    DISPLAY_RMS_MIN, DISPLAY_RMS_MAX)
         else:
-            self._map_right.set_data(
-                self._modules, {},
-                "Mean Difference (no comparison data)",
-                DISPLAY_DELTA_MIN, DISPLAY_DELTA_MAX)
+            if has_latest and self._configured:
+                delta = {n: cur[n] - self._configured[n]
+                         for n in cur if n in self._configured}
+                self._map_right.set_data(
+                    self._modules, delta,
+                    "Mean Difference (Current \u2212 Configured)",
+                    DISPLAY_DELTA_MIN, DISPLAY_DELTA_MAX)
+            else:
+                self._map_right.set_data(
+                    self._modules, {},
+                    "Mean Difference (no comparison data)",
+                    DISPLAY_DELTA_MIN, DISPLAY_DELTA_MAX)
         self._map_right.set_palette(self._palette_idx_right)
 
     def _update_report(self):
