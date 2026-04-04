@@ -426,6 +426,14 @@ if(!prad1){
             ev->trigger_bits = event->info.trigger_bits;
             ev->timestamp = event->info.timestamp;
 
+            bool cluster = false, LMS = false;
+            if(ev->trigger_bits & (1 << 8) ||
+               ev->trigger_bits & (1 << 9) ||
+               ev->trigger_bits & (1 << 10)||
+               ev->trigger_bits & (1 << 11)) cluster = true;
+
+            if(ev->trigger_bits & (1 << 24)) LMS = true;
+            int fire_num = 0;
             // decode and reconstruct HyCal data
             for (int r = 0; r < event->nrocs; ++r) {
                 auto &roc = event->rocs[r];
@@ -449,12 +457,15 @@ if(!prad1){
                             if (wres.npeaks <= 0) continue;
                             adc = wres.peaks[0].integral;
                         }
+                        hycal.SetCalibConstant(mod->id, 0.2);
                         float energy = static_cast<float>(mod->energize(adc));
                         clusterer.AddHit(mod->index, energy);
                         ev->total_energy += energy;
+                        fire_num++;
                     }
                 }
             }
+            if( !(cluster && !LMS && fire_num < 100) ) continue; //apply trigger and fire number condition to select good events for reconstruction
             clusterer.FormClusters();
             std::vector<fdec::ClusterHit> hits;
             clusterer.ReconstructHits(hits);
