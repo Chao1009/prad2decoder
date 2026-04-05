@@ -1658,8 +1658,19 @@ void AppState::resolveFilterKeys()
 
 std::string AppState::loadFilter(const json &j)
 {
+    trigger_type_filter = {};
     waveform_filter = {};
     cluster_filter = {};
+
+    // trigger type filter
+    if (j.contains("trigger_type")) {
+        auto &tt = j["trigger_type"];
+        if (tt.contains("enable")) trigger_type_filter.enable = tt["enable"];
+        if (tt.contains("accept") && tt["accept"].is_array()) {
+            for (auto &v : tt["accept"])
+                trigger_type_filter.accept.push_back(static_cast<uint8_t>(v.get<int>()));
+        }
+    }
 
     if (j.contains("waveform")) {
         auto &w = j["waveform"];
@@ -1709,6 +1720,7 @@ std::string AppState::loadFilter(const json &j)
 
 void AppState::unloadFilter()
 {
+    trigger_type_filter = {};
     waveform_filter = {};
     cluster_filter = {};
     filter_wf_keys.clear();
@@ -1760,6 +1772,10 @@ bool AppState::evaluateFilter(fdec::EventData &event,
                               ssp::SspEventData *ssp) const
 {
     if (!filterActive()) return true;
+
+    // --- trigger type filter (fast, check first) ---
+    if (trigger_type_filter.enable && !trigger_type_filter(event.info.trigger_type))
+        return false;
 
     bool is_adc1881m = (daq_cfg.adc_format == "adc1881m");
 

@@ -201,6 +201,17 @@ struct AppState {
     int      nblocks_hist_step   = 1;
 
     // ---- Event filters (loaded from external JSON via loadFilter) -----------
+    // trigger_type filter: if enabled, only events with trigger_type in accept pass
+    struct TriggerTypeFilter {
+        bool enable = false;
+        std::vector<uint8_t> accept;  // empty when disabled
+        bool operator()(uint8_t tt) const {
+            if (!enable || accept.empty()) return true;
+            for (auto t : accept) if (t == tt) return true;
+            return false;
+        }
+    } trigger_type_filter;
+
     WaveformFilter waveform_filter;
     ClusterFilter  cluster_filter;
     // resolved indices for fast filter evaluation
@@ -321,7 +332,7 @@ struct AppState {
     std::string loadFilter(const nlohmann::json &j);
     void unloadFilter();
     nlohmann::json filterToJson() const;
-    bool filterActive() const { return waveform_filter.enable || cluster_filter.enable; }
+    bool filterActive() const { return trigger_type_filter.enable || waveform_filter.enable || cluster_filter.enable; }
     bool evaluateFilter(fdec::EventData &event, ssp::SspEventData *ssp) const;
 
     // Fill common config fields into a JSON object (used by both viewer and monitor).

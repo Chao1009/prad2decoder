@@ -1075,9 +1075,27 @@ function init(){
         const clOn=document.getElementById('flt-cl-enable').checked;
         document.getElementById('flt-cl-fields').style.opacity=clOn?'1':'0.4';
         document.querySelectorAll('#flt-cl-fields input').forEach(i=>{if(i.type!=='checkbox')i.disabled=!clOn;});
+        const ttOn=document.getElementById('flt-tt-enable').checked;
+        document.getElementById('flt-tt-fields').style.opacity=ttOn?'1':'0.4';
+        document.querySelectorAll('#flt-tt-checks input').forEach(i=>{i.disabled=!ttOn;});
     }
     function parseModuleList(s){ return s.split(/[,\s]+/).map(x=>x.trim()).filter(x=>x); }
     function optFloat(id){ const v=document.getElementById(id).value; return v===''?undefined:parseFloat(v); }
+
+    // build trigger type checkboxes in filter dialog
+    const ttContainer=document.getElementById('flt-tt-checks');
+    if(ttContainer && triggerTypeDef.length){
+        for(const d of triggerTypeDef){
+            const lbl=document.createElement('label');
+            lbl.style.cssText='display:flex;align-items:center;gap:3px;cursor:pointer';
+            const cb=document.createElement('input');
+            cb.type='checkbox'; cb.checked=true;
+            cb.dataset.trigtype=parseInt(d.type,16);
+            lbl.appendChild(cb);
+            lbl.appendChild(document.createTextNode(d.label||d.name));
+            ttContainer.appendChild(lbl);
+        }
+    }
 
     document.getElementById('btn-filter').onclick=()=>openFilterDialog();
     document.getElementById('filter-dialog-close').onclick=()=>closeFilterDialog();
@@ -1085,8 +1103,17 @@ function init(){
     fltBackdrop.onclick=()=>closeFilterDialog();
     document.getElementById('flt-wf-enable').onchange=toggleFilterFields;
     document.getElementById('flt-cl-enable').onchange=toggleFilterFields;
+    document.getElementById('flt-tt-enable').onchange=toggleFilterFields;
     document.getElementById('flt-apply').onclick=()=>{
         const fj={};
+        // trigger type
+        if(document.getElementById('flt-tt-enable').checked){
+            const accept=[];
+            document.querySelectorAll('#flt-tt-checks input[type="checkbox"]').forEach(cb=>{
+                if(cb.checked) accept.push(parseInt(cb.dataset.trigtype));
+            });
+            fj.trigger_type={enable:true, accept};
+        }
         // waveform
         const wf={enable:document.getElementById('flt-wf-enable').checked};
         const wfMods=parseModuleList(document.getElementById('flt-wf-modules').value);
