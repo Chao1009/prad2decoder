@@ -37,7 +37,7 @@ function timeCutShapes(xMax){
 function wfLayout(title, xMax){
     return {...PL,
         title:{text:title, font:{size:11,color:'#ccc'}},
-        xaxis:{...PL.xaxis, title:'Time (ns)', range:[0, xMax]},
+        xaxis:{...PL.xaxis, title:'Time (ns)', range:[0, xMax], autorange:false},
         yaxis:{...PL.yaxis, title:'ADC'},
         shapes:timeCutShapes(xMax),
     };
