@@ -1144,11 +1144,8 @@ function clearFrontend(){
     document.getElementById('wf-stack-count').style.display='none';
     document.getElementById('btn-wf-stack-reset').style.display='none';
 
-    // deselect module and blank all DQ plots
-    selectedModule=null;
-    document.getElementById('detail-header').innerHTML=
-        '<div class="empty-msg">Click a module to view details</div>';
-    Plotly.react('waveform-div',[], wfLayout('', wfWindowNs()), PC2);
+    // blank DQ plots but keep selected module
+    Plotly.react('waveform-div',[], wfLayout(selectedModule?selectedModule.n:'', wfWindowNs()), PC2);
     Plotly.react('heighthist-div',[],{...PL,title:{text:'Height Histogram',font:{size:10,color:'#555'}}},PC2);
     Plotly.react('inthist-div',[],{...PL,title:{text:'Integral Histogram',font:{size:10,color:'#555'}}},PC2);
     Plotly.react('poshist-div',[],{...PL,title:{text:'Peak Position',font:{size:10,color:'#555'}}},PC2);
