@@ -29,6 +29,7 @@ struct ReconEventData;
 #include <string>
 #include <mutex>
 #include <atomic>
+#include <iostream>
 
 // Trigger filter: reject overrides accept. accept==0 means accept all.
 struct TriggerFilter {
