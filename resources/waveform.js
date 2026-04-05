@@ -139,11 +139,24 @@ function renderWaveform(mod, key, d, samples){
             marker:{color:col,size:7,symbol:'diamond'},showlegend:false});
     });
 
+    // time cut: dim regions outside the window + dashed boundary lines
+    const shapes = refShapes('waveform') || [];
+    if (histConfig.time_min !== undefined && histConfig.time_max !== undefined) {
+        const dim = {type:'rect', yref:'paper', y0:0, y1:1,
+            fillcolor:'rgba(0,0,0,0.35)', line:{width:0}, layer:'above'};
+        shapes.push({...dim, xref:'x', x0:0, x1:histConfig.time_min});
+        shapes.push({...dim, xref:'x', x0:histConfig.time_max, x1:samples.length-1});
+        const edge = {type:'line', yref:'paper', y0:0, y1:1,
+            line:{color:'rgba(255,200,50,0.5)', width:1, dash:'dash'}};
+        shapes.push({...edge, x0:histConfig.time_min, x1:histConfig.time_min});
+        shapes.push({...edge, x0:histConfig.time_max, x1:histConfig.time_max});
+    }
+
     Plotly.react('waveform-div',traces,{...PL,
         title:{text:`${mod.n} — Event ${currentEvent}`,font:{size:11,color:'#ccc'}},
         xaxis:{...PL.xaxis,title:'Sample'},yaxis:{...PL.yaxis,title:'ADC'},
         legend:{x:1,y:1,xanchor:'right',bgcolor:'rgba(0,0,0,0.6)',font:{size:9}},
-        shapes:refShapes('waveform'),
+        shapes,
     },PC2);
 
     // peaks table
@@ -159,7 +172,7 @@ function renderWaveform(mod, key, d, samples){
 // =========================================================================
 // Histograms
 // =========================================================================
-function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, logYId, refKey){
+function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, logYId, refKey, timeCut){
     fetch(url).then(r=>r.json()).then(data=>{
         if(data.error||!data.bins||!data.bins.length){
             currentHist[divId]=null;
@@ -167,7 +180,6 @@ function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, 
             return;
         }
         const x=data.bins.map((_,i)=>binMin+(i+0.5)*binStep);
-        // store non-zero bins for copy
         const cx=[], cy=[];
         for(let i=0;i<data.bins.length;i++){if(data.bins[i]>0){cx.push(x[i]);cy.push(data.bins[i]);}}
         currentHist[divId]={x:cx,y:cy};
@@ -175,6 +187,17 @@ function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, 
         const entries=data.bins.reduce((a,b)=>a+b,0)+data.underflow+data.overflow;
         const stats=`${data.events} evts | Entries: ${entries}  Under: ${data.underflow}  Over: ${data.overflow}`;
         const xMin=binMin, xMax=binMin+data.bins.length*binStep;
+        const shapes = refKey ? (refShapes(refKey)||[]) : [];
+        if (timeCut && histConfig.time_min!==undefined && histConfig.time_max!==undefined) {
+            const dim={type:'rect',yref:'paper',y0:0,y1:1,
+                fillcolor:'rgba(0,0,0,0.35)',line:{width:0},layer:'below'};
+            shapes.push({...dim, x0:xMin, x1:histConfig.time_min});
+            shapes.push({...dim, x0:histConfig.time_max, x1:xMax});
+            const edge={type:'line',yref:'paper',y0:0,y1:1,
+                line:{color:'rgba(255,200,50,0.5)',width:1,dash:'dash'}};
+            shapes.push({...edge, x0:histConfig.time_min, x1:histConfig.time_min});
+            shapes.push({...edge, x0:histConfig.time_max, x1:histConfig.time_max});
+        }
         Plotly.react(divId,[{
             x,y:data.bins,type:'bar',marker:{color:barColor,line:{width:0}},
             hovertemplate:'%{x:.0f}: %{y}<extra></extra>',
@@ -184,7 +207,7 @@ function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, 
             yaxis:{...PL.yaxis,title:'Counts',
                 type:logYId&&document.getElementById(logYId).checked?'log':'linear'},
             bargap:0.05,
-            shapes:refKey?refShapes(refKey):[],
+            shapes,
         },PC2);
     }).catch(()=>{
         currentHist[divId]=null;
@@ -211,5 +234,5 @@ function showHistograms(mod){
         'Peak Integral', h.bin_min||0, h.bin_step||100, '#00b4d8', 'inthist-logy', 'integral_hist');
     fetchAndPlotHist('poshist-div',`/api/poshist/${key}`,
         `${mod.n} Peak Position`,
-        'Time (ns)', h.pos_min||0, h.pos_step||4, '#51cf66', null, 'time_hist');
+        'Time (ns)', h.pos_min||0, h.pos_step||4, '#51cf66', null, 'time_hist', true);
 }
