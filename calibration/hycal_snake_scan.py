@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QGroupBox, QPushButton, QLabel, QComboBox, QSpinBox,
     QDoubleSpinBox, QTextEdit, QProgressBar, QMessageBox, QSplitter,
-    QSizePolicy, QFrame,
+    QSizePolicy, QFrame, QDialog,
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QTimer, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont
@@ -644,6 +644,74 @@ class HyCalScanMapWidget(QWidget):
 
 
 # ============================================================================
+#  MODULE INFO DIALOG
+# ============================================================================
+
+class ModuleInfoDialog(QDialog):
+    """Pop-up showing module details with a Move To button."""
+
+    def __init__(self, mod: Module, ep, log_fn, parent=None):
+        super().__init__(parent)
+        self._mod = mod
+        self._ep = ep
+        self._log = log_fn
+        self.setWindowTitle(f"Module {mod.name}")
+        self.setStyleSheet(DARK_QSS)
+        self.setFixedWidth(320)
+
+        lo = QVBoxLayout(self)
+
+        # -- info grid --
+        px, py = module_to_ptrans(mod.x, mod.y)
+        in_limits = ptrans_in_limits(px, py)
+
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        rows = [
+            ("Name",     mod.name),
+            ("Type",     mod.mod_type),
+            ("Sector",   mod.sector or "--"),
+            ("Row/Col",  f"{mod.row} / {mod.col}" if mod.row else "--"),
+            ("Size",     f"{mod.sx:.2f} x {mod.sy:.2f} mm"),
+            ("HyCal",    f"({mod.x:.2f}, {mod.y:.2f}) mm"),
+            ("Ptrans",   f"({px:.2f}, {py:.2f}) mm"),
+            ("In limits", "Yes" if in_limits else "No"),
+        ]
+        for r, (label, value) in enumerate(rows):
+            lk = QLabel(f"{label}:")
+            lk.setStyleSheet(f"color: {C.DIM}; font: 9pt 'Consolas';")
+            lk.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(lk, r, 0)
+            lv = QLabel(str(value))
+            if label == "In limits" and not in_limits:
+                lv.setStyleSheet(f"color: {C.RED}; font: bold 9pt 'Consolas';")
+            grid.addWidget(lv, r, 1)
+        lo.addLayout(grid)
+
+        lo.addSpacing(8)
+
+        # -- buttons --
+        btn_row = QHBoxLayout()
+        btn_move = QPushButton(f"Move To {mod.name}")
+        btn_move.setProperty("cssClass", "accent")
+        btn_move.setEnabled(in_limits)
+        btn_move.clicked.connect(self._doMove)
+        btn_row.addWidget(btn_move)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.close)
+        btn_row.addWidget(btn_close)
+        lo.addLayout(btn_row)
+
+    def _doMove(self):
+        mod = self._mod
+        px, py = module_to_ptrans(mod.x, mod.y)
+        self._log(f"Direct move to {mod.name}  ptrans({px:.3f}, {py:.3f})")
+        if not epics_move_to(self._ep, px, py):
+            self._log(f"BLOCKED: ptrans({px:.3f}, {py:.3f}) outside limits", level="error")
+        self.close()
+
+
+# ============================================================================
 #  GUI
 # ============================================================================
 
@@ -1040,8 +1108,16 @@ class SnakeScanWindow(QMainWindow):
             self._selected_start_idx = self._scan_name_to_idx[name]
             idx = self._start_combo.findText(name)
             if idx >= 0: self._start_combo.setCurrentIndex(idx)
-            self._log(f"Selected start: {name}"); self._drawPathPreview()
+            self._drawPathPreview()
         self._map.setHighlight(name); self._updateCanvasLabel()
+
+        # When idle, pop up module info dialog
+        idle = self.engine.state in (ScanState.IDLE, ScanState.COMPLETED)
+        if idle and not self.observer:
+            mod = self._mod_by_name.get(name)
+            if mod:
+                dlg = ModuleInfoDialog(mod, self.ep, self._log, parent=self)
+                dlg.exec()
 
     # -- commands ------------------------------------------------------------
 
