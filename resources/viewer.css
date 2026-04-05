@@ -60,6 +60,12 @@ body { font-family:'Consolas','SF Mono',monospace; background:var(--bg); color:v
 .tab-dot.warn { display:block; background:#ffa500; }
 .tab-dot.alert { display:block; background:#f66; }
 
+/* time cut editable inputs */
+.tcut-input {
+    width:42px; background:var(--bg); border:1px solid var(--border); color:var(--text);
+    padding:1px 4px; border-radius:3px; font-family:inherit; font-size:11px; text-align:center;
+}
+
 .main { display:flex; height:calc(100vh - 66px - 22px); }
 
 /* --- clustering panel --- */

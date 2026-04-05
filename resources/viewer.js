@@ -886,7 +886,20 @@ function init(){
     document.getElementById('ev-input').onchange=e=>{const v=parseInt(e.target.value);if(v>=1&&v<=totalEvents)loadEvent(v);};
     document.getElementById('color-metric').onchange=()=>{syncDqRange();geoDq();};
     document.getElementById('log-scale').onchange=geoDq;
-    document.getElementById('time-cut').onchange=geoDq;
+    document.getElementById('time-cut').onchange=()=>{
+        geoDq();
+        if(selectedModule) showWaveform(selectedModule);
+    };
+    document.getElementById('tcut-min').onchange=e=>{
+        histConfig.time_min=parseFloat(e.target.value);
+        geoDq();
+        if(selectedModule) showWaveform(selectedModule);
+    };
+    document.getElementById('tcut-max').onchange=e=>{
+        histConfig.time_max=parseFloat(e.target.value);
+        geoDq();
+        if(selectedModule) showWaveform(selectedModule);
+    };
 
     // --- file browser ---
     document.getElementById('btn-open').onclick = openFileDialog;
@@ -1195,6 +1208,11 @@ function applyConfig(data){
     totalEvents=data.total_events||0;
     histEnabled=data.hist_enabled||false;
     histConfig=data.hist||{};
+    // populate time cut inputs
+    if(histConfig.time_min!==undefined)
+        document.getElementById('tcut-min').value=histConfig.time_min;
+    if(histConfig.time_max!==undefined)
+        document.getElementById('tcut-max').value=histConfig.time_max;
     refLines=data.ref_lines||{};
     triggerBitsDef=data.trigger_bits||[];
     triggerTypeDef=data.trigger_type||[];

@@ -102,10 +102,24 @@ function renderWaveform(mod, key, d, samples){
         for(const w of wfStackTraces) for(const v of w.y){ if(v<ylo) ylo=v; if(v>yhi) yhi=v; }
         const pad=(yhi-ylo)*0.05||5;
 
+        // time cut shading in stack mode (only when checkbox is checked)
+        const stackShapes = [];
+        if (isTimeCut()) {
+            const dim = {type:'rect', yref:'paper', y0:0, y1:1,
+                fillcolor:'rgba(0,0,0,0.35)', line:{width:0}, layer:'above'};
+            stackShapes.push({...dim, xref:'x', x0:0, x1:histConfig.time_min});
+            stackShapes.push({...dim, xref:'x', x0:histConfig.time_max, x1:tMax});
+            const edge = {type:'line', yref:'paper', y0:0, y1:1,
+                line:{color:'rgba(255,200,50,0.5)', width:1, dash:'dash'}};
+            stackShapes.push({...edge, x0:histConfig.time_min, x1:histConfig.time_min});
+            stackShapes.push({...edge, x0:histConfig.time_max, x1:histConfig.time_max});
+        }
+
         document.getElementById('wf-stack-count').textContent=`${wfStackTraces.length}/${maxStack}`;
         Plotly.react('waveform-div',traces,{...PL,
             title:{text:`${mod.n} — Stacked (${wfStackTraces.length})`,font:{size:11,color:'#ccc'}},
             xaxis:{...PL.xaxis,title:'Time (ns)'},yaxis:{...PL.yaxis,title:'ADC',range:[ylo-pad,yhi+pad],autorange:false},
+            shapes:stackShapes,
         },PC2);
 
         document.getElementById('peaks-tbody').innerHTML=
@@ -133,9 +147,9 @@ function renderWaveform(mod, key, d, samples){
             marker:{color:col,size:7,symbol:'diamond'},showlegend:false});
     });
 
-    // time cut: dim regions outside the window + dashed boundary lines
+    // time cut: dim regions outside the window (only when checkbox is checked)
     const shapes = refShapes('waveform') || [];
-    if (histConfig.time_min !== undefined && histConfig.time_max !== undefined) {
+    if (isTimeCut()) {
         const dim = {type:'rect', yref:'paper', y0:0, y1:1,
             fillcolor:'rgba(0,0,0,0.35)', line:{width:0}, layer:'above'};
         shapes.push({...dim, xref:'x', x0:0, x1:histConfig.time_min});
@@ -182,7 +196,7 @@ function fetchAndPlotHist(divId, url, title, xTitle, binMin, binStep, barColor, 
         const stats=`${data.events} evts | Entries: ${entries}  Under: ${data.underflow}  Over: ${data.overflow}`;
         const xMin=binMin, xMax=binMin+data.bins.length*binStep;
         const shapes = refKey ? (refShapes(refKey)||[]) : [];
-        if (timeCut && histConfig.time_min!==undefined && histConfig.time_max!==undefined) {
+        if (timeCut && isTimeCut()) {
             const dim={type:'rect',yref:'paper',y0:0,y1:1,
                 fillcolor:'rgba(0,0,0,0.35)',line:{width:0},layer:'below'};
             shapes.push({...dim, x0:xMin, x1:histConfig.time_min});
