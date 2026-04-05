@@ -75,32 +75,29 @@ function renderWaveform(mod, key, d, samples){
         return;
     }
 
-    const peaks=d.pk||[], x=samples.map((_,i)=>i);
+    const NS_PER_SAMPLE = 4;  // FADC250: 250 MHz → 4 ns/sample
+    const peaks=d.pk||[], x=samples.map((_,i)=>i*NS_PER_SAMPLE);
+    const tMax = (samples.length-1)*NS_PER_SAMPLE;
     currentWaveform={x, y:Array.from(samples)};
 
     // --- stacking mode ---
     if(wfStackEnabled){
-        // add current waveform to stack
         wfStackTraces.push({x:Array.from(x), y:Array.from(samples)});
 
-        // enforce max stack size
         const maxStack=200;
         while(wfStackTraces.length>maxStack) wfStackTraces.shift();
 
-        // build traces: all stacked waveforms in dim color, no peaks
         const traces=wfStackTraces.map(w=>({
             x:w.x, y:w.y, type:'scatter', mode:'lines',
             line:{color:'rgba(119,119,170,0.25)', width:1},
             showlegend:false, hoverinfo:'skip',
         }));
-        // highlight the latest waveform
         if(wfStackTraces.length>0){
             const last=wfStackTraces[wfStackTraces.length-1];
             traces.push({x:last.x, y:last.y, type:'scatter', mode:'lines',
                 name:'Latest', line:{color:'#7777aa', width:1.5}, showlegend:false});
         }
 
-        // compute fixed y-range from all stacked traces
         let ylo=Infinity, yhi=-Infinity;
         for(const w of wfStackTraces) for(const v of w.y){ if(v<ylo) ylo=v; if(v>yhi) yhi=v; }
         const pad=(yhi-ylo)*0.05||5;
@@ -108,10 +105,9 @@ function renderWaveform(mod, key, d, samples){
         document.getElementById('wf-stack-count').textContent=`${wfStackTraces.length}/${maxStack}`;
         Plotly.react('waveform-div',traces,{...PL,
             title:{text:`${mod.n} — Stacked (${wfStackTraces.length})`,font:{size:11,color:'#ccc'}},
-            xaxis:{...PL.xaxis,title:'Sample'},yaxis:{...PL.yaxis,title:'ADC',range:[ylo-pad,yhi+pad],autorange:false},
+            xaxis:{...PL.xaxis,title:'Time (ns)'},yaxis:{...PL.yaxis,title:'ADC',range:[ylo-pad,yhi+pad],autorange:false},
         },PC2);
 
-        // skip peaks table in stack mode
         document.getElementById('peaks-tbody').innerHTML=
             '<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:8px">Stack mode — peaks hidden</td></tr>';
         return;
@@ -120,22 +116,20 @@ function renderWaveform(mod, key, d, samples){
     // --- normal (single event) mode ---
     const traces=[
         {x,y:samples,type:'scatter',mode:'lines',name:'Waveform',line:{color:'#7777aa',width:1}},
-        {x:[0,samples.length-1],y:[d.pm,d.pm],type:'scatter',mode:'lines',name:'Pedestal',line:{color:'#555',width:1,dash:'dash'}},
+        {x:[0,tMax],y:[d.pm,d.pm],type:'scatter',mode:'lines',name:'Pedestal',line:{color:'#555',width:1,dash:'dash'}},
     ];
     const thr=d.pm+Math.max(5*d.pr,3);
-    traces.push({x:[0,samples.length-1],y:[thr,thr],type:'scatter',mode:'lines',line:{color:'#333',width:1,dash:'dot'},showlegend:false});
+    traces.push({x:[0,tMax],y:[thr,thr],type:'scatter',mode:'lines',line:{color:'#333',width:1,dash:'dot'},showlegend:false});
     peaks.forEach((p,i)=>{
         const col=PC[i%PC.length],px=[],py=[];
-        for(let j=p.l;j<=p.r;j++){px.push(j);py.push(samples[j]);}
-        // hex to rgba for fill
+        for(let j=p.l;j<=p.r;j++){px.push(j*NS_PER_SAMPLE);py.push(samples[j]);}
         const r=parseInt(col.slice(1,3),16),g=parseInt(col.slice(3,5),16),b=parseInt(col.slice(5,7),16);
         const fill=`rgba(${r},${g},${b},0.18)`;
-        // shaded integral region: pedestal baseline then waveform with fill between
         traces.push({x:px,y:px.map(()=>d.pm),type:'scatter',mode:'lines',
             line:{width:0},showlegend:false,hoverinfo:'skip'});
         traces.push({x:px,y:py,type:'scatter',mode:'lines',name:`Peak ${i}`,
             line:{color:col,width:2},fill:'tonexty',fillcolor:fill});
-        traces.push({x:[p.p],y:[samples[p.p]],type:'scatter',mode:'markers',
+        traces.push({x:[p.p*NS_PER_SAMPLE],y:[samples[p.p]],type:'scatter',mode:'markers',
             marker:{color:col,size:7,symbol:'diamond'},showlegend:false});
     });
 
@@ -145,7 +139,7 @@ function renderWaveform(mod, key, d, samples){
         const dim = {type:'rect', yref:'paper', y0:0, y1:1,
             fillcolor:'rgba(0,0,0,0.35)', line:{width:0}, layer:'above'};
         shapes.push({...dim, xref:'x', x0:0, x1:histConfig.time_min});
-        shapes.push({...dim, xref:'x', x0:histConfig.time_max, x1:samples.length-1});
+        shapes.push({...dim, xref:'x', x0:histConfig.time_max, x1:tMax});
         const edge = {type:'line', yref:'paper', y0:0, y1:1,
             line:{color:'rgba(255,200,50,0.5)', width:1, dash:'dash'}};
         shapes.push({...edge, x0:histConfig.time_min, x1:histConfig.time_min});
@@ -154,7 +148,7 @@ function renderWaveform(mod, key, d, samples){
 
     Plotly.react('waveform-div',traces,{...PL,
         title:{text:`${mod.n} — Event ${currentEvent}`,font:{size:11,color:'#ccc'}},
-        xaxis:{...PL.xaxis,title:'Sample'},yaxis:{...PL.yaxis,title:'ADC'},
+        xaxis:{...PL.xaxis,title:'Time (ns)'},yaxis:{...PL.yaxis,title:'ADC'},
         legend:{x:1,y:1,xanchor:'right',bgcolor:'rgba(0,0,0,0.6)',font:{size:9}},
         shapes,
     },PC2);

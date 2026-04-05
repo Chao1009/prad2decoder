@@ -93,7 +93,7 @@ function geoHandleClick(cx,cy){
             currentHist={};
             document.getElementById('detail-header').innerHTML=
                 '<div class="empty-msg">Click a module to view details</div>';
-            Plotly.react('waveform-div',[],{...PL,xaxis:{...PL.xaxis,title:'Sample'},yaxis:{...PL.yaxis,title:'ADC'}},PC2);
+            Plotly.react('waveform-div',[],{...PL,xaxis:{...PL.xaxis,title:'Time (ns)'},yaxis:{...PL.yaxis,title:'ADC'}},PC2);
             Plotly.react('heighthist-div',[],{...PL,title:{text:'Height Histogram',font:{size:10,color:'#555'}}},PC2);
             Plotly.react('inthist-div',[],{...PL,title:{text:'Integral Histogram',font:{size:10,color:'#555'}}},PC2);
             Plotly.react('poshist-div',[],{...PL,title:{text:'Position Histogram',font:{size:10,color:'#555'}}},PC2);
@@ -1123,7 +1123,7 @@ function clearFrontend(){
     selectedModule=null;
     document.getElementById('detail-header').innerHTML=
         '<div class="empty-msg">Click a module to view details</div>';
-    Plotly.react('waveform-div',[],{...PL,xaxis:{...PL.xaxis,title:'Sample'},yaxis:{...PL.yaxis,title:'ADC'}},PC2);
+    Plotly.react('waveform-div',[],{...PL,xaxis:{...PL.xaxis,title:'Time (ns)'},yaxis:{...PL.yaxis,title:'ADC'}},PC2);
     Plotly.react('heighthist-div',[],{...PL,title:{text:'Height Histogram',font:{size:10,color:'#555'}}},PC2);
     Plotly.react('inthist-div',[],{...PL,title:{text:'Integral Histogram',font:{size:10,color:'#555'}}},PC2);
     Plotly.react('poshist-div',[],{...PL,title:{text:'Peak Position',font:{size:10,color:'#555'}}},PC2);
