@@ -24,11 +24,29 @@ namespace analysis {
 // Projection
 // ============================================================================
 
-ProjectHit MatchingTools::GetProjectionHits(float x, float y, float z,
-                                            float projection_z) const
-{
+ProjectHit GetProjectionHits(float x, float y, float z,
+                                            float projection_z)
+{   
+    // simple linear projection from (x,y,z) to (x_proj, y_proj, projection_z)
+    // in target and beam center coordinates
     float scale = projection_z / z;
     return ProjectHit(x * scale, y * scale, projection_z);
+}
+
+void GetProjection(HCHit &hc, float projection_z)
+{
+    ProjectHit proj = GetProjectionHits(hc.x, hc.y, hc.z, projection_z);
+    hc.x = proj.x_proj;
+    hc.y = proj.y_proj;
+    hc.z = proj.z_proj;
+}
+
+void GetProjection(GEMHit &gem, float projection_z)
+{
+    ProjectHit proj = GetProjectionHits(gem.x, gem.y, gem.z, projection_z);
+    gem.x = proj.x_proj;
+    gem.y = proj.y_proj;
+    gem.z = proj.z_proj;
 }
 
 // Distance between HyCal cluster and GEM hit after projecting GEM to HyCal z
@@ -77,9 +95,9 @@ bool MatchingTools::PreMatch(const analysis::HCHit &hycal,
 
 void MatchingTools::PostMatch(MatchHit &h) const
 {
-    if (h.gem1_hits.empty() && h.gem2_hits.empty() &&
-        h.gem3_hits.empty() && h.gem4_hits.empty())
-        return;
+    if( (h.gem1_hits.empty() && h.gem2_hits.empty() ) ||
+        (h.gem3_hits.empty() && h.gem4_hits.empty() ) )
+        return; // require at least one match in both upstream and downstream pairs
 
     // sort each plane's candidates by projection distance (closest first)
     auto by_dist = [this, &h](const analysis::GEMHit &a, const analysis::GEMHit &b) {
@@ -96,25 +114,37 @@ void MatchingTools::PostMatch(MatchHit &h) const
     if (!h.gem3_hits.empty()) fdec::set_bit(h.mflag, kGEM3Match);
     if (!h.gem4_hits.empty()) fdec::set_bit(h.mflag, kGEM4Match);
 
-    // pick the best match across all planes (smallest projection distance)
-    float best_dist = 1e9f;
-    analysis::GEMHit best_gem{};
-
-    auto check = [&](const std::vector<analysis::GEMHit> &plane) {
+    // pick the best match from upstream pair (GEM1/GEM2)
+    float best_up = 1e9f;
+    analysis::GEMHit best_gem_up{};
+    auto check_up = [&](const std::vector<analysis::GEMHit> &plane) {
         if (!plane.empty()) {
             float d = ProjectionDistance(h.hycal_hit, plane.front());
-            if (d < best_dist) {
-                best_dist = d;
-                best_gem  = plane.front();
+            if (d < best_up) {
+                best_up = d;
+                best_gem_up = plane.front();
             }
         }
     };
-    check(h.gem1_hits);
-    check(h.gem2_hits);
-    check(h.gem3_hits);
-    check(h.gem4_hits);
+    check_up(h.gem1_hits);
+    check_up(h.gem2_hits);
+    h.gem[0] = best_gem_up;
 
-    h.gem = best_gem;
+    // pick the best match from downstream pair (GEM3/GEM4)
+    float best_down = 1e9f;
+    analysis::GEMHit best_gem_down{};
+    auto check_down = [&](const std::vector<analysis::GEMHit> &plane) {
+        if (!plane.empty()) {
+            float d = ProjectionDistance(h.hycal_hit, plane.front());
+            if (d < best_down) {
+                best_down = d;
+                best_gem_down = plane.front();
+            }
+        }
+    };
+    check_down(h.gem3_hits);
+    check_down(h.gem4_hits);
+    h.gem[1] = best_gem_down;
 }
 
 // ============================================================================
