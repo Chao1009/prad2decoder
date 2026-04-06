@@ -938,10 +938,14 @@ class GainEqualizerWindow(QMainWindow):
         mod_name = mod.name if mod else ""
         target_bin = int((eng.target_adc - eng.analyzer.bin_min) / eng.analyzer.bin_step) \
             if eng.analyzer.bin_step > 0 else None
-        self._histogram.setTitle(mod_name)
-        info_parts = []
+        # title: module name + HV readings
+        title_parts = [mod_name]
+        if eng.last_vmon is not None:
+            title_parts.append(f"VMon={eng.last_vmon:.1f}")
         if eng.last_vset is not None:
-            info_parts.append(f"V={eng.last_vset:.1f}")
+            title_parts.append(f"VSet={eng.last_vset:.1f}")
+        self._histogram.setTitle("  ".join(title_parts))
+        info_parts = []
         if eng.last_edge_adc is not None:
             info_parts.append(f"edge={eng.last_edge_adc:.0f}")
         if eng.last_dv is not None:

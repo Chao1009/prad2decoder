@@ -37,39 +37,47 @@ class SpectrumAnalyzer:
     def __init__(self, target_adc: float = 3200.0,
                  bin_step: float = 10.0, bin_min: float = 0.0,
                  smooth_window: int = 5,
-                 edge_fraction: float = 0.02):
+                 edge_fraction: float = 0.02,
+                 pedestal_adc: float = 200.0):
         self.target_adc = target_adc
         self.bin_step = bin_step
         self.bin_min = bin_min
         self.smooth_window = smooth_window  # moving-average window
         self.edge_fraction = edge_fraction  # cumulative fraction threshold
+        self.pedestal_adc = pedestal_adc    # exclude bins below this ADC from total
 
     def find_right_edge(self, bins: List[int]) -> Optional[int]:
         """Find the right-edge bin of the Bremsstrahlung continuum spectrum.
 
-        Two-pass algorithm that adapts to any statistics level:
+        Algorithm:
 
-        1. **Smooth** the histogram with a moving average (window=5) to
+        1. **Exclude pedestal**: bins below ``pedestal_adc`` (default 200)
+           are ignored when computing the total.  The low-ADC pedestal/noise
+           peak can dominate the total and skew the cumulative fraction.
+        2. **Smooth** the histogram with a moving average (window=5) to
            reduce statistical fluctuations.
-        2. **Cumulative fraction from right**: walk from the rightmost bin
-           leftward, accumulating counts.  The pile-up tail is sparse and
-           contributes very little.  When the cumulative reaches
-           ``edge_fraction`` (default 2%) of the total counts, we've
-           entered the continuum body.
-        3. **Confirm falling edge**: the smoothed value at this bin should
-           be less than the smoothed value a few bins to the left (i.e.
-           we're on the descending slope, not the peak body).
+        3. **Cumulative fraction from right**: walk from the rightmost bin
+           leftward, accumulating counts (above pedestal only).  When the
+           cumulative reaches ``edge_fraction`` (default 2%) of the
+           signal total, we've entered the continuum body.
+        4. **Confirm falling edge**: refine the candidate by checking the
+           smoothed slope to find the actual drop-off point.
 
         Returns the bin index, or None if no edge found.
         """
         n = len(bins)
         if n < self.smooth_window + 3:
             return None
-        total = sum(bins)
-        if total <= 0:
+
+        # step 1: exclude pedestal region from total
+        ped_bin = int((self.pedestal_adc - self.bin_min) / self.bin_step) \
+            if self.bin_step > 0 else 0
+        ped_bin = max(0, min(ped_bin, n))
+        signal_total = sum(bins[ped_bin:])
+        if signal_total <= 0:
             return None
 
-        # step 1: smooth with moving average
+        # step 2: smooth with moving average
         hw = self.smooth_window // 2
         smooth = [0.0] * n
         for i in range(n):
@@ -77,11 +85,11 @@ class SpectrumAnalyzer:
             hi = min(n, i + hw + 1)
             smooth[i] = sum(bins[lo:hi]) / (hi - lo)
 
-        # step 2: cumulative from right, find where we reach edge_fraction
-        threshold = total * self.edge_fraction
+        # step 3: cumulative from right (above pedestal only)
+        threshold = signal_total * self.edge_fraction
         cumul = 0.0
         candidate = None
-        for i in range(n - 1, -1, -1):
+        for i in range(n - 1, ped_bin - 1, -1):
             cumul += bins[i]
             if cumul >= threshold:
                 candidate = i
@@ -334,23 +342,30 @@ class HVClient:
                     else:
                         raise
 
-    def get_voltage(self, name: str) -> Optional[dict]:
-        """Query current voltage info for a module by name."""
+    def get_voltage(self, name: str, retries: int = 3) -> Optional[dict]:
+        """Query current voltage info for a module by name, with retries."""
         if self._ws is None:
             self._log(f"HV: GET {name} → not connected", level="warn")
             return None
-        try:
-            self._send({"type": "get_voltage", "name": name})
-        except Exception as e:
-            self._log(f"HV: GET {name} → send failed: {e}", level="error")
-            return None
-        resp = self._wait_response("get_voltage_response", timeout=5)
-        if resp:
-            self._log(f"HV: GET {name} → vset={resp.get('vset'):.1f} "
-                      f"vmon={resp.get('vmon'):.1f} limit={resp.get('limit'):.0f}")
-        else:
-            self._log(f"HV: GET {name} → no response", level="warn")
-        return resp
+        for attempt in range(retries):
+            # clear any stale responses before sending
+            with self._resp_lock:
+                self._responses.pop("get_voltage_response", None)
+            try:
+                self._send({"type": "get_voltage", "name": name})
+            except Exception as e:
+                self._log(f"HV: GET {name} → send failed: {e}", level="error")
+                return None
+            resp = self._wait_response("get_voltage_response", timeout=10)
+            if resp:
+                self._log(f"HV: GET {name} → vset={resp.get('vset'):.1f} "
+                          f"vmon={resp.get('vmon'):.1f} limit={resp.get('limit'):.0f}")
+                return resp
+            if attempt < retries - 1:
+                self._log(f"HV: GET {name} → no response, retrying ({attempt+2}/{retries})",
+                          level="warn")
+        self._log(f"HV: GET {name} → no response after {retries} attempts", level="error")
+        return None
 
     def set_voltage(self, name: str, value: float,
                     old_value: float = 0.0) -> bool:
@@ -432,6 +447,7 @@ class GainScanEngine:
         self.last_dv: Optional[float] = None
         self.last_bins: List[int] = []
         self.last_vset: Optional[float] = None
+        self.last_vmon: Optional[float] = None
         self.module_counts = 0
         self.collect_rate: float = 0.0  # Hz, updated during collection
 
@@ -507,6 +523,7 @@ class GainScanEngine:
                 self.last_dv = None
                 self.last_bins = []
                 self.last_vset = None
+                self.last_vmon = None
                 self.iteration_history = []
                 mod = self.path[i]
                 px, py = module_to_ptrans(mod.x, mod.y)
@@ -557,6 +574,7 @@ class GainScanEngine:
                         hv_info = self.hv.get_voltage(mod.name)
                         if hv_info:
                             self.last_vset = hv_info.get("vset")
+                            self.last_vmon = hv_info.get("vmon")
                     except Exception:
                         pass  # vset stays as previous value or None
 
@@ -587,6 +605,7 @@ class GainScanEngine:
                         "edge_bin": edge,
                         "edge_adc": edge_adc,
                         "vset": self.last_vset,
+                        "vmon": self.last_vmon,
                         "time": datetime.now().strftime("%H:%M:%S"),
                     })
 
@@ -711,8 +730,10 @@ class GainScanEngine:
             p.setPen(QColor("#8b949e"))
             p.setFont(QFont("Consolas", 9))
             info = f"{snap['time']}"
+            if snap.get("vmon") is not None:
+                info += f"  VMon={snap['vmon']:.1f}"
             if snap.get("vset") is not None:
-                info += f"  V={snap['vset']:.1f}"
+                info += f"  VSet={snap['vset']:.1f}"
             info += f"  edge={snap['edge_adc']:.0f}"
             p.drawText(QRectF(PAD_L, y0 + 4, pw, PAD_T - 4),
                        Qt.AlignmentFlag.AlignRight, info)
