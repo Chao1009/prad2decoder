@@ -748,12 +748,9 @@ class SnakeScanWindow(QMainWindow):
     def _updateCanvasLabel(self):
         n_pwo4 = sum(1 for m in self.scan_modules if m.mod_type == "PbWO4")
         n_lg = sum(1 for m in self.scan_modules if m.mod_type == "PbGlass")
-        base = f"Module Map ({n_pwo4} PbWO4 + {n_lg} PbGlass)" if n_lg else f"Module Map ({n_pwo4} PbWO4)"
-        if self._selected_mod_name:
-            mod = self._mod_by_name.get(self._selected_mod_name)
-            if mod:
-                px, py = module_to_ptrans(mod.x, mod.y)
-                base += f" | {mod.name} ({mod.mod_type})  HyCal({mod.x:.1f}, {mod.y:.1f})  ptrans({px:.1f}, {py:.1f})"
+        base = f"Scan Path: {n_pwo4} PbWO4 + {n_lg} LG" if n_lg else f"Scan Path: {n_pwo4} PbWO4"
+        if not self.scan_modules:
+            base = "Scan Path: none"
         self._canvas_label.setText(f" {base} ")
 
     def _updateCanvas(self):
