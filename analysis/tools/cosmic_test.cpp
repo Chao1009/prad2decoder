@@ -232,6 +232,7 @@ int main(int argc, char *argv[])
 
     // ── JSON output: name, peak, event_count ─────────────────────────────
     {
+        if (run_number <= 0) return 0; // skip JSON output if run number is not specified 
         std::ofstream json_out(Form("cosmic_modules_%d.json", run_number));
         json_out << "[\n";
         bool first = true;
