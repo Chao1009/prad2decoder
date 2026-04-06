@@ -3,7 +3,7 @@
 // get the ratio of expected/measured peak position, and write to a database file. 
 //=============================================================================
 //
-// Usage: epCalib <input.root> [-o output_calib_file] [-D daq_config.json] [-n max_events]
+// Usage: epCalib <input_raw.root|dir> [-o output_calib_file] [-D daq_config.json] [-n max_events]
 //
 // Reads rawdata(adc level).root (peak mode), runs HyCal clustering, fills per-module energy histograms
 //=============================================================================
@@ -20,6 +20,8 @@
 #include <TTree.h>
 #include <TLatex.h>
 #include <TCanvas.h>
+#include <TChain.h>
+
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -29,6 +31,8 @@
 #ifndef DATABASE_DIR
 #define DATABASE_DIR "."
 #endif
+
+namespace fs = std::filesystem;
 
 using EventVars       = prad2::RawEventData;
 void SetReadBranches(TTree *tree, EventVars &ev, bool write_peaks)
@@ -54,9 +58,11 @@ void SetReadBranches(TTree *tree, EventVars &ev, bool write_peaks)
     }
 }
 
+static std::vector<std::string> collectRootFiles(const std::string &path);
+
 int main(int argc, char *argv[])
 {
-    std::string input, output_calib_file, config_file, daq_config_file;
+    std::string output_calib_file, config_file, daq_config_file;
     std::string db_dir = DATABASE_DIR;
     if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
     int max_events = -1;
@@ -73,11 +79,16 @@ int main(int argc, char *argv[])
             case 'n': max_events = std::atoi(optarg); break;
         }
     }
-    if (optind < argc) input = argv[optind];
 
-    if (input.empty()) {
-        std::cerr << "Usage: epCalib <iput.root> [-o output_calib_file] "
-                  << " [-D daq_config.json] [-n max_events]\n";
+    // collect input files (can be files, directories, or mixed)
+    std::vector<std::string> root_files;
+    for (int i = optind; i < argc; i++) {
+        auto f = collectRootFiles(argv[i]);
+        root_files.insert(root_files.end(), f.begin(), f.end());
+    }
+    if (root_files.empty()) {
+        std::cerr << "No input files specified.\n";
+        std::cerr << "Usage: quick_check <input_raw.root|dir> [more files...] [-o out.root] [-n max_events]\n";
         return 1;
     }
 
@@ -85,14 +96,15 @@ int main(int argc, char *argv[])
         output_calib_file = db_dir + "/fast_ep_calibration/calib.txt";
     }
 
-    TFile *infile = TFile::Open(input.c_str(), "READ");
-    if (!infile || !infile->IsOpen()) {
-        std::cerr << "Cannot open " << input << "\n";
-        return 1;
+    // --- setup TChain and branches ---
+    TChain *chain = new TChain("events");
+    for (const auto &f : root_files) {
+        chain->Add(f.c_str());
+        std::cerr << "Added file: " << f << "\n";
     }
-    TTree *tree = (TTree *)infile->Get("events");
+    TTree *tree = chain;
     if (!tree) {
-        std::cerr << "Cannot find TTree 'events' in " << input << "\n";
+        std::cerr << "Cannot find TTree 'events' in input files\n";
         return 1;
     }
 
@@ -192,7 +204,23 @@ int main(int argc, char *argv[])
     outfile.cd();
     ratio_module_all->Write();
     outfile.Close();
-    infile->Close();
 
     return 0;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+static std::vector<std::string> collectRootFiles(const std::string &path)
+{
+    std::vector<std::string> files;
+    if (fs::is_directory(path)) {
+        for (auto &entry : fs::directory_iterator(path)) {
+            if (entry.is_regular_file() &&
+                entry.path().filename().string().find("_raw.root") != std::string::npos)
+                files.push_back(entry.path().string());
+        }
+        std::sort(files.begin(), files.end());
+    } else {
+        files.push_back(path);
+    }
+    return files;
 }

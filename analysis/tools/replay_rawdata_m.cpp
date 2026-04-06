@@ -50,7 +50,7 @@ static std::string makeOutputPath(const std::string &evio_path)
     auto pos = out.find(".evio");
     if (pos != std::string::npos)
         out = out.substr(0, pos) + out.substr(pos + 5);
-    out += ".root";
+    out += "_raw.root";
     return out;
 }
 
