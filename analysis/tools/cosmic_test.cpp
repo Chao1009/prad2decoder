@@ -96,7 +96,7 @@ int main(int argc, char *argv[])
 
     TChain *cosmic_chain = new TChain("events");
     for(int i = 0; i<=file_number-1; i++){
-        std::string filename = Form("/data/stage6/prad_023%d/prad_023%d.000%02d.root",run_number, run_number, i);
+        std::string filename = Form("/data/stage6/prad_023%d/prad_023%d.000%02d_raw.root",run_number, run_number, i);
         cosmic_chain->Add(filename.c_str());
     }
 
