@@ -112,10 +112,12 @@ class HistogramWidget(QWidget):
             p.drawText(QRectF(L, 2, pw, T - 2), Qt.AlignmentFlag.AlignRight, self._info)
             p.end(); return
 
+        import math as _math
         bins = self._bins
         n = len(bins)
         vmax = max(bins) if bins else 1
         if vmax == 0: vmax = 1
+        log_vmax = _math.log10(max(vmax, 1))
 
         # title + info
         p.setPen(QColor(C.ACCENT))
@@ -130,12 +132,13 @@ class HistogramWidget(QWidget):
         p.drawLine(L, T, L, T + ph)
         p.drawLine(L, T + ph, L + pw, T + ph)
 
-        # bars
+        # bars (log y scale)
         bar_w = pw / n
         p.setPen(Qt.PenStyle.NoPen)
         for i, v in enumerate(bins):
             if v <= 0: continue
-            bh = v / vmax * ph
+            frac = _math.log10(v) / log_vmax if log_vmax > 0 else 0
+            bh = frac * ph
             x = L + i * bar_w
             y = T + ph - bh
             p.fillRect(QRectF(x, y, max(bar_w - 0.5, 0.5), bh), QColor(C.ACCENT))
@@ -152,13 +155,26 @@ class HistogramWidget(QWidget):
             p.setPen(QPen(QColor(C.GREEN), 2))
             p.drawLine(int(ex), T, int(ex), T + ph)
 
-        # y-axis label (max)
+        # y-axis labels (log scale: 1, 10, 100, ...)
         p.setPen(QColor(C.DIM))
         p.setFont(QFont("Consolas", 9))
         p.drawText(QRectF(0, T - 2, L - 4, 14),
                    Qt.AlignmentFlag.AlignRight, f"{vmax}")
         p.drawText(QRectF(0, T + ph - 7, L - 4, 14),
-                   Qt.AlignmentFlag.AlignRight, "0")
+                   Qt.AlignmentFlag.AlignRight, "1")
+        # grid lines at powers of 10
+        p.setPen(QPen(QColor("#21262d"), 1, Qt.PenStyle.DotLine))
+        decade = 10
+        while decade < vmax:
+            frac = _math.log10(decade) / log_vmax
+            gy = T + ph - frac * ph
+            p.drawLine(L + 1, int(gy), L + pw, int(gy))
+            p.setPen(QColor(C.DIM))
+            p.setFont(QFont("Consolas", 8))
+            p.drawText(QRectF(0, gy - 7, L - 4, 14),
+                       Qt.AlignmentFlag.AlignRight, f"{decade}")
+            p.setPen(QPen(QColor("#21262d"), 1, Qt.PenStyle.DotLine))
+            decade *= 10
 
         p.end()
 
@@ -923,7 +939,7 @@ class GainEqualizerWindow(QMainWindow):
                 key = eng.key_map.get(mod.name)
                 if key and eng.module_counts > 0:
                     try:
-                        hist = eng.server.get_height_histogram(key)
+                        hist = eng.server.get_height_histogram(key, quiet=True)
                         live_bins = hist.get("bins", [])
                         if live_bins:
                             self._histogram.setData(live_bins, target_bin, None)

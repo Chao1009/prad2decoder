@@ -130,8 +130,9 @@ class ServerClient:
     def get_occupancy(self) -> dict:
         return self._get("/api/occupancy")
 
-    def get_height_histogram(self, key: str) -> dict:
-        self._log(f"Server: GET /api/heighthist/{key}")
+    def get_height_histogram(self, key: str, quiet: bool = False) -> dict:
+        if not quiet:
+            self._log(f"Server: GET /api/heighthist/{key}")
         return self._get(f"/api/heighthist/{key}")
 
     def build_key_map(self) -> Dict[str, str]:
@@ -164,15 +165,26 @@ class ServerClient:
 # ============================================================================
 
 class HVClient:
-    """WebSocket client for prad2hvd voltage control."""
+    """WebSocket client for prad2hvd voltage control.
+
+    Uses a background reader thread to continuously drain broadcast
+    messages (hv_snapshot, board_snapshot, etc.) so the connection
+    stays alive during long data-collection pauses.  Command responses
+    are routed to a queue for synchronous retrieval.
+    """
 
     def __init__(self, url: str = "ws://clonpc19:8765", log_fn=None,
                  read_only: bool = False):
         self.url = url
         self._ws: Any = None
-        self._lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self._log = log_fn or (lambda msg, **kw: None)
         self._read_only = read_only
+        self._responses: Dict[str, list] = {}  # type -> [msg, ...]
+        self._resp_lock = threading.Lock()
+        self._resp_event = threading.Event()
+        self._reader_thread: Optional[threading.Thread] = None
+        self._closing = False
 
     def connect(self, password: str = ""):
         try:
@@ -185,45 +197,69 @@ class HVClient:
         self._log(f"HV: connecting to {self.url}")
         self._ws = websocket.create_connection(self.url, timeout=10)
         init_msg = json.loads(self._ws.recv())
+
+        # start background reader to drain broadcasts
+        self._closing = False
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
+
         auth_required = init_msg.get("auth_required", False)
         if auth_required and password:
             self._log("HV: authenticating (Expert)")
             self._send({"type": "auth", "password": password, "level": 2})
-            resp = self._recv_until("auth_result", timeout=10)
+            resp = self._wait_response("auth_result", timeout=10)
             if not resp or resp.get("granted", 0) < 2:
                 reason = resp.get("reason", "unknown") if resp else "no response"
                 raise RuntimeError(f"HV authentication failed: {reason}")
             self._log(f"HV: authenticated OK (level {resp.get('granted')})")
         self._log("HV: connected")
 
-    def _send(self, msg: dict):
-        with self._lock:
-            self._ws.send(json.dumps(msg))
-
-    def _recv_until(self, msg_type: str, timeout: float = 10) -> Optional[dict]:
-        """Read messages until we get the expected type or timeout."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            self._ws.settimeout(max(0.1, deadline - time.time()))
+    def _reader_loop(self):
+        """Background thread: read all incoming messages, route responses."""
+        while not self._closing and self._ws:
             try:
+                self._ws.settimeout(1.0)
                 raw = self._ws.recv()
                 msg = json.loads(raw)
-                if msg.get("type") == msg_type:
-                    return msg
+                msg_type = msg.get("type", "")
+                # route command responses to the queue
+                if msg_type in ("auth_result", "get_voltage_response"):
+                    with self._resp_lock:
+                        self._responses.setdefault(msg_type, []).append(msg)
+                    self._resp_event.set()
+                # else: broadcast (hv_snapshot etc.) — discard silently
             except Exception:
-                break
+                if self._closing:
+                    break
+                # timeout or transient error — keep trying
+
+    def _wait_response(self, msg_type: str, timeout: float = 10) -> Optional[dict]:
+        """Wait for a specific response type from the reader thread."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._resp_lock:
+                queue = self._responses.get(msg_type, [])
+                if queue:
+                    return queue.pop(0)
+            self._resp_event.clear()
+            self._resp_event.wait(timeout=min(0.5, deadline - time.time()))
         return None
 
-    def get_voltage(self, name: str) -> Optional[dict]:
-        """Query current voltage info for a module by name.
+    def _send(self, msg: dict):
+        with self._send_lock:
+            self._ws.send(json.dumps(msg))
 
-        Returns dict with vset, vmon, limit, on, status, or None on error.
-        """
+    def get_voltage(self, name: str) -> Optional[dict]:
+        """Query current voltage info for a module by name."""
         if self._ws is None:
             self._log(f"HV: GET {name} → not connected", level="warn")
             return None
-        self._send({"type": "get_voltage", "name": name})
-        resp = self._recv_until("get_voltage_response", timeout=5)
+        try:
+            self._send({"type": "get_voltage", "name": name})
+        except Exception as e:
+            self._log(f"HV: GET {name} → send failed: {e}", level="error")
+            return None
+        resp = self._wait_response("get_voltage_response", timeout=5)
         if resp:
             self._log(f"HV: GET {name} → vset={resp.get('vset'):.1f} "
                       f"vmon={resp.get('vmon'):.1f} limit={resp.get('limit'):.0f}")
@@ -235,22 +271,26 @@ class HVClient:
         """Set voltage by module name. Returns True if command sent."""
         if self._read_only:
             self._log(f"HV: SET {name} = {value:.2f} V [BLOCKED — read-only]", level="warn")
-            return True  # pretend success so scan continues
+            return True
         self._log(f"HV: SET {name} = {value:.2f} V")
         try:
             self._send({"type": "set_voltage_by_name",
                          "name": name, "value": round(value, 2)})
             return True
-        except Exception:
+        except Exception as e:
+            self._log(f"HV: SET {name} → send failed: {e}", level="error")
             return False
 
     def close(self):
+        self._closing = True
         if self._ws:
             try:
                 self._ws.close()
             except Exception:
                 pass
             self._ws = None
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=2.0)
 
 
 # ============================================================================
