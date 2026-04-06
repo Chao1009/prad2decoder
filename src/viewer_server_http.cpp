@@ -4,7 +4,9 @@
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
+#include <cmath>
 
+namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 // =========================================================================
@@ -57,16 +59,16 @@ json ViewerServer::listFiles(const std::string &subdir)
                     }
                 } catch (...) {}
                 if (count > 0)
-                    entries.push_back({{"type", "dir"}, {"name", rel}, {"count", count}});
+                    entries.push_back(json{{"type", "dir"}, {"name", rel}, {"count", count}});
             } else if (entry.is_regular_file()) {
                 auto fn = entry.path().filename().string();
                 if (fn.find(".evio") == std::string::npos &&
                     fn.find(".root") == std::string::npos)
                     continue;
                 auto sz = entry.file_size();
-                entries.push_back({{"type", "file"}, {"name", rel},
-                                   {"size", sz},
-                                   {"size_mb", std::round(sz / 1048576.0 * 10) / 10}});
+                entries.push_back(json{{"type", "file"}, {"name", rel},
+                                       {"size", sz},
+                                       {"size_mb", std::round(sz / 1048576.0 * 10) / 10}});
             }
         }
     } catch (...) {}
