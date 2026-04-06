@@ -1,8 +1,15 @@
 # PRad-II EVIO Bank Tag Reference
 
-Reference for EVIO bank tags in PRad-II data, based on run 023453 tag dump
-cross-referenced with ROL sources (rol1.c, rol2.c, vtp1mpd.c) and
-trigger configuration (prad_v0.trg).
+Reference for EVIO bank tags in PRad-II data.
+
+**Authoritative source:** [`clonbanks_20260406.xml`](clonbanks_20260406.xml) — the
+official CLAS/Hall-B EVIO bank dictionary. Always cross-check against this file
+when adding new bank support; this Markdown is a curated PRad-II view of it,
+augmented with what we have actually observed in data and ROL sources
+(rol1.c, rol2.c, vtp1mpd.c) plus the trigger configuration (prad_v0.trg).
+
+The "Banks present in run 023453" table reflects an early-stage tag dump and
+may not show banks introduced in later runs (e.g. `0xE122` VTP).
 
 ## Trigger System Overview
 
@@ -170,6 +177,10 @@ Max size (~12K words) = physics events with full FADC waveforms.
 
 ## Depth 2 — Data Banks (inside ROC crates)
 
+> **Note:** Tables below were originally compiled from the early-stage run 023453.
+> Newer runs may include additional banks (e.g. `0xE122`); see "Banks observed in
+> later runs" below.
+
 ### Banks present in run 023453
 
 | Tag    | Type      | Count  | Words       | Parents               | ROL source                          | Description                        |
@@ -180,23 +191,100 @@ Max size (~12K words) = physics events with full FADC waveforms.
 | 0xE10F | UINT32    | 18159  | 6           | 0x0027 only           | CODA/EB                             | Run info                           |
 | 0xE10E | STRING    | 16     | 81 - 6565   | 0x0011 + all ROCs     | `BANKOPEN(0xe10E,3,rol->pid)`       | DAQ config readback (first events) |
 
-### Banks defined in ROLs but not in this run
+### Banks observed in later runs (post-023453)
 
-| Tag    | Type      | ROL source                                  | Description                          |
-|--------|-----------|---------------------------------------------|--------------------------------------|
-| 0xE109 | UINT32    | `BANKOPEN(0xe109,1,rol->pid)` in rol1.c     | FADC250 raw hardware format (before rol2.c reformatting) |
-| 0x0DEA | UINT32    | `vtpRocEbInit(VTPMPD_BANK,6,7)` in vtp1mpd.c (bank1 tag = 3562) | VTP/MPD GEM strip data (SSP bitfield format) |
-| 0xE10B | UINT32    | `BANKOPEN(0xe10B,1,rol->pid)` in rol1.c     | V1190/V1290 TDC data                |
-| 0xE141 | UINT32    | `BANKOPEN(0xe141,1,rol->pid)` in rol1.c     | FAV3 (FADC v3) hardware format       |
-| 0xE104 | UINT32    | `BANKOPEN(0xe104,1,rol->pid)` in rol1.c     | VSCM data                           |
-| 0xE105 | UINT32    | `BANKOPEN(0xe105,1,rol->pid)` in rol1.c     | DCRB / DC / Vetroc data             |
-| 0xE115 | UINT32    | `BANKOPEN(0xe115,1,rol->pid)` in rol1.c     | DSC2 scaler data                    |
-| 0xE112 | UINT32    | `BANKOPEN(0xe112,1,0)` in rol1.c            | HEAD bank raw format                 |
-| 0xE123 | UINT32    | `BANKOPEN(0xe123,1,rol->pid)` in rol1.c     | SSP-RICH data                        |
-| 0xE125 | UINT32    | `BANKOPEN(0xe125,1,ii)` in rol1.c           | Per-slot data                        |
-| 0xE131 | UINT32    | `BANKOPEN(0xe131,1,rol->pid)` in rol1.c     | VFTDC data                           |
-| 0xE133 | UINT32    | `BANKOPEN(0xe133,1,rol->pid)` in rol1.c     | HD (Helicity Decoder) data           |
-| 0xE140 | UINT32    | `BANKOPEN(0xe140,1,0)` in rol1.c            | Special data bank                    |
+| Tag    | Type   | Words | Parents                          | Description                                                |
+|--------|--------|-------|----------------------------------|------------------------------------------------------------|
+| 0xE122 | UINT32 | 3     | TI slave crates (0x81/83/85/87/89/8B/8D) | "VTP Hardware Data" (per `clonbanks_20260406.xml`). In TI slave crates it appears as a 3-word stub (block header + trailer + filler) with no event payload — TI slave ROCs have no VTP module, so the bank is essentially empty. The full format is documented below; we'd expect to see useful EC_PEAK / EC_CLUSTER data only if `0xE122` ever appears inside a HyCal FADC crate (`0x80/82/84/86/88/8A/8C`). |
+
+#### `0xE122` VTP Hardware Data — full format (from official dictionary)
+
+Self-describing 32-bit words; type code in bits[31:27] (block-level types) or
+bits[31:23] (tag-expansion subtypes). PRad-II only cares about the ECAL records.
+
+| Type | Name | Layout |
+|------|------|--------|
+| `0x10` | BLKHDR | `[26:22]` slot, `[17:08]` block#, `[7:0]` block_level |
+| `0x11` | BLKTLR | `[26:22]` slot, `[21:0]` nwords |
+| `0x12` | EVTHDR | `[26:0]` event_number |
+| `0x13` | TRGTIME | word0 `[23:0]` time_lo, word1 `[23:0]` time_hi |
+| `0x14` | **EC_PEAK** (2 words) | w0: `[26]` inst, `[25:24]` view, `[23:16]` time; w1: `[25:16]` coord, `[15:0]` energy |
+| `0x15` | **EC_CLUSTER** (2 words) | w0: `[26]` inst, `[23:16]` time, `[15:0]` energy; w1: `[29:20]` coordW, `[19:10]` coordV, `[9:0]` coordU |
+| `0x16` | HTCC_CLUSTER | (CLAS12, not used in PRad) |
+| `0x17` | FT_CLUSTER | (CLAS12, not used) |
+| `0x18` | FTOF_CLUSTER | (CLAS12, not used) |
+| `0x19` | CTOF_CLUSTER | (CLAS12, not used) |
+| `0x1A` | CND_CLUSTER | (CLAS12, not used) |
+| `0x1B` | PCU_CLUSTER | (CLAS12, not used) |
+| `0x1C` | Tag-expansion (DC_ROAD, DC_SEGMENT, HPS_*) | (CLAS12/HPS, not used) |
+| `0x1D` | TRIGGER | `[26:16]` trig_time, `[15:0]` trig_pattern_lo, w1 `[15:0]` trig_pattern_hi |
+| `0x1E` | DNV (data not valid) | skip |
+| `0x1F` | FILLER | skip |
+
+Note: the `EC_PEAK` and `EC_CLUSTER` formats here come from the XML dictionary
+and supersede the older single-word layouts in `rol2.c` (which appears to be an
+earlier version of the parser).
+
+### Banks defined in the official dictionary
+
+Names and field layouts taken from `clonbanks_20260406.xml`. Banks marked
+"observed in PRad-II" are the ones we have actually decoded from PRad-II data
+or referenced in the ROLs; the rest are listed for completeness so unexpected
+tags can be looked up quickly.
+
+| Tag    | Type      | Official name                                 | Notes / PRad-II usage                                              |
+|--------|-----------|-----------------------------------------------|--------------------------------------------------------------------|
+| 0xE101 | COMPOSITE | FADC250 Window Raw Data (mode 1)              | **observed** — primary HyCal waveform bank, format `c,i,l,N(c,Ns)` |
+| 0xE102 | COMPOSITE | FADC250 Pulse Integral Data with Timing (mode 7) | (mode 7, not used)                                              |
+| 0xE103 | COMPOSITE | FADC250 Pulse Integral Data (mode 3)          | (mode 3, not used)                                                 |
+| 0xE104 | UINT32    | VSCM Hardware Data / VSCM Raw Data            | reserved in rol1.c, not used in PRad-II                            |
+| 0xE105 | UINT32    | DCRB Hardware Data                            | reserved in rol1.c, not used in PRad-II (was misnamed "DCRB/DC/Vetroc") |
+| 0xE107 | UINT32    | V1190 TDC Data                                | not used                                                           |
+| 0xE108 | UINT32    | DCRBGTP Hardware Data                         | not used                                                           |
+| 0xE109 | UINT32    | FADC250 Hardware Data (raw)                   | **observed in some configs** — pre-rol2.c reformatting; rol2.c converts → 0xE101 |
+| 0xE10A | UINT32    | TI/TS Hardware Data                           | **observed** — TI master/slave timing, FP trigger pattern in d[5]  |
+| 0xE10B | UINT32    | V1190/V1290 Hardware Data                     | reserved in rol1.c, not used                                       |
+| 0xE10C | UINT32    | **SSP Hardware Data**                         | **observed** — official format is HPS-style (HPS_CLUSTER, HPS_TRIGGER, TRIGGER pattern). For PRad-II this is the **trigger processor data** in the TI master crate (0x0027). ⚠️ NOT the MPD/APV strip format we use for GEMs — that's a separate `0x0DEA`-style bank. |
+| 0xE10D | UINT32    | GTP Hardware Data                             | not used                                                           |
+| 0xE10E | CHAR      | Run Config File                               | **observed** — DAQ config readback string (first events only)      |
+| 0xE10F | UINT32    | **HEAD bank**                                 | **observed** — version, run#, event#, unix_time, event_type, roc_pattern, classification, trigger_bits. (We previously called this "Run info" in code; the data fields we extract — run number, event count, unix time — are correct, just under the wrong name.) |
+| 0xE111 | COMPOSITE | SVT Composite Data                            | not used                                                           |
+| 0xE112 | UINT32    | HEAD bank raw format                          | block-level form of 0xE10F, not used in PRad-II                    |
+| 0xE113 | UINT32    | SLAC SVT before disent                        | not used                                                           |
+| 0xE114 | CHAR      | EPICS data                                    | **observed** — inner data bank inside top-level `0x001F` EPICS events |
+| 0xE115 | UINT32    | DSC2 Scalers raw format                       | **observed** — used by `livetime` tool for gated/ungated counts (see DSC2 docs) |
+| 0xE116 | COMPOSITE | DCRB Composite Data                           | not used                                                           |
+| 0xE117 | UINT32    | ADC v792 raw format                           | not used                                                           |
+| 0xE118 | UINT32    | MVT raw format                                | not used                                                           |
+| 0xE119 | UINT32    | FTT raw format                                | not used                                                           |
+| 0xE11A | UINT32    | TDC v775 raw format                           | not used                                                           |
+| 0xE11B | COMPOSITE | MVT composite data                            | not used                                                           |
+| 0xE11E | UINT32    | DAQ performance timers                        | not used                                                           |
+| 0xE11F | UINT32    | SRS Raw Data                                  | not used                                                           |
+| 0xE120 | UINT32    | FASTBUS Raw Data                              | **observed** — used by PRad-1 ADC1881M legacy decoder              |
+| 0xE121 | UINT32    | PGEM crate Raw Data                           | not used (separate GEM crate readout)                              |
+| 0xE122 | UINT32    | VTP Hardware Data                             | **observed in TI slave crates as 3-word stub**. Full format documented above (EC_PEAK, EC_CLUSTER, etc.). |
+| 0xE123 | UINT32    | SSP-RICH Hardware Data                        | reserved in rol1.c, not used in PRad-II                            |
+| 0xE124 | COMPOSITE | SSP-RICH Composite Data                       | not used                                                           |
+| 0xE125 | UINT32    | **SIS3801 Scalers raw format**                | reserved in rol1.c. (Previously misnamed "Per-slot data" — corrected per official dictionary.) |
+| 0xE126 | COMPOSITE | FADC250 Window Raw Data (mode 1 packed/compressed) | not used                                                       |
+| 0xE127 | COMPOSITE | SVT Composite Data with tag 9 (TDCEVT)         | not used                                                           |
+| 0xE128 | COMPOSITE | MVT composite data packed                     | not used                                                           |
+| 0xE129 | COMPOSITE | TPC composite data packed                     | not used                                                           |
+| 0xE130 | COMPOSITE | DCRB Composite Data with width                | not used                                                           |
+| 0xE131 | UINT32    | VFTDC Hardware Data                           | not used                                                           |
+| 0xE132 | COMPOSITE | VFTDC Composite Data                          | not used                                                           |
+| 0xE133 | UINT32    | Helicity Decoder Hardware Data                | not used                                                           |
+| 0xE134 | UINT32    | SAMPA/FELIX raw format                        | not used                                                           |
+| 0xE135 | UINT32    | VMM raw format                                | not used                                                           |
+| 0xE136 | UINT32    | MAROC raw format                              | not used                                                           |
+| 0xE137 | COMPOSITE | MAROC Composite Data                          | not used                                                           |
+| 0xE138 | UINT32    | PETIROC raw format                            | not used                                                           |
+| 0xE139 | COMPOSITE | PETIROC Composite Data                        | not used                                                           |
+| 0xE140 | UINT32    | (reserved for MPD raw format)                 | XML notes "use Hall A tag 0x0DE9, but reserve 0xE140". (Previously misnamed "Special data bank" — corrected.) |
+| 0xE141 | UINT32    | FAV3 Hardware Data                            | reserved, not used                                                 |
+| 0x0DE9 | UINT32    | MPD raw format (Hall A tag)                   | format used for MPD GEM strip data; PRad-II GEM readout used `0x0DEA` (variant) — needs verification against current data |
+| 0x0DEA | UINT32    | (PRad-II GEM strip data)                      | **observed in some configs** — variant of MPD format used by `vtpRocEbInit(VTPMPD_BANK,6,7)` in vtp1mpd.c |
 
 ---
 

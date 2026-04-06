@@ -76,6 +76,7 @@ void Replay::clearEvent(EventVars &ev)
     ev.timestamp = 0;
     ev.nch = 0;
     ev.gem_nch = 0;
+    ev.ssp_raw.clear();
 }
 
 void Replay::clearReconEvent(EventVars_Recon &ev)
@@ -88,6 +89,7 @@ void Replay::clearReconEvent(EventVars_Recon &ev)
     ev.n_clusters = 0;
     ev.n_gem_hits = 0;
     ev.match_num = 0;
+    ev.ssp_raw.clear();
 }
 
 void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
@@ -121,6 +123,8 @@ void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
     tree->Branch("gem.ssp_samples",  ev.ssp_samples,  Form("ssp_samples[gem_nch][%d]/S", ssp::SSP_TIME_SAMPLES));
     tree->Branch("n_ssp_triggers", &ev.n_ssp_triggers, "n_ssp_triggers/I");
     tree->Branch("ssp_trigger_tags", ev.ssp_trigger_tags, Form("ssp_trigger_tags[n_ssp_triggers][%d]/i", ssp::SSP_TIME_SAMPLES));
+    // Raw 0xE10C SSP trigger bank words (variable-length per event)
+    tree->Branch("ssp_raw", &ev.ssp_raw);
 }
 
 void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
@@ -168,6 +172,8 @@ void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
 
     tree->Branch("n_ssp_triggers", &ev.n_ssp_triggers, "n_ssp_triggers/I");
     tree->Branch("ssp_trigger_tags", ev.ssp_trigger_tags, Form("ssp_trigger_tags[n_ssp_triggers][%d]/i", ssp::SSP_TIME_SAMPLES));
+    // Raw 0xE10C SSP trigger bank words (variable-length per event)
+    tree->Branch("ssp_raw", &ev.ssp_raw);
 }
 
 bool Replay::Process(const std::string &input_evio, const std::string &output_root,
@@ -222,6 +228,14 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
         if (!ch.Scan()) continue;
         if (ch.GetEventType() != evc::EventType::Physics) continue;
 
+        // Snapshot raw 0xE10C SSP trigger bank for this read group (one bank
+        // per CODA event, shared by all sub-events from this Read()).
+        std::vector<uint32_t> ssp_raw_snapshot;
+        if (auto *n_e10c = ch.FindFirstByTag(0xE10C)) {
+            const uint32_t *p = ch.GetData(*n_e10c);
+            ssp_raw_snapshot.assign(p, p + n_e10c->data_words);
+        }
+
         for (int ie = 0; ie < ch.GetNEvents(); ++ie) {
             event->clear();
             ssp_evt->clear();
@@ -233,6 +247,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
             ev->trigger_type = event->info.trigger_type;
             ev->trigger      = event->info.trigger_bits;
             ev->timestamp    = event->info.timestamp;
+            ev->ssp_raw      = ssp_raw_snapshot;
 
             // decode HyCal FADC250 data
             int nch = 0;
@@ -423,6 +438,13 @@ if(!prad1){
         if (!ch.Scan()) continue;
         if (ch.GetEventType() != evc::EventType::Physics) continue;
 
+        // Snapshot raw 0xE10C SSP trigger bank for this read group.
+        std::vector<uint32_t> ssp_raw_snapshot;
+        if (auto *n_e10c = ch.FindFirstByTag(0xE10C)) {
+            const uint32_t *p = ch.GetData(*n_e10c);
+            ssp_raw_snapshot.assign(p, p + n_e10c->data_words);
+        }
+
         for (int ie = 0; ie < ch.GetNEvents(); ++ie) {
             event->clear();
             ssp_evt->clear();
@@ -434,6 +456,7 @@ if(!prad1){
             ev->trigger_type = event->info.trigger_type;
             ev->trigger_bits = event->info.trigger_bits;
             ev->timestamp    = event->info.timestamp;
+            ev->ssp_raw      = ssp_raw_snapshot;
 
             // TODO: use config-driven trigger filter (config.json "physics" section
             // accept_trigger_bits/reject_trigger_bits) instead of hardcoded bit check.

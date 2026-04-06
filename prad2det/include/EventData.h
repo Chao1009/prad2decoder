@@ -19,6 +19,7 @@
 #include "SspData.h"       // MAX_MPDS, MAX_APVS_PER_MPD, APV_STRIP_SIZE, SSP_TIME_SAMPLES
 
 #include <cstdint>
+#include <vector>
 
 namespace prad2 {
 
@@ -66,6 +67,9 @@ struct RawEventData {
     // ssp trigger bank tag
     int n_ssp_triggers = 0;
     uint32_t ssp_trigger_tags[256][ssp::SSP_TIME_SAMPLES] = {};
+
+    // Raw 0xE10C SSP trigger bank words (one variable-length entry per event)
+    std::vector<uint32_t> ssp_raw;
 };
 
 // ── Reconstructed replay ("recon" tree) ──────────────────────────────────
@@ -115,6 +119,9 @@ struct ReconEventData {
     // ssp trigger bank tag
     int n_ssp_triggers = 0;
     uint32_t ssp_trigger_tags[256][ssp::SSP_TIME_SAMPLES] = {};
+
+    // Raw 0xE10C SSP trigger bank words (one variable-length entry per event)
+    std::vector<uint32_t> ssp_raw;
 };
 
 } // namespace prad2

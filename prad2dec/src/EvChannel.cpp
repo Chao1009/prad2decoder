@@ -290,29 +290,31 @@ struct KnownBankTag {
     bool        has_decoder;   // true if prad2dec implements a decoder
 };
 
+// Names follow docs/rols/clonbanks_20260406.xml (official dictionary).
 static const KnownBankTag known_bank_tags[] = {
     // Tags with decoders
-    { 0xE10A, "TI/TS",                    true  },
-    { 0xE101, "FADC250 composite",         true  },
-    { 0xE109, "FADC250 raw",               true  },
-    { 0xE120, "ADC1881M (Fastbus)",        true  },
-    { 0xE10C, "SSP",                       true  },
-    { 0x0DEA, "VTP/MPD (GEM)",             true  },
-    { 0xE10F, "Run info",                  true  },
-    { 0xE10E, "DAQ config string",         true  },
-    { 0xC000, "CODA trigger bank",         true  },
-    // Tags from ROLs without decoders
-    { 0xE10B, "V1190/V1290 TDC",           false },
-    { 0xE141, "FAV3 (FADC v3)",            false },
-    { 0xE104, "VSCM",                      false },
-    { 0xE105, "DCRB/DC/Vetroc",            false },
-    { 0xE115, "DSC2 scaler",               false },
-    { 0xE112, "HEAD bank",                 false },
-    { 0xE123, "SSP-RICH",                  false },
-    { 0xE125, "Per-slot data",             false },
-    { 0xE131, "VFTDC",                     false },
-    { 0xE133, "Helicity Decoder",          false },
-    { 0xE140, "Special (pid=0)",           false },
+    { 0xE10A, "TI/TS Hardware Data",          true  },
+    { 0xE101, "FADC250 Window Raw Data (mode 1)", true },
+    { 0xE109, "FADC250 Hardware Data (raw)",  true  },
+    { 0xE120, "FASTBUS Raw Data (ADC1881M)",  true  },
+    { 0xE10C, "SSP Hardware Data",            true  },
+    { 0x0DEA, "MPD raw format (PRad-II GEM)", true  },
+    { 0xE10F, "HEAD bank",                    true  },
+    { 0xE10E, "Run Config File",              true  },
+    { 0xC000, "CODA trigger bank",            true  },
+    // Tags listed in the dictionary but without a prad2dec decoder
+    { 0xE10B, "V1190/V1290 Hardware Data",    false },
+    { 0xE141, "FAV3 Hardware Data",           false },
+    { 0xE104, "VSCM Hardware Data",           false },
+    { 0xE105, "DCRB Hardware Data",           false },
+    { 0xE115, "DSC2 Scalers raw format",      false },
+    { 0xE112, "HEAD bank raw format",         false },
+    { 0xE122, "VTP Hardware Data",            false },
+    { 0xE123, "SSP-RICH Hardware Data",       false },
+    { 0xE125, "SIS3801 Scalers raw format",   false },
+    { 0xE131, "VFTDC Hardware Data",          false },
+    { 0xE133, "Helicity Decoder Hardware Data", false },
+    { 0xE140, "MPD raw format (reserved)",    false },
 };
 static const int N_KNOWN_TAGS = sizeof(known_bank_tags) / sizeof(known_bank_tags[0]);
 
