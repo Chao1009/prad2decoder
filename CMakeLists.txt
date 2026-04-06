@@ -124,7 +124,8 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)
 
-set(SRV_SOURCES src/viewer_server.cpp src/app_state.cpp
+set(SRV_SOURCES src/viewer_server.cpp src/viewer_server_http.cpp src/viewer_server_et.cpp
+    src/app_state.cpp src/app_state_init.cpp src/app_state_api.cpp src/app_state_filter.cpp
     src/data_source.cpp src/evio_data_source.cpp)
 if(WITH_ROOT)
     list(APPEND SRV_SOURCES src/root_data_source.cpp)

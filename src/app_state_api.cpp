@@ -1,0 +1,481 @@
+#include "app_state.h"
+
+#include <cmath>
+
+using json = nlohmann::json;
+
+// Serialize a Histogram to JSON.
+static json histToJson(const Histogram &h, float mn, float mx, float st)
+{
+    if (h.bins.empty())
+        return {{"bins", json::array()}, {"underflow", 0}, {"overflow", 0},
+                {"min", mn}, {"max", mx}, {"step", st}};
+    return {{"bins", h.bins}, {"underflow", h.underflow}, {"overflow", h.overflow},
+            {"min", mn}, {"max", mx}, {"step", st}};
+}
+
+//=============================================================================
+// API response builders
+//=============================================================================
+
+json AppState::apiColorRanges() const
+{
+    json obj = json::object();
+    for (auto &[k, v] : color_range_defaults)
+        obj[k] = {v.first, v.second};
+    return obj;
+}
+
+json AppState::apiHist(int type, const std::string &key) const
+{
+    std::lock_guard<std::mutex> lk(data_mtx);
+    auto &hmap = (type == 0) ? histograms : (type == 1) ? pos_histograms : height_histograms;
+    int nbins  = (type == 0) ? hist_nbins : (type == 1) ? pos_nbins : height_nbins;
+    auto it = hmap.find(key);
+    if (it == hmap.end())
+        return {{"bins", std::vector<int>(nbins, 0)}, {"underflow", 0}, {"overflow", 0},
+                {"events", events_processed.load()}};
+    auto &h = it->second;
+    return {{"bins", h.bins}, {"underflow", h.underflow}, {"overflow", h.overflow},
+            {"events", events_processed.load()}};
+}
+
+json AppState::apiClusterHist() const
+{
+    std::lock_guard<std::mutex> lk(data_mtx);
+    json r = histToJson(cluster_energy_hist, cl_hist_min, cl_hist_max, cl_hist_step);
+    r["events"] = cluster_events_processed;
+    r["nclusters"] = histToJson(nclusters_hist,
+        (float)nclusters_hist_min, (float)nclusters_hist_max, (float)nclusters_hist_step);
+    r["nblocks"] = histToJson(nblocks_hist,
+        (float)nblocks_hist_min, (float)nblocks_hist_max, (float)nblocks_hist_step);
+    return r;
+}
+
+json AppState::apiEnergyAngle() const
+{
+    std::lock_guard<std::mutex> lk(data_mtx);
+    return {{"bins", energy_angle_hist.bins},
+            {"nx", energy_angle_hist.nx}, {"ny", energy_angle_hist.ny},
+            {"angle_min", ea_angle_min}, {"angle_max", ea_angle_max}, {"angle_step", ea_angle_step},
+            {"energy_min", ea_energy_min}, {"energy_max", ea_energy_max}, {"energy_step", ea_energy_step},
+            {"target", {target_x, target_y, target_z}},
+            {"hycal_z", hycal_transform.z},
+            {"beam_energy", beam_energy},
+            {"events", cluster_events_processed}};
+}
+
+json AppState::apiMoller() const
+{
+    std::lock_guard<std::mutex> lk(data_mtx);
+    return {{"xy_bins", moller_xy_hist.bins},
+            {"xy_nx", moller_xy_hist.nx}, {"xy_ny", moller_xy_hist.ny},
+            {"xy_x_min", moller_xy_x_min}, {"xy_x_max", moller_xy_x_max}, {"xy_x_step", moller_xy_x_step},
+            {"xy_y_min", moller_xy_y_min}, {"xy_y_max", moller_xy_y_max}, {"xy_y_step", moller_xy_y_step},
+            {"energy_hist", histToJson(moller_energy_hist, moller_e_min, moller_e_max, moller_e_step)},
+            {"moller_events", moller_events},
+            {"total_events", cluster_events_processed},
+            {"cuts", {{"energy_tolerance", moller_energy_tol},
+                      {"angle_min", moller_angle_min}, {"angle_max", moller_angle_max}}}};
+}
+
+json AppState::apiOccupancy() const
+{
+    std::lock_guard<std::mutex> lk(data_mtx);
+    json jocc = json::object(), jtcut = json::object();
+    for (auto &[k,v] : occupancy) jocc[k] = v;
+    for (auto &[k,v] : occupancy_tcut) jtcut[k] = v;
+    return {{"occ", jocc}, {"occ_tcut", jtcut}, {"total", events_processed.load()}};
+}
+
+// Reference correction: builds time→value map and computes mean for correction factor.
+// Correction: corrected = signal * (ref_mean / ref_signal_at_time)
+// This removes LMS-own fluctuation while keeping values in original units.
+struct RefCorrection {
+    std::map<double, float> ref_map;  // time → ref signal
+    float ref_mean = 0.f;             // mean of all ref signals
+    bool active = false;
+};
+
+static RefCorrection buildRefCorrection(
+    const std::map<int, std::vector<LmsEntry>> &lms_history,
+    const std::vector<AppState::LmsRefChannel> &refs, int ref_index)
+{
+    RefCorrection rc;
+    if (ref_index < 0 || ref_index >= static_cast<int>(refs.size())) return rc;
+    int ri = refs[ref_index].module_index;
+    if (ri < 0) return rc;
+    auto it = lms_history.find(ri);
+    if (it == lms_history.end() || it->second.empty()) return rc;
+
+    double sum = 0;
+    for (auto &e : it->second) {
+        rc.ref_map[e.time_sec] = e.integral;
+        sum += e.integral;
+    }
+    rc.ref_mean = static_cast<float>(sum / it->second.size());
+    rc.active = (rc.ref_mean > 0);
+    return rc;
+}
+
+// Apply correction: returns signal * (ref_mean / ref_at_time), or -1 if ref missing.
+static float applyRefCorrection(float val, double time_sec, const RefCorrection &rc)
+{
+    if (!rc.active) return val;
+    auto it = rc.ref_map.find(time_sec);
+    if (it == rc.ref_map.end() || it->second <= 0) return -1.f;
+    return val * (rc.ref_mean / it->second);
+}
+
+json AppState::apiLmsSummary(int ref_index) const
+{
+    std::lock_guard<std::mutex> lk(lms_mtx);
+    auto rc = buildRefCorrection(lms_history, lms_ref_channels, ref_index);
+
+    json mods = json::object();
+    for (auto &[idx, hist] : lms_history) {
+        if (hist.empty()) continue;
+        double sum = 0, sum2 = 0;
+        int count = 0;
+        for (auto &e : hist) {
+            float v = applyRefCorrection(e.integral, e.time_sec, rc);
+            if (v < 0) continue;
+            sum += v; sum2 += v * v;
+            count++;
+        }
+        if (count == 0) continue;
+        double mean = sum / count;
+        double var = sum2 / count - mean * mean;
+        double rms = var > 0 ? std::sqrt(var) : 0;
+        bool warn = (mean > 0 && rms / mean > lms_warn_thresh) ||
+                    (mean < lms_warn_min_mean);
+        if (idx >= 0 && idx < hycal.module_count()) {
+            auto &mod = hycal.module(idx);
+            mods[std::to_string(idx)] = {
+                {"name", mod.name}, {"mean", std::round(mean * 10) / 10},
+                {"rms", std::round(rms * 100) / 100},
+                {"count", count}, {"warn", warn}};
+        }
+    }
+    return {{"modules", mods}, {"events", lms_events.load()},
+            {"trigger", lms_trigger.toJson()},
+            {"ref_index", ref_index},
+            {"ref_mean", rc.ref_mean},
+            {"sync_unix", sync_unix}, {"sync_rel_sec", sync_rel_sec}};
+}
+
+json AppState::apiLmsModule(int mod_idx, int ref_index) const
+{
+    std::lock_guard<std::mutex> lk(lms_mtx);
+    auto it = lms_history.find(mod_idx);
+    if (it == lms_history.end() || it->second.empty())
+        return {{"time", json::array()}, {"integral", json::array()}, {"events", 0}};
+
+    auto rc = buildRefCorrection(lms_history, lms_ref_channels, ref_index);
+
+    auto &hist = it->second;
+    json t_arr = json::array(), v_arr = json::array();
+    for (auto &e : hist) {
+        float v = applyRefCorrection(e.integral, e.time_sec, rc);
+        if (v < 0) continue;
+        t_arr.push_back(std::round(e.time_sec * 100) / 100);
+        v_arr.push_back(std::round(v * 10) / 10);
+    }
+    std::string name = (mod_idx >= 0 && mod_idx < hycal.module_count())
+        ? hycal.module(mod_idx).name : "";
+    return {{"name", name}, {"time", t_arr}, {"integral", v_arr},
+            {"events", (int)t_arr.size()},
+            {"ref_index", ref_index},
+            {"sync_unix", sync_unix}, {"sync_rel_sec", sync_rel_sec}};
+}
+
+json AppState::apiLmsRefChannels() const
+{
+    json arr = json::array();
+    for (size_t i = 0; i < lms_ref_channels.size(); ++i) {
+        arr.push_back({
+            {"index", (int)i},
+            {"name", lms_ref_channels[i].name},
+            {"module_index", lms_ref_channels[i].module_index},
+        });
+    }
+    return arr;
+}
+
+//=============================================================================
+// EPICS
+//=============================================================================
+
+void AppState::processEpics(const std::string &text, int32_t event_number, uint64_t timestamp)
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    epics.Feed(event_number, timestamp, text);
+    epics.Trim(epics_max_history);
+    epics_events++;
+}
+
+void AppState::clearEpics()
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    epics.Clear();
+    epics_events = 0;
+}
+
+json AppState::apiEpicsChannels() const
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    json names = json::array();
+    for (auto &n : epics.GetChannelNames()) names.push_back(n);
+    json slots = json::array();
+    for (auto &s : epics_default_slots) slots.push_back(s);
+    return {{"channels", names}, {"slots", slots},
+            {"events", epics_events.load()}};
+}
+
+json AppState::apiEpicsChannel(const std::string &name) const
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    int id = epics.GetChannelId(name);
+    if (id < 0)
+        return {{"name", name}, {"time", json::array()}, {"value", json::array()}, {"count", 0}};
+
+    int nsnap = epics.GetSnapshotCount();
+    json t_arr = json::array(), v_arr = json::array();
+
+    // time relative to first snapshot's timestamp
+    uint64_t t0 = (nsnap > 0) ? epics.GetSnapshot(0).timestamp : 0;
+    for (int i = 0; i < nsnap; ++i) {
+        auto &snap = epics.GetSnapshot(i);
+        double t_sec = static_cast<double>(snap.timestamp - t0) * TI_TICK_SEC;
+        float val = (id < (int)snap.values.size()) ? snap.values[id] : 0.f;
+        t_arr.push_back(std::round(t_sec * 100) / 100);
+        v_arr.push_back(val);
+    }
+    return {{"name", name}, {"time", t_arr}, {"value", v_arr}, {"count", nsnap}};
+}
+
+json AppState::apiEpicsBatch(const std::vector<std::string> &names) const
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    int nsnap = epics.GetSnapshotCount();
+    uint64_t t0 = (nsnap > 0) ? epics.GetSnapshot(0).timestamp : 0;
+
+    // build shared time array once
+    json t_arr = json::array();
+    for (int i = 0; i < nsnap; ++i) {
+        double t_sec = static_cast<double>(epics.GetSnapshot(i).timestamp - t0) * TI_TICK_SEC;
+        t_arr.push_back(std::round(t_sec * 100) / 100);
+    }
+
+    json channels = json::array();
+    for (auto &name : names) {
+        int id = epics.GetChannelId(name);
+        if (id < 0) {
+            channels.push_back({{"name", name}, {"value", json::array()}, {"count", 0}});
+            continue;
+        }
+        json v_arr = json::array();
+        for (int i = 0; i < nsnap; ++i) {
+            auto &snap = epics.GetSnapshot(i);
+            v_arr.push_back((id < (int)snap.values.size()) ? snap.values[id] : 0.f);
+        }
+        channels.push_back({{"name", name}, {"value", v_arr}, {"count", nsnap}});
+    }
+    return {{"time", t_arr}, {"channels", channels}};
+}
+
+json AppState::apiEpicsLatest() const
+{
+    std::lock_guard<std::mutex> lk(epics_mtx);
+    json channels = json::array();
+    int nsnap = epics.GetSnapshotCount();
+    int nch = epics.GetChannelCount();
+    if (nsnap == 0 || nch == 0)
+        return {{"channels", channels}, {"events", epics_events.load()}};
+
+    auto &latest = epics.GetSnapshot(nsnap - 1);
+
+    // compute per-channel mean from most recent mean_window snapshots
+    int win_start = std::max(0, nsnap - epics_mean_window);
+    std::vector<double> sums(nch, 0.0);
+    std::vector<int> counts(nch, 0);
+    for (int i = win_start; i < nsnap; ++i) {
+        auto &snap = epics.GetSnapshot(i);
+        for (int ch = 0; ch < std::min(nch, (int)snap.values.size()); ++ch) {
+            sums[ch] += snap.values[ch];
+            counts[ch]++;
+        }
+    }
+
+    for (int ch = 0; ch < nch; ++ch) {
+        float val = (ch < (int)latest.values.size()) ? latest.values[ch] : 0.f;
+        float mean = (counts[ch] > 0) ? static_cast<float>(sums[ch] / counts[ch]) : val;
+        channels.push_back({
+            {"name", epics.GetChannelName(ch)},
+            {"value", std::round(val * 1000) / 1000},
+            {"mean", std::round(mean * 1000) / 1000},
+            {"count", counts[ch]},
+        });
+    }
+    return {{"channels", channels}, {"events", epics_events.load()}};
+}
+
+//=============================================================================
+// Shared config + API routing (used by both viewer and monitor)
+//=============================================================================
+
+void AppState::fillConfigJson(json &cfg) const
+{
+    cfg["hist"] = {
+        {"time_min", hist_cfg.time_min}, {"time_max", hist_cfg.time_max},
+        {"bin_min", hist_cfg.bin_min}, {"bin_max", hist_cfg.bin_max},
+        {"bin_step", hist_cfg.bin_step}, {"threshold", hist_cfg.threshold},
+        {"pos_min", hist_cfg.pos_min}, {"pos_max", hist_cfg.pos_max},
+        {"pos_step", hist_cfg.pos_step},
+        {"height_min", hist_cfg.height_min}, {"height_max", hist_cfg.height_max},
+        {"height_step", hist_cfg.height_step},
+    };
+    cfg["ref_lines"] = ref_lines;
+    cfg["trigger_bits"] = trigger_bits_def;
+    cfg["trigger_type"] = trigger_type_def;
+    cfg["trigger_filter"] = {
+        {"dq",      waveform_trigger.toJson()},
+        {"cluster", cluster_trigger.toJson()},
+        {"lms",     lms_trigger.toJson()},
+        {"physics", physics_trigger.toJson()},
+    };
+    cfg["cluster_hist"] = {{"min", cl_hist_min}, {"max", cl_hist_max}, {"step", cl_hist_step}};
+    cfg["nclusters_hist"] = {{"min", nclusters_hist_min}, {"max", nclusters_hist_max}, {"step", nclusters_hist_step}};
+    cfg["nblocks_hist"] = {{"min", nblocks_hist_min}, {"max", nblocks_hist_max}, {"step", nblocks_hist_step}};
+    cfg["color_ranges"] = apiColorRanges();
+    cfg["refresh_ms"] = {{"event", refresh_event_ms}, {"ring", refresh_ring_ms},
+                         {"histogram", refresh_hist_ms}, {"lms", refresh_lms_ms}};
+    cfg["lms"] = {
+        {"trigger", lms_trigger.toJson()},
+        {"warn_threshold", lms_warn_thresh},
+        {"events", lms_events.load()}, {"ref_channels", apiLmsRefChannels()},
+    };
+    cfg["runinfo"] = {
+        {"beam_energy", beam_energy},
+        {"calibration", {{"default_adc2mev", adc_to_mev}}},
+        {"target", {target_x, target_y, target_z}},
+        {"hycal", {
+            {"position", {hycal_transform.x, hycal_transform.y, hycal_transform.z}},
+            {"tilting", {hycal_transform.rx, hycal_transform.ry, hycal_transform.rz}},
+        }},
+    };
+    cfg["physics"] = {
+        {"trigger", physics_trigger.toJson()},
+        {"energy_angle_hist", {
+            {"angle_min", ea_angle_min}, {"angle_max", ea_angle_max}, {"angle_step", ea_angle_step},
+            {"energy_min", ea_energy_min}, {"energy_max", ea_energy_max}, {"energy_step", ea_energy_step},
+        }},
+        {"moller", {
+            {"energy_tolerance", moller_energy_tol},
+            {"angle_min", moller_angle_min}, {"angle_max", moller_angle_max},
+        }},
+    };
+    cfg["elog"] = {
+        {"url", elog_url}, {"logbook", elog_logbook},
+        {"author", elog_author}, {"tags", elog_tags},
+    };
+    cfg["epics"] = {
+        {"max_history", epics_max_history},
+        {"warn_threshold", epics_warn_thresh}, {"alert_threshold", epics_alert_thresh},
+        {"min_avg_points", epics_min_avg_pts}, {"mean_window", epics_mean_window},
+        {"slots", epics_default_slots},
+    };
+    cfg["gem"] = apiGemConfig();
+}
+
+AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
+{
+    if (uri == "/api/occupancy")
+        return {true, apiOccupancy().dump()};
+    if (uri == "/api/physics/energy_angle")
+        return {true, apiEnergyAngle().dump()};
+    if (uri == "/api/physics/moller")
+        return {true, apiMoller().dump()};
+    if (uri == "/api/cluster_hist")
+        return {true, apiClusterHist().dump()};
+    if (uri.rfind("/api/hist/", 0) == 0)
+        return {true, apiHist(0, uri.substr(10)).dump()};
+    if (uri.rfind("/api/poshist/", 0) == 0)
+        return {true, apiHist(1, uri.substr(13)).dump()};
+    if (uri.rfind("/api/heighthist/", 0) == 0)
+        return {true, apiHist(2, uri.substr(16)).dump()};
+    if (uri == "/api/lms/refs")
+        return {true, apiLmsRefChannels().dump()};
+    if (uri.rfind("/api/lms/", 0) == 0) {
+        int ref = -1;
+        auto qpos = uri.find('?');
+        std::string path = (qpos != std::string::npos) ? uri.substr(9, qpos - 9) : uri.substr(9);
+        if (qpos != std::string::npos) {
+            std::string q = uri.substr(qpos + 1);
+            if (q.rfind("ref=", 0) == 0) ref = std::atoi(q.c_str() + 4);
+        }
+        if (path == "summary") return {true, apiLmsSummary(ref).dump()};
+        if (path == "clear")   return {false, ""};  // clear handled by caller
+        return {true, apiLmsModule(std::atoi(path.c_str()), ref).dump()};
+    }
+    if (uri.rfind("/api/epics/", 0) == 0) {
+        std::string path = uri.substr(11);
+        if (path == "channels") return {true, apiEpicsChannels().dump()};
+        if (path == "latest")   return {true, apiEpicsLatest().dump()};
+        if (path == "clear")    return {false, ""};  // clear handled by caller
+        if (path.rfind("batch?", 0) == 0) {
+            // /api/epics/batch?ch=name1&ch=name2&...
+            std::string query = path.substr(6);
+            std::vector<std::string> names;
+            for (size_t pos = 0; pos < query.size();) {
+                size_t amp = query.find('&', pos);
+                if (amp == std::string::npos) amp = query.size();
+                std::string kv = query.substr(pos, amp - pos);
+                if (kv.rfind("ch=", 0) == 0) {
+                    // URL-decode
+                    std::string raw = kv.substr(3), name;
+                    for (size_t i = 0; i < raw.size(); ++i) {
+                        if (raw[i] == '%' && i + 2 < raw.size()) {
+                            int hi = 0, lo = 0;
+                            if (std::sscanf(raw.c_str() + i + 1, "%1x%1x", &hi, &lo) == 2) {
+                                name += static_cast<char>((hi << 4) | lo);
+                                i += 2; continue;
+                            }
+                        }
+                        if (raw[i] == '+') name += ' ';
+                        else name += raw[i];
+                    }
+                    names.push_back(name);
+                }
+                pos = amp + 1;
+            }
+            return {true, apiEpicsBatch(names).dump()};
+        }
+        if (path.rfind("channel/", 0) == 0) {
+            // URL-decode the channel name (e.g. %3A → :)
+            std::string raw = path.substr(8), name;
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '%' && i + 2 < raw.size()) {
+                    int hi = 0, lo = 0;
+                    if (std::sscanf(raw.c_str() + i + 1, "%1x%1x", &hi, &lo) == 2) {
+                        name += static_cast<char>((hi << 4) | lo);
+                        i += 2;
+                        continue;
+                    }
+                }
+                name += raw[i];
+            }
+            return {true, apiEpicsChannel(name).dump()};
+        }
+    }
+    if (uri == "/api/gem/hits")
+        return {true, apiGemHits().dump()};
+    if (uri == "/api/gem/config")
+        return {true, apiGemConfig().dump()};
+    if (uri == "/api/gem/occupancy")
+        return {true, apiGemOccupancy().dump()};
+    if (uri == "/api/gem/hist")
+        return {true, apiGemHist().dump()};
+    return {false, ""};
+}
+
