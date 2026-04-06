@@ -1,3 +1,12 @@
+// A quick check tool to test the matching result between HyCal clusters and GEM hits in the replay output
+// Usage:
+//   matching <input_recon.root|dir> [more files...] [-o out.root] [-n max_events]
+//   -o  output ROOT file (default: input filename with _matching.root suffix)
+//   -n  max events to process (default: all)
+// Example:
+//   matching recon.root -o recon_matching.root -n 10000
+//   matching recon_dir/ recon.root...  -n 100000
+
 #include "PhysicsTools.h"
 #include "HyCalSystem.h"
 #include "MatchingTools.h"
@@ -65,8 +74,6 @@ static std::vector<std::string> collectRootFiles(const std::string &path);
 int main(int argc, char *argv[])
 {
     std::string output;
-    float Ebeam = 1100.f;
-    int run_id = 12345;
 
     // --- geometry constants (can be made configurable) ---
     const float gem_z[4] = {5407.f + 39.71f/2, 5407.f - 39.71f/2,

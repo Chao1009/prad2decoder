@@ -328,6 +328,10 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     // - We also run the GemSystem reconstruction to get GEM hits.
     // - We fill a different TTree with reconstructed quantities instead of raw data.
 
+    // ── trigger bits (database/trigger_bits.json) ───────────────────────────
+    static constexpr uint32_t TBIT_LMS   = (1u << 24);
+    static constexpr uint32_t TBIT_sum = (1u << 8);
+
     std::string db_dir = DATABASE_DIR;
     if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
 
@@ -435,14 +439,10 @@ if(!prad1){
             ev->trigger_bits = event->info.trigger_bits;
             ev->timestamp    = event->info.timestamp;
 
-            bool cluster = false, LMS = false;
-            if(ev->trigger_bits & (1 << 8) ||
-               ev->trigger_bits & (1 << 9) ||
-               ev->trigger_bits & (1 << 10)||
-               ev->trigger_bits & (1 << 11)) cluster = true;
+            bool total_sum = (ev->trigger_bits & TBIT_sum) != 0;
+            bool LMS = (ev->trigger_bits & TBIT_LMS) != 0;
+            if( !total_sum ) continue;
 
-            if(ev->trigger_bits & (1 << 24)) LMS = true;
-            int fire_num = 0;
             // decode and reconstruct HyCal data
             for (int r = 0; r < event->nrocs; ++r) {
                 auto &roc = event->rocs[r];
@@ -470,11 +470,9 @@ if(!prad1){
                         float energy = static_cast<float>(mod->energize(adc));
                         clusterer.AddHit(mod->index, energy);
                         ev->total_energy += energy;
-                        fire_num++;
                     }
                 }
             }
-            if( !(cluster && !LMS && fire_num < 100) ) continue; //apply trigger and fire number condition to select good events for reconstruction
             clusterer.FormClusters();
             std::vector<fdec::ClusterHit> hits;
             clusterer.ReconstructHits(hits);
