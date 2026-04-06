@@ -34,8 +34,8 @@ let activeTab='dq';  // 'dq' or 'cluster'
 // Plotly shared config
 // =========================================================================
 const PL={paper_bgcolor:'#1a1a2e',plot_bgcolor:'#11112a',font:{family:'Consolas,monospace',size:10,color:'#aaa'},
-    margin:{l:45,r:10,t:24,b:32},xaxis:{gridcolor:'#1a1a3a',zerolinecolor:'#222'},
-    yaxis:{gridcolor:'#1a1a3a',zerolinecolor:'#222'}};
+    margin:{l:45,r:10,t:24,b:32},xaxis:{gridcolor:'#333',zerolinecolor:'#444'},
+    yaxis:{gridcolor:'#333',zerolinecolor:'#444'}};
 const PC2={responsive:true,displayModeBar:false};
 const PC_EPICS={responsive:true,displayModeBar:true,
     modeBarButtonsToRemove:['sendDataToCloud','lasso2d','select2d'],

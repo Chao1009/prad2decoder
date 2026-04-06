@@ -20,6 +20,8 @@ const PL_GEM = {
     font: { color: '#e0e0e0', size: 11 },
     margin: { l: 50, r: 20, t: 30, b: 40 },
     hovermode: 'closest',
+    xaxis: { gridcolor: '#333', zerolinecolor: '#555' },
+    yaxis: { gridcolor: '#333', zerolinecolor: '#555' },
 };
 
 const PL_GEM_OCC = {
@@ -29,6 +31,8 @@ const PL_GEM_OCC = {
     margin: { l: 45, r: 10, t: 28, b: 32 },
     hovermode: 'closest',
     showlegend: false,
+    xaxis: { gridcolor: '#333', zerolinecolor: '#555' },
+    yaxis: { gridcolor: '#333', zerolinecolor: '#555' },
 };
 
 let gemConfig = null;
