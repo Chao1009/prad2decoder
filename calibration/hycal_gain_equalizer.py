@@ -527,6 +527,16 @@ class GainEqualizerWindow(QMainWindow):
         self._ge_tol = QSpinBox(); self._ge_tol.setRange(10, 500)
         self._ge_tol.setValue(50); r.addWidget(self._ge_tol); lo.addLayout(r)
 
+        r = QHBoxLayout()
+        r.addWidget(QLabel("Edge frac %:"))
+        self._ge_edge_frac = QDoubleSpinBox(); self._ge_edge_frac.setRange(0.1, 20.0)
+        self._ge_edge_frac.setValue(2.0); self._ge_edge_frac.setSingleStep(0.5)
+        self._ge_edge_frac.setDecimals(1); r.addWidget(self._ge_edge_frac)
+        self._ge_log_cumul = QPushButton("Log: ON")
+        self._ge_log_cumul.setCheckable(True); self._ge_log_cumul.setChecked(True)
+        self._ge_log_cumul.clicked.connect(self._toggleLogCumul)
+        r.addWidget(self._ge_log_cumul); lo.addLayout(r)
+
         bf = QHBoxLayout()
         self._btn_start = QPushButton("Start")
         self._btn_start.setProperty("cssClass", "green")
@@ -569,6 +579,10 @@ class GainEqualizerWindow(QMainWindow):
             w.setEnabled(False)
 
     # -- commands -----------------------------------------------------------
+
+    def _toggleLogCumul(self):
+        on = self._ge_log_cumul.isChecked()
+        self._ge_log_cumul.setText("Log: ON" if on else "Log: OFF")
 
     def _cmdStart(self):
         if self._gain_engine and self._gain_engine.state not in (
@@ -630,6 +644,8 @@ class GainEqualizerWindow(QMainWindow):
         eng.convergence_tol = self._ge_tol.value()
         eng.beam_threshold = self._beam_thresh_spin.value()
         eng.pos_threshold = self._thresh_spin.value()
+        eng.analyzer.edge_fraction = self._ge_edge_frac.value() / 100.0
+        eng.analyzer.use_log_cumul = self._ge_log_cumul.isChecked()
         self._gain_engine = eng
         eng.start(self._selected_start_idx, count=self._count_spin.value())
 
@@ -681,7 +697,10 @@ class GainEqualizerWindow(QMainWindow):
         path = self._ordered_path
         for i, m in enumerate(path):
             if m.name == name:
-                self._selected_start_idx = i; self._drawPathPreview(); break
+                self._selected_start_idx = i
+                self._drawPathPreview()
+                self._updateCanvasLabel()
+                break
 
     def _onPathProfileChanged(self, _):
         name = self._profile_combo.currentText()
@@ -737,7 +756,11 @@ class GainEqualizerWindow(QMainWindow):
         n_pwo4 = sum(1 for m in self.scan_modules if m.mod_type == "PbWO4")
         n_lg = sum(1 for m in self.scan_modules if m.mod_type == "PbGlass")
         base = f"Scan Path: {n_pwo4} PbWO4 + {n_lg} LG" if n_lg else f"Scan Path: {n_pwo4} PbWO4"
-        if not self.scan_modules: base = "Scan Path: none"
+        if not self.scan_modules:
+            base = "Scan Path: none"
+        elif self._ordered_path and 0 <= self._selected_start_idx < len(self._ordered_path):
+            start_name = self._ordered_path[self._selected_start_idx].name
+            base += f"  start: {start_name}"
         self._canvas_label.setText(f" {base} ")
 
     def _updateCanvas(self):
@@ -908,7 +931,8 @@ class GainEqualizerWindow(QMainWindow):
         self._path_group.setVisible(not running)
         self._btn_start.setEnabled(not running)
         for w in (self._ge_server_edit, self._ge_hv_edit, self._ge_hv_pw,
-                  self._ge_target, self._ge_counts, self._ge_maxiter, self._ge_tol):
+                  self._ge_target, self._ge_counts, self._ge_maxiter, self._ge_tol,
+                  self._ge_edge_frac, self._ge_log_cumul):
             w.setEnabled(not running)
         self._btn_pause.setEnabled(running)
         self._btn_stop.setEnabled(running)
@@ -943,9 +967,10 @@ class GainEqualizerWindow(QMainWindow):
         parts.append(f"[{len(eng.converged)}ok {len(eng.failed)}fail]")
         self._lbl_ge_detail.setText("  ".join(parts))
 
-        if eng.state == GainScanState.MOVING and mod:
+        if mod:
             px, py = module_to_ptrans(mod.x, mod.y)
-            self._setTarget(px, py, mod.name)
+            if self._target_name != mod.name:
+                self._setTarget(px, py, mod.name)
 
         # update histogram display
         mod_name = mod.name if mod else ""

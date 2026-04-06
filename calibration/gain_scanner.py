@@ -38,30 +38,30 @@ class SpectrumAnalyzer:
                  bin_step: float = 10.0, bin_min: float = 0.0,
                  smooth_window: int = 5,
                  edge_fraction: float = 0.02,
+                 use_log_cumul: bool = True,
                  pedestal_adc: float = 200.0):
         self.target_adc = target_adc
         self.bin_step = bin_step
         self.bin_min = bin_min
         self.smooth_window = smooth_window  # moving-average window
         self.edge_fraction = edge_fraction  # cumulative fraction threshold
-        self.pedestal_adc = pedestal_adc    # exclude bins below this ADC from total
+        self.use_log_cumul = use_log_cumul  # use log(1+count) for cumulative
+        self.pedestal_adc = pedestal_adc    # exclude bins below this ADC
 
     def find_right_edge(self, bins: List[int]) -> Optional[int]:
         """Find the right-edge bin of the Bremsstrahlung continuum spectrum.
 
         Algorithm:
 
-        1. **Exclude pedestal**: bins below ``pedestal_adc`` (default 200)
-           are ignored when computing the total.  The low-ADC pedestal/noise
-           peak can dominate the total and skew the cumulative fraction.
-        2. **Smooth** the histogram with a moving average (window=5) to
-           reduce statistical fluctuations.
-        3. **Cumulative fraction from right**: walk from the rightmost bin
-           leftward, accumulating counts (above pedestal only).  When the
-           cumulative reaches ``edge_fraction`` (default 2%) of the
-           signal total, we've entered the continuum body.
-        4. **Confirm falling edge**: refine the candidate by checking the
-           smoothed slope to find the actual drop-off point.
+        1. **Exclude pedestal**: bins below ``pedestal_adc`` (default 200).
+        2. **Smooth** with moving average (window=5).
+        3. **Log-scale cumulative from right** (default): accumulate
+           ``log(1 + count)`` from the rightmost bin leftward.  The log
+           transform compresses high-count body bins so sparse tail bins
+           carry more relative weight.  When the cumulative reaches
+           ``edge_fraction`` (default 2%) of the log-total, we've found
+           the edge.  If ``use_log_cumul`` is False, raw counts are used.
+        4. **Confirm falling edge** via smoothed slope.
 
         Returns the bin index, or None if no edge found.
         """
@@ -69,15 +69,12 @@ class SpectrumAnalyzer:
         if n < self.smooth_window + 3:
             return None
 
-        # step 1: exclude pedestal region from total
+        # step 1: exclude pedestal
         ped_bin = int((self.pedestal_adc - self.bin_min) / self.bin_step) \
             if self.bin_step > 0 else 0
         ped_bin = max(0, min(ped_bin, n))
-        signal_total = sum(bins[ped_bin:])
-        if signal_total <= 0:
-            return None
 
-        # step 2: smooth with moving average
+        # step 2: smooth
         hw = self.smooth_window // 2
         smooth = [0.0] * n
         for i in range(n):
@@ -85,12 +82,21 @@ class SpectrumAnalyzer:
             hi = min(n, i + hw + 1)
             smooth[i] = sum(bins[lo:hi]) / (hi - lo)
 
-        # step 3: cumulative from right (above pedestal only)
-        threshold = signal_total * self.edge_fraction
+        # step 3: cumulative from right
+        if self.use_log_cumul:
+            total = sum(math.log1p(bins[i]) for i in range(ped_bin, n))
+            weight_fn = math.log1p
+        else:
+            total = sum(bins[ped_bin:])
+            weight_fn = float
+        if total <= 0:
+            return None
+
+        threshold = total * self.edge_fraction
         cumul = 0.0
         candidate = None
         for i in range(n - 1, ped_bin - 1, -1):
-            cumul += bins[i]
+            cumul += weight_fn(bins[i])
             if cumul >= threshold:
                 candidate = i
                 break
@@ -566,15 +572,6 @@ class GainScanEngine:
                     return
                 self._mark_failed(i, mod); return
 
-            # read current HV before analysis
-            try:
-                hv_info = self.hv.get_voltage(mod.name)
-                if hv_info:
-                    self.last_vset = hv_info.get("vset")
-                    self.last_vmon = hv_info.get("vmon")
-            except Exception:
-                pass
-
             # analyze
             self.state = GainScanState.ANALYZING
             try:
@@ -591,6 +588,17 @@ class GainScanEngine:
                 self._mark_failed(i, mod); return
             edge_adc = self.analyzer.edge_to_adc(edge)
             self.last_edge_adc = edge_adc
+
+            # read HV (single call per iteration — for display + voltage step)
+            info = self.hv.get_voltage(mod.name)
+            if info is None:
+                if self._read_only:
+                    info = {"vset": 1000.0, "vmon": 0.0, "limit": 2000.0}
+                else:
+                    self.log(f"{mod.name}: HV read failed", level="error")
+                    self._mark_failed(i, mod); return
+            self.last_vset = info.get("vset")
+            self.last_vmon = info.get("vmon")
 
             # record iteration snapshot
             self.iteration_history.append({
@@ -619,17 +627,7 @@ class GainScanEngine:
 
             # adjust HV
             self.state = GainScanState.ADJUSTING
-            info = self.hv.get_voltage(mod.name)
-            if info is None:
-                if self._read_only:
-                    info = {"vset": 1000.0, "limit": 2000.0}
-                    self.log(f"{mod.name}: HV not connected, using dummy V={info['vset']:.0f}",
-                             level="warn")
-                else:
-                    self.log(f"{mod.name}: HV read failed", level="error")
-                    self._mark_failed(i, mod); return
             current_v = info.get("vset", 0)
-            self.last_vset = current_v
             limit_v = info.get("limit", 99999)
             dv = self.analyzer.compute_voltage_step(edge_adc, current_v)
             self.last_dv = dv

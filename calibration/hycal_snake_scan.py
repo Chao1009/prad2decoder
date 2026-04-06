@@ -743,6 +743,9 @@ class SnakeScanWindow(QMainWindow):
         base = f"Scan Path: {n_pwo4} PbWO4 + {n_lg} LG" if n_lg else f"Scan Path: {n_pwo4} PbWO4"
         if not self.scan_modules:
             base = "Scan Path: none"
+        elif self.engine.path and 0 <= self._selected_start_idx < len(self.engine.path):
+            start_name = self.engine.path[self._selected_start_idx].name
+            base += f"  start: {start_name}"
         self._canvas_label.setText(f" {base} ")
 
     def _updateCanvas(self):
@@ -834,7 +837,10 @@ class SnakeScanWindow(QMainWindow):
         name = self._start_combo.currentText()
         for i, m in enumerate(self.engine.path):
             if m.name == name:
-                self._selected_start_idx = i; self._drawPathPreview(); break
+                self._selected_start_idx = i
+                self._drawPathPreview()
+                self._updateCanvasLabel()
+                break
 
     def _onPathProfileChanged(self, _):
         name = self._profile_combo.currentText()
