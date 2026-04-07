@@ -180,7 +180,7 @@ int main(int argc, char *argv[])
         if (peak_hist_module[i]->GetEntries() > 0) {
             float max = peak_hist_module[i]->GetBinCenter(peak_hist_module[i]->GetMaximumBin());
 
-            peak_hist_module[i]->Fit("gaus", "Q", "r", 0, max + 40.);
+            peak_hist_module[i]->Fit("gaus", "Q", "r", 0, max*1.5);
             TF1 *fit = peak_hist_module[i]->GetFunction("gaus");
             if (fit) {
                 peak[i] = fit->GetParameter(1); // mean
