@@ -118,9 +118,12 @@ int main(int argc, char *argv[])
     hycal.Init(db_dir + "/hycal_modules.json", db_dir + "/daq_map.json");
 
     TH1F *peak_hist_module[1156];
+    TH1F *peakHeight_hist_module[1156];
     for (int i = 0; i < 1156; i++) {
         std::string name = "peak_module_" + std::to_string(i+1);
-        peak_hist_module[i] = new TH1F(name.c_str(), name.c_str(), 400, 0, 4000);
+        peak_hist_module[i] = new TH1F(name.c_str(), name.c_str(), 80, 0, 800);
+        std::string name_height = "peakHeight_module_" + std::to_string(i+1);
+        peakHeight_hist_module[i] = new TH1F(name_height.c_str(), name_height.c_str(), 100, 0, 500);
     }
     TH1F *peak_hist_LG_module[1000];
     for (int i = 0; i < 1000; i++) {
@@ -148,6 +151,7 @@ int main(int argc, char *argv[])
             if (module_id >= 1 && module_id <= 1156){
                 float peak = ev.peak_integral[j][0];
                 peak_hist_module[module_id-1]->Fill(peak);
+                if(ev.npeaks[j] == 1) peakHeight_hist_module[module_id-1]->Fill(ev.peak_height[j][0]);
                 cosmic_eventNum->Fill(mod->x, mod->y);
             }
             else if(module_id < 0 && module_id >= -1000){
@@ -201,6 +205,31 @@ int main(int argc, char *argv[])
         }
     }
 
+    float peak_height[1156], rms_height[1156];
+    for (int i = 0; i < 1156; i++) {
+        if (peakHeight_hist_module[i]->GetEntries() > 0) {
+            float max = peakHeight_hist_module[i]->GetBinCenter(peakHeight_hist_module[i]->GetMaximumBin());
+            peakHeight_hist_module[i]->Fit("gaus", "Q", "r", max*0.7, max*1.5);
+            TF1 *fit = peakHeight_hist_module[i]->GetFunction("gaus");
+            if (fit) {
+                peak_height[i] = fit->GetParameter(1); // mean
+                rms_height[i] = fit->GetParameter(2);  // sigma
+                TCanvas *c = new TCanvas();
+                peakHeight_hist_module[i]->Draw();
+                fit->Draw("same");
+                c->SaveAs(("./fit_canvas3/fit_peakHeight_module_" + std::to_string(i+1) + ".png").c_str());
+                delete c;
+            }
+            else {
+                peak_height[i] = 0.1;
+                rms_height[i] = 0.1;
+            }
+        } else {
+            peak_height[i] = 0.1;
+            rms_height[i] = 0.1;
+        }
+    }
+
     TH1F *peak_module = new TH1F("peak_module", "Peak Integral by Module", 100, 0, 500);
     TH1F *rms_module = new TH1F("rms_module", "RMS of Peak Integral by Module", 100, 0, 400);
     for (int i = 0; i < 1156; i++) {
@@ -244,20 +273,27 @@ int main(int argc, char *argv[])
                      << "\",\"integral_spec_peak\":" << peak[i]
                      << ",\"event_count\":" << event_num_module[i+1000+1] << "}";
         }
-        // G modules (lead-glass, id = 1..1000)
-        /*for (int i = 0; i < 1000; i++) {
-            if (!first) json_out << ",\n";
-            first = false;
-            float lg_peak = (peak_hist_LG_module[i]->GetEntries() > 0)
-                            ? peak_hist_LG_module[i]->GetMean() : 0.f;
-            json_out << "  {\"name\":\"G" << (i+1)
-                     << "\",\"peak\":" << lg_peak
-                     << ",\"event_count\":" << event_num_module[i+1] << "}";
-        }
         json_out << "\n]\n";
-        */
         json_out.close();
         std::cerr << "JSON written to cosmic_modules_" << run_number << ".json\n";
+    }
+
+    {
+        if (run_number <= 0) return 0; // skip JSON output if run number is not specified
+        std::ofstream json_out(Form("cosmic_height_modules_%d.json", run_number));
+        json_out << "[\n";
+        bool first = true;
+        // W modules (PWO crystals, id = 1001..2156)
+        for (int i = 0; i < 1156; i++) {
+            if (!first) json_out << ",\n";
+            first = false;
+            json_out << "  {\"name\":\"W" << (i+1)
+                     << "\",\"peak_height_spec_peak\":" << peak_height[i]
+                     << ",\"event_count\":" << event_num_module[i+1000+1] << "}";
+        }
+        json_out << "\n]\n";
+        json_out.close();
+        std::cerr << "JSON written to cosmic_height_modules_" << run_number << ".json\n";
     }
 
     outfile.Close();
