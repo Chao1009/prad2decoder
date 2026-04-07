@@ -369,6 +369,22 @@ def main() -> int:
         print(f"{p.name:<8} {p.iter_count:>4} {cv:>9} {cm:>9} {rc:>6} {dv:>7} {nv:>9}  "
               f"{p.reason}")
 
+    # Tally rejection reasons (helpful when n_set is unexpectedly small/zero)
+    from collections import Counter
+    tally: Counter = Counter()
+    for p in proposals:
+        if p.new_vset is not None:
+            tally["proposed"] += 1
+        else:
+            # bucket the reason by its first phrase (everything before " (" or " — ")
+            r = p.reason.split(" (")[0].split(" — ")[0].strip() or "unknown"
+            tally[r] += 1
+    print()
+    print("Rejection breakdown:")
+    for reason, count in tally.most_common():
+        marker = "✓" if reason == "proposed" else " "
+        print(f"  {marker} {count:>5}  {reason}")
+
     # Build batch JSON
     chan_entries = build_channel_entries(proposals, hv_lookup)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
