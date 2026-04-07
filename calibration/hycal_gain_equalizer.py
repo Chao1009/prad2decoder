@@ -548,7 +548,7 @@ class GainEqualizerWindow(QMainWindow):
         self._ge_target.setValue(3200); r.addWidget(self._ge_target)
         r.addWidget(QLabel("Min counts:"))
         self._ge_counts = QSpinBox(); self._ge_counts.setRange(100, 1000000)
-        self._ge_counts.setValue(5000); self._ge_counts.setSingleStep(1000)
+        self._ge_counts.setValue(10000); self._ge_counts.setSingleStep(1000)
         r.addWidget(self._ge_counts); lo.addLayout(r)
 
         r = QHBoxLayout()

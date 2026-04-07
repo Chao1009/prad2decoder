@@ -356,10 +356,10 @@ class GainScanEngine:
 
     # defaults (configurable before start)
     target_adc: float = 3200.0
-    min_counts: int = 5000
+    min_counts: int = 10000
     max_iterations: int = 8
     convergence_tol: float = 50.0    # ADC units
-    hv_settle_time: float = 10.0     # seconds
+    hv_settle_time: float = 10.0     # seconds (legacy, unused)
     pos_threshold: float = 0.5       # mm
     beam_threshold: float = 0.3      # nA
     collect_poll_sec: float = 2.0    # occupancy poll interval
@@ -367,6 +367,16 @@ class GainScanEngine:
     edge_adc_min: float = 500.0      # reject edges below this
     edge_adc_max: float = 3900.0     # reject edges above this
     use_log_y: bool = True           # log y scale for report snapshots
+
+    # Linear-response model
+    RESPONSE_CHANGE_TOL: float = 0.20    # max relative change in response_constant before fallback
+
+    # VMon settle wait
+    VMON_INITIAL_WAIT: float = 3.0       # seconds — mandatory wait before checking
+    VMON_POLL_INTERVAL: float = 1.5      # seconds between HV reads
+    VMON_TIMEOUT: float = 40.0           # total timeout
+    VMON_RTOL: float = 0.10              # |Δvmon - Δvset| / |Δvset| relative tolerance
+    VMON_ATOL: float = 2.0               # absolute tolerance (V)
 
     def __init__(self, motor_ep,
                  server_url: str, hv_url: str, hv_password: str,
@@ -398,6 +408,13 @@ class GainScanEngine:
         self.last_vmon: Optional[float] = None
         self.module_counts = 0
         self.collect_rate: float = 0.0  # Hz, updated during collection
+
+        # linear response model state (per module)
+        self._linear_response: bool = False
+        self._response_constant: Optional[float] = None  # ADC per V slope
+        self._prev_vmon: Optional[float] = None
+        self._prev_edge: Optional[float] = None
+        self._prev_vset: Optional[float] = None
 
         # per-iteration history for the current module (for screenshot report)
         self.iteration_history: List[Dict] = []
@@ -513,6 +530,12 @@ class GainScanEngine:
                 self.module_counts = 0
                 self.collect_rate = 0.0
                 self.iteration_history = []
+                # reset linear response state
+                self._linear_response = False
+                self._response_constant = None
+                self._prev_vmon = None
+                self._prev_edge = None
+                self._prev_vset = None
                 mod = self.path[i]
 
                 self.log(f"── [{i+1}/{len(self.path)}] {mod.name} ──")
@@ -653,8 +676,48 @@ class GainScanEngine:
             # adjust HV
             self.state = GainScanState.ADJUSTING
             current_v = info.get("vset", 0)
+            current_vmon = info.get("vmon", current_v)
             limit_v = info.get("limit", 99999)
-            dv = self.analyzer.compute_voltage_step(edge_adc, current_v)
+
+            # -- update linear response model --
+            mode_tag = "lookup"
+            if (self._prev_vmon is not None and self._prev_edge is not None):
+                dvmon_meas = current_vmon - self._prev_vmon
+                if abs(dvmon_meas) > 1e-6:
+                    new_response = (edge_adc - self._prev_edge) / dvmon_meas
+                    if new_response <= 0:
+                        # non-physical
+                        self._linear_response = False
+                        mode_tag = (f"fallback: response={new_response:.2f} "
+                                    f"ADC/V (non-physical)")
+                    elif self._linear_response and self._response_constant:
+                        rel = abs(new_response - self._response_constant) \
+                            / abs(self._response_constant)
+                        if rel > self.RESPONSE_CHANGE_TOL:
+                            self._linear_response = False
+                            mode_tag = (f"fallback: response "
+                                        f"{self._response_constant:.2f}→"
+                                        f"{new_response:.2f} ADC/V "
+                                        f"(Δ{rel*100:.0f}%)")
+                        else:
+                            self._response_constant = new_response
+                            self._linear_response = True
+                    else:
+                        # first slope measurement (or coming back from fallback)
+                        self._response_constant = new_response
+                        self._linear_response = True
+
+            # -- compute dV --
+            if self._linear_response and self._response_constant \
+                    and self._response_constant > 0:
+                dv = (self.target_adc - edge_adc) / self._response_constant
+                # round to 0.1 V for HV crate granularity
+                dv = round(dv, 1)
+                if mode_tag == "lookup":
+                    mode_tag = f"linear: response={self._response_constant:.2f} ADC/V"
+            else:
+                dv = self.analyzer.compute_voltage_step(edge_adc, current_v)
+
             self.last_dv = dv
             new_v = current_v + dv
 
@@ -664,13 +727,20 @@ class GainScanEngine:
                 self._mark_failed(i, mod); return
 
             self.log(f"{mod.name} iter {iteration+1}: edge={edge_adc:.0f} "
-                     f"ΔV={dv:+.0f} ({current_v:.1f}→{new_v:.1f})")
+                     f"ΔV={dv:+.1f} ({current_v:.1f}→{new_v:.1f})  [{mode_tag}]")
+
+            # save prev state for next iteration's slope calc
+            self._prev_vmon = current_vmon
+            self._prev_edge = edge_adc
+            self._prev_vset = current_v
+
             if not self.hv.set_voltage(mod.name, new_v, old_value=current_v):
                 self.log(f"{mod.name}: HV set failed", level="error")
                 self._mark_failed(i, mod); return
 
-            # wait for HV to settle
-            self._wait_paused(self.hv_settle_time)
+            # wait for VMon to catch up to the new VSet
+            if not self._wait_vmon_settle(mod, dv, current_vmon):
+                self._mark_failed(i, mod); return
             if self._stop.is_set():
                 return
 
@@ -918,3 +988,45 @@ class GainScanEngine:
                 return
             self._check_paused()
             time.sleep(min(0.2, end - time.time()))
+
+    def _wait_vmon_settle(self, mod: Module, expected_dvset: float,
+                          prev_vmon: float) -> bool:
+        """Wait until VMon catches up to the new VSet.
+
+        Always waits at least VMON_INITIAL_WAIT seconds (HV ramp delay),
+        then polls every VMON_POLL_INTERVAL until the agreement check passes
+        or VMON_TIMEOUT is reached.
+
+        Agreement: |delta_vmon - expected_dvset| <= max(VMON_RTOL*|dvset|, VMON_ATOL)
+
+        Returns False on timeout (caller should mark module failed).
+        Returns True on success or interrupt (stop/skip/redo).
+        """
+        # mandatory initial wait — let HV ramp begin
+        self._wait_paused(self.VMON_INITIAL_WAIT)
+        if self._stop.is_set() or self._redo.is_set() or self._skip.is_set():
+            return True
+
+        tol = max(self.VMON_RTOL * abs(expected_dvset), self.VMON_ATOL)
+        deadline = time.time() + self.VMON_TIMEOUT - self.VMON_INITIAL_WAIT
+        dvmon = 0.0
+        vmon = prev_vmon
+        while time.time() < deadline:
+            if self._stop.is_set() or self._redo.is_set() or self._skip.is_set():
+                return True
+            self._check_paused()
+            info = self.hv.get_voltage(mod.name)
+            if info is not None:
+                vmon = info.get("vmon", 0)
+                dvmon = vmon - prev_vmon
+                if abs(dvmon - expected_dvset) <= tol:
+                    self.last_vmon = vmon
+                    self.log(f"{mod.name}: VMon settled at {vmon:.1f} V "
+                             f"(Δ={dvmon:+.1f}, target Δ={expected_dvset:+.1f})")
+                    return True
+            time.sleep(self.VMON_POLL_INTERVAL)
+        self.log(f"{mod.name}: VMon did not settle within "
+                 f"{self.VMON_TIMEOUT:.0f}s "
+                 f"(target Δ={expected_dvset:+.1f}, got Δ={dvmon:+.1f})",
+                 level="error")
+        return False
