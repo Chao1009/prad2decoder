@@ -197,11 +197,11 @@ int main(int argc, char *argv[])
             }
             else {
                 peak[i] = 0.1;
-                rms[i] = 0.1;
+                rms[i] = 1e5;
             }
         } else {
             peak[i] = 0.1;
-            rms[i] = 0.1;
+            rms[i] = 1e5;
         }
     }
 
@@ -211,7 +211,7 @@ int main(int argc, char *argv[])
             float max = peakHeight_hist_module[i]->GetBinCenter(peakHeight_hist_module[i]->GetMaximumBin());
             if(max < 20){
                 peak_height[i] = max;
-                rms_height[i] = 0.1;
+                rms_height[i] = 1.;
                 continue;
             }
             peakHeight_hist_module[i]->Fit("gaus", "Q", "r", max*0.7, max*1.5);
@@ -227,11 +227,11 @@ int main(int argc, char *argv[])
             }
             else {
                 peak_height[i] = 0.1;
-                rms_height[i] = 0.1;
+                rms_height[i] = 1e5;
             }
         } else {
             peak_height[i] = 0.1;
-            rms_height[i] = 0.1;
+            rms_height[i] = 1e5;
         }
     }
 
@@ -264,41 +264,26 @@ int main(int argc, char *argv[])
     }
     rate_out.close();
 
-    // ── JSON output: name, peak, event_count ─────────────────────────────
-    {
-        if (run_number <= 0) return 0; // skip JSON output if run number is not specified 
+    // ── JSON output ───────────────────────────────────────────────────────
+    if (run_number > 0) {
         std::ofstream json_out(Form("cosmic_modules_%d.json", run_number));
-        json_out << "[\n";
-        bool first = true;
-        // W modules (PWO crystals, id = 1001..2156)
+        json_out << "{\n";
         for (int i = 0; i < 1156; i++) {
-            if (!first) json_out << ",\n";
-            first = false;
-            json_out << "  {\"name\":\"W" << (i+1)
-                     << "\",\"integral_spec_peak\":" << peak[i]
-                     << ",\"event_count\":" << event_num_module[i+1000+1] << "}";
+            json_out << "  \"W" << (i+1) << "\": [{";
+            json_out << "\"peak_height_mean\": " << peak_height[i]
+                     << ", \"peak_height_sigma\": " << rms_height[i]
+                     << ", \"peak_height_diff\": " << (peak_height[i] -35.)
+                     << ", \"peak_integral_mean\": " << peak[i]
+                     << ", \"peak_integral_sigma\": " << rms[i]
+                     << ", \"peak_integral_diff\": " << (peak[i] - 250.)
+                     << ", \"count\": " << event_num_module[i+1000+1]
+                     << "}]";
+            if (i < 1155) json_out << ",";
+            json_out << "\n";
         }
-        json_out << "\n]\n";
+        json_out << "}\n";
         json_out.close();
         std::cerr << "JSON written to cosmic_modules_" << run_number << ".json\n";
-    }
-
-    {
-        if (run_number <= 0) return 0; // skip JSON output if run number is not specified
-        std::ofstream json_out(Form("cosmic_height_modules_%d.json", run_number));
-        json_out << "[\n";
-        bool first = true;
-        // W modules (PWO crystals, id = 1001..2156)
-        for (int i = 0; i < 1156; i++) {
-            if (!first) json_out << ",\n";
-            first = false;
-            json_out << "  {\"name\":\"W" << (i+1)
-                     << "\",\"peak_height_spec_peak\":" << peak_height[i]
-                     << ",\"event_count\":" << event_num_module[i+1000+1] << "}";
-        }
-        json_out << "\n]\n";
-        json_out.close();
-        std::cerr << "JSON written to cosmic_height_modules_" << run_number << ".json\n";
     }
 
     outfile.Close();
