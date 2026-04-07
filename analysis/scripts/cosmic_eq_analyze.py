@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cosmic_eq_analyze — pass 1 of the offline gain-equalization workflow.
+cosmic_eq_analyze — pass 1 of the offline cosmic-data gain-equalization workflow.
 
 Reads one or more ROOT files produced by ``replay_rawdata -p`` (which contain
 peak_height[nch][MAX_PEAKS] and peak_integral[nch][MAX_PEAKS] plus the FP
@@ -9,27 +9,31 @@ one logical event stream. For each HyCal channel:
 
   1. Filter events: only those with the sum trigger bit set (bit 8).
   2. Build a peak-height histogram and a peak-integral histogram.
-  3. Run TSpectrum + Gaussian fit on both → mean / sigma.
+  3. Run a peak search + Gaussian fit on each → mean / sigma.
   4. Optionally query prad2hvd for the current VSet / VMon for that module.
   5. Append ONE new entry per channel to the unified history JSON file.
 
 Each call appends exactly one iteration regardless of how many input files
 are provided.
 
+Pure-Python dependencies (no ROOT install needed):
+    uproot, awkward, numpy, scipy, matplotlib
+    pip install uproot awkward numpy scipy matplotlib
+
 Typical use (one EVIO file → one ROOT file):
     replay_rawdata prad_023527.evio -o prad_023527.root -p
-    python3 cosmic_eq_analyze.py prad_023527.root --history gain_history.json
+    python3 cosmic_eq_analyze.py prad_023527.root --history cosmic_history.json
 
 Multiple EVIO splits (one ROOT file per split, all chained for one iteration):
     for f in /data/stage6/prad_023600/prad_023600.evio.000??; do
         replay_rawdata $f -o /tmp/$(basename $f).root -p
     done
     python3 cosmic_eq_analyze.py /tmp/prad_023600.evio.*.root \\
-            --history gain_history.json
+            --history cosmic_history.json
 
 Glob form (shell expansion or --glob):
     python3 cosmic_eq_analyze.py --glob '/tmp/prad_023600.evio.*.root' \\
-            --history gain_history.json
+            --history cosmic_history.json
 """
 
 from __future__ import annotations
@@ -41,12 +45,20 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import ROOT  # noqa: E402
+import numpy as np
+import uproot
+import awkward as ak
+from scipy.optimize import curve_fit
+from scipy.signal import find_peaks
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 from cosmic_eq_common import (
-    HVClient, filter_modules_by_type, latest_iteration, load_daq_map,
-    load_history, load_hycal_modules, n_iterations, natural_module_sort_key,
-    save_history,
+    HVClient, filter_modules_by_type, load_daq_map, load_history,
+    load_hycal_modules, n_iterations, natural_module_sort_key, save_history,
 )
 
 SUM_TRIGGER_BIT  = 8
@@ -59,38 +71,34 @@ SUM_TRIGGER_MASK = 1 << SUM_TRIGGER_BIT
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="HyCal per-channel peak-height/integral fits → gain history JSON")
+        description="HyCal per-channel peak-height/integral fits → cosmic history JSON")
     p.add_argument("input_root", nargs="*",
                    help="One or more ROOT files from replay_rawdata -p (chained)")
     p.add_argument("--glob", default=None,
-                   help="Shell-style glob pattern for input ROOT files (alternative to "
-                        "positional args)")
+                   help="Shell-style glob for input files (alternative to positional)")
     p.add_argument("--history", required=True,
-                   help="Path to gain history JSON (created/appended)")
+                   help="Path to cosmic history JSON (created/appended)")
     p.add_argument("--pdf", default=None,
                    help="Optional PDF for per-channel fit canvases (default: <history>_iterN.pdf)")
-    p.add_argument("--save-hists", default=None,
-                   help="Optional ROOT file to save all per-channel histograms")
     p.add_argument("-n", "--max-events", type=int, default=-1,
                    help="Process at most N events")
     p.add_argument("--exclusive", action="store_true",
                    help="Require ONLY the sum bit (reject events with any other bit set)")
     p.add_argument("--types", default="PbGlass,PWO",
-                   help="Comma-separated module types to include (default: PbGlass,PWO). "
-                        "Use 'all' to include everything.")
-    # peak height histogram
+                   help="Module types to include (default: PbGlass,PWO; 'all' for everything)")
+    # peak-height histogram
     p.add_argument("--ph-min",  type=float, default=0.0,    help="Peak-height hist min ADC")
     p.add_argument("--ph-max",  type=float, default=4096.0, help="Peak-height hist max ADC")
     p.add_argument("--ph-bins", type=int,   default=256,    help="Peak-height hist bins")
-    # peak integral histogram
+    # peak-integral histogram
     p.add_argument("--pi-min",  type=float, default=0.0,     help="Peak-integral hist min")
     p.add_argument("--pi-max",  type=float, default=80000.0, help="Peak-integral hist max")
     p.add_argument("--pi-bins", type=int,   default=400,     help="Peak-integral hist bins")
     # fit knobs
     p.add_argument("--min-entries", type=int, default=200,
                    help="Skip channels with fewer entries (default: 200)")
-    p.add_argument("--peak-sigma", type=float, default=2.0,
-                   help="TSpectrum sigma in bins (default: 2)")
+    p.add_argument("--peak-prom", type=float, default=0.10,
+                   help="find_peaks prominence as fraction of histogram max (default: 0.10)")
     p.add_argument("--fit-window", type=float, default=2.5,
                    help="Fit window = peak ± N * rough_sigma (default: 2.5)")
     # HV
@@ -105,223 +113,11 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-# ============================================================================
-#  Histogram building
-# ============================================================================
-
-def build_histograms(input_files: List[str],
-                     daq_map: Dict[Tuple[int, int, int], str],
-                     module_set: set,
-                     args: argparse.Namespace
-                    ) -> Tuple[Dict[str, "ROOT.TH1F"], Dict[str, "ROOT.TH1F"]]:
-    """Loop over events from a TChain of input files; fill per-channel hists."""
-    chain = ROOT.TChain("events")
-    for path in input_files:
-        rc = chain.Add(path)
-        if rc <= 0:
-            print(f"WARNING: TChain.Add returned {rc} for {path}")
-    n_total = chain.GetEntries()
-    if n_total <= 0:
-        sys.exit(f"ERROR: chain is empty (no 'events' trees found in {input_files})")
-    n_to_process = n_total if args.max_events < 0 else min(n_total, args.max_events)
-    print(f"Chained {len(input_files)} file(s); reading {n_to_process}/{n_total} events")
-    tree = chain
-
-    hists_ph: Dict[str, ROOT.TH1F] = {}
-    hists_pi: Dict[str, ROOT.TH1F] = {}
-
-    def get_or_make_ph(name: str) -> ROOT.TH1F:
-        h = hists_ph.get(name)
-        if h is None:
-            h = ROOT.TH1F(f"hph_{name}",
-                          f"{name} peak height;peak height [ADC];events",
-                          args.ph_bins, args.ph_min, args.ph_max)
-            h.SetDirectory(0)
-            hists_ph[name] = h
-        return h
-
-    def get_or_make_pi(name: str) -> ROOT.TH1F:
-        h = hists_pi.get(name)
-        if h is None:
-            h = ROOT.TH1F(f"hpi_{name}",
-                          f"{name} peak integral;peak integral [ADC];events",
-                          args.pi_bins, args.pi_min, args.pi_max)
-            h.SetDirectory(0)
-            hists_pi[name] = h
-        return h
-
-    n_passed = 0
-    n_skipped_trig = 0
-    t0 = time.time()
-    for i in range(n_to_process):
-        tree.GetEntry(i)
-        trig = int(tree.trigger)
-
-        if not (trig & SUM_TRIGGER_MASK):
-            n_skipped_trig += 1
-            continue
-        if args.exclusive and (trig & ~SUM_TRIGGER_MASK):
-            n_skipped_trig += 1
-            continue
-
-        nch = int(tree.nch)
-        for k in range(nch):
-            crate = int(tree.crate[k])
-            slot  = int(tree.slot[k])
-            ch    = int(tree.channel[k])
-            name  = daq_map.get((crate, slot, ch))
-            if not name or name not in module_set:
-                continue
-            npeaks = int(tree.npeaks[k])
-            if npeaks <= 0:
-                continue
-            ph = float(tree.peak_height[k][0])
-            pi = float(tree.peak_integral[k][0])
-            get_or_make_ph(name).Fill(ph)
-            get_or_make_pi(name).Fill(pi)
-
-        n_passed += 1
-        if not args.quiet and (i + 1) % 50000 == 0:
-            rate = (i + 1) / max(time.time() - t0, 1e-3)
-            print(f"  ... {i + 1}/{n_to_process}  ({rate:.0f} ev/s)")
-
-    print(f"Done. {n_passed} events passed sum-trigger filter, "
-          f"{n_skipped_trig} rejected. Filled {len(hists_ph)} channels.")
-    return hists_ph, hists_pi
-
-
-# ============================================================================
-#  Per-channel TSpectrum + Gaussian fit
-# ============================================================================
-
-class FitOutcome:
-    __slots__ = ("mean", "sigma", "chi2_ndf", "status", "fit_lo", "fit_hi")
-
-    def __init__(self, mean: float, sigma: float, chi2_ndf: float,
-                 status: str, fit_lo: float = 0.0, fit_hi: float = 0.0):
-        self.mean     = mean
-        self.sigma    = sigma
-        self.chi2_ndf = chi2_ndf
-        self.status   = status
-        self.fit_lo   = fit_lo
-        self.fit_hi   = fit_hi
-
-
-def fit_one(hist: "ROOT.TH1F", args: argparse.Namespace) -> FitOutcome:
-    entries = int(hist.GetEntries())
-    if entries < args.min_entries:
-        return FitOutcome(0.0, 0.0, 0.0, "LOW_STATS")
-
-    spec = ROOT.TSpectrum(10)
-    nfound = spec.Search(hist, args.peak_sigma, "nodraw nobackground", 0.10)
-    if nfound <= 0:
-        peak_x = hist.GetBinCenter(hist.GetMaximumBin())
-    else:
-        xs = spec.GetPositionX()
-        best_x = xs[0]
-        best_h = hist.GetBinContent(hist.FindBin(xs[0]))
-        for j in range(1, nfound):
-            h_j = hist.GetBinContent(hist.FindBin(xs[j]))
-            if h_j > best_h:
-                best_h = h_j
-                best_x = xs[j]
-        peak_x = best_x
-
-    # rough sigma from FWHM around peak
-    peak_bin = hist.FindBin(peak_x)
-    peak_y = hist.GetBinContent(peak_bin)
-    if peak_y <= 0:
-        return FitOutcome(peak_x, 0.0, 0.0, "NO_PEAK")
-    half = peak_y / 2.0
-    lo = peak_bin
-    while lo > 1 and hist.GetBinContent(lo) > half:
-        lo -= 1
-    hi = peak_bin
-    while hi < hist.GetNbinsX() and hist.GetBinContent(hi) > half:
-        hi += 1
-    fwhm = hist.GetBinCenter(hi) - hist.GetBinCenter(lo)
-    rough_sigma = max(fwhm / 2.355, 2 * hist.GetBinWidth(1))
-
-    fit_lo = max(peak_x - args.fit_window * rough_sigma, hist.GetXaxis().GetXmin())
-    fit_hi = min(peak_x + args.fit_window * rough_sigma, hist.GetXaxis().GetXmax())
-
-    fn = ROOT.TF1(f"g_{hist.GetName()}", "gaus", fit_lo, fit_hi)
-    fn.SetParameters(peak_y, peak_x, rough_sigma)
-    res = hist.Fit(fn, "RQNS")
-
-    if not res.Get() or res.Status() != 0:
-        return FitOutcome(peak_x, rough_sigma, 0.0, "FIT_FAIL", fit_lo, fit_hi)
-
-    mean  = fn.GetParameter(1)
-    sigma = abs(fn.GetParameter(2))
-    chi2  = fn.GetChisquare()
-    ndf   = max(fn.GetNDF(), 1)
-
-    # attach a fit function to the histogram for the PDF report
-    fn_save = ROOT.TF1(f"fit_{hist.GetName()}", "gaus", fit_lo, fit_hi)
-    fn_save.SetParameters(fn.GetParameter(0), mean, sigma)
-    fn_save.SetLineColor(ROOT.kRed)
-    fn_save.SetLineWidth(2)
-    hist.GetListOfFunctions().Add(fn_save)
-
-    return FitOutcome(mean, sigma, chi2 / ndf, "OK", fit_lo, fit_hi)
-
-
-# ============================================================================
-#  PDF output (one row per channel = peak-height + peak-integral side by side)
-# ============================================================================
-
-def write_pdf(out_pdf: str,
-              ordered: List[str],
-              hists_ph: Dict[str, "ROOT.TH1F"],
-              hists_pi: Dict[str, "ROOT.TH1F"],
-              rows_per_page: int = 4) -> None:
-    ROOT.gROOT.SetBatch(True)
-    ROOT.gStyle.SetOptStat(1110)
-    ROOT.gStyle.SetOptFit(111)
-
-    canvas = ROOT.TCanvas("c_gain", "gain fits", 1200, 900)
-    canvas.Divide(2, rows_per_page)
-    canvas.Print(f"{out_pdf}[")
-
-    pad_idx = 0
-    for name in ordered:
-        h_ph = hists_ph.get(name)
-        h_pi = hists_pi.get(name)
-        if h_ph is None and h_pi is None:
-            continue
-        # peak height
-        pad_idx += 1
-        canvas.cd(pad_idx)
-        ROOT.gPad.SetLogy(True)
-        if h_ph: h_ph.Draw()
-        # peak integral
-        pad_idx += 1
-        canvas.cd(pad_idx)
-        ROOT.gPad.SetLogy(True)
-        if h_pi: h_pi.Draw()
-
-        if pad_idx >= 2 * rows_per_page:
-            canvas.Print(out_pdf)
-            canvas.Clear()
-            canvas.Divide(2, rows_per_page)
-            pad_idx = 0
-
-    if pad_idx > 0:
-        canvas.Print(out_pdf)
-    canvas.Print(f"{out_pdf}]")
-
-
-# ============================================================================
-#  Main
-# ============================================================================
-
 def resolve_inputs(args: argparse.Namespace) -> List[str]:
     """Combine positional file list with --glob; expand any shell-style globs."""
     import glob as _glob
     files: List[str] = []
     for entry in args.input_root:
-        # auto-expand any positional that contains glob chars
         if any(c in entry for c in "*?["):
             matches = sorted(_glob.glob(entry))
             if not matches:
@@ -337,15 +133,378 @@ def resolve_inputs(args: argparse.Namespace) -> List[str]:
     if not files:
         sys.exit("ERROR: no input ROOT files (give one or more positional args, "
                  "or use --glob '...')")
-    # de-duplicate while preserving order
-    seen = set()
-    unique = []
+    seen, unique = set(), []
     for f in files:
         if f not in seen:
-            seen.add(f)
-            unique.append(f)
+            seen.add(f); unique.append(f)
     return unique
 
+
+# ============================================================================
+#  Lightweight Histogram (replaces TH1F)
+# ============================================================================
+
+class Histogram:
+    __slots__ = ("nbins", "lo", "hi", "width", "counts")
+
+    def __init__(self, nbins: int, lo: float, hi: float):
+        self.nbins  = int(nbins)
+        self.lo     = float(lo)
+        self.hi     = float(hi)
+        self.width  = (self.hi - self.lo) / self.nbins
+        self.counts = np.zeros(self.nbins, dtype=np.int64)
+
+    def fill_many(self, values: np.ndarray) -> None:
+        v = np.asarray(values, dtype=np.float64)
+        v = v[np.isfinite(v)]
+        v = v[(v >= self.lo) & (v < self.hi)]
+        if v.size == 0:
+            return
+        bins = ((v - self.lo) / self.width).astype(np.int64)
+        np.add.at(self.counts, bins, 1)
+
+    @property
+    def entries(self) -> int:
+        return int(self.counts.sum())
+
+    def bin_centers(self) -> np.ndarray:
+        return self.lo + (np.arange(self.nbins) + 0.5) * self.width
+
+
+# ============================================================================
+#  Branch-name discovery (Replay.cpp uses 'hycal.<x>' branch names)
+# ============================================================================
+
+BRANCH_CANDIDATES = {
+    "trigger":      ["trigger"],
+    "nch":          ["hycal.nch", "nch"],
+    "crate":        ["hycal.crate", "crate"],
+    "slot":         ["hycal.slot", "slot"],
+    "channel":      ["hycal.channel", "channel"],
+    "npeaks":       ["hycal.npeaks", "npeaks"],
+    "peak_height":  ["hycal.peak_height", "peak_height"],
+    "peak_integral": ["hycal.peak_integral", "peak_integral"],
+}
+
+
+def resolve_branches(tree) -> Dict[str, str]:
+    """Map our logical names to whichever branch name actually exists."""
+    keys = set(tree.keys())
+    out: Dict[str, str] = {}
+    for logical, candidates in BRANCH_CANDIDATES.items():
+        for c in candidates:
+            if c in keys:
+                out[logical] = c
+                break
+        else:
+            sys.exit(f"ERROR: tree has none of {candidates} (looking for '{logical}')")
+    return out
+
+
+# ============================================================================
+#  Vectorised histogram building (uproot + awkward + numpy)
+# ============================================================================
+
+def build_histograms(input_files: List[str],
+                     daq_map: Dict[Tuple[int, int, int], str],
+                     module_set: set,
+                     args: argparse.Namespace
+                    ) -> Tuple[Dict[str, Histogram], Dict[str, Histogram]]:
+    hists_ph: Dict[str, Histogram] = {}
+    hists_pi: Dict[str, Histogram] = {}
+
+    # Pre-build a numpy lookup table: lookup[crate, slot, channel] → channel ID
+    # (-1 = not in module set). Replaces a dict lookup in the inner loop.
+    MAX_CRATE, MAX_SLOT, MAX_CHAN = 32, 32, 16
+    lookup = np.full((MAX_CRATE, MAX_SLOT, MAX_CHAN), -1, dtype=np.int32)
+    id_to_name: List[str] = []
+    for (c, s, ch), name in daq_map.items():
+        if name not in module_set:
+            continue
+        if 0 <= c < MAX_CRATE and 0 <= s < MAX_SLOT and 0 <= ch < MAX_CHAN:
+            lookup[c, s, ch] = len(id_to_name)
+            id_to_name.append(name)
+
+    def get_or_make_ph(name: str) -> Histogram:
+        h = hists_ph.get(name)
+        if h is None:
+            h = Histogram(args.ph_bins, args.ph_min, args.ph_max)
+            hists_ph[name] = h
+        return h
+
+    def get_or_make_pi(name: str) -> Histogram:
+        h = hists_pi.get(name)
+        if h is None:
+            h = Histogram(args.pi_bins, args.pi_min, args.pi_max)
+            hists_pi[name] = h
+        return h
+
+    n_passed = 0
+    n_skipped = 0
+    n_total = 0
+    t0 = time.time()
+    print(f"Reading {len(input_files)} file(s)")
+
+    for path in input_files:
+        try:
+            f = uproot.open(path)
+        except Exception as e:
+            print(f"WARNING: cannot open {path}: {e}")
+            continue
+        if "events" not in f:
+            print(f"WARNING: no 'events' tree in {path}")
+            continue
+        tree = f["events"]
+        bnames = resolve_branches(tree)
+        n_in_file = tree.num_entries
+        if not args.quiet:
+            print(f"  {path}  ({n_in_file} events)")
+
+        for chunk in tree.iterate(list(bnames.values()), step_size="100 MB",
+                                   library="ak"):
+            n_chunk = len(chunk)
+
+            triggers = np.asarray(chunk[bnames["trigger"]])
+            ev_mask = (triggers & SUM_TRIGGER_MASK) != 0
+            if args.exclusive:
+                ev_mask &= (triggers & ~SUM_TRIGGER_MASK) == 0
+
+            # max-events cap
+            if args.max_events > 0:
+                room = max(0, args.max_events - n_total)
+                if room < n_chunk:
+                    cap = np.zeros(n_chunk, dtype=bool)
+                    cap[:room] = True
+                    ev_mask &= cap
+                    n_total += room
+                else:
+                    n_total += n_chunk
+            else:
+                n_total += n_chunk
+            n_passed  += int(np.sum(ev_mask))
+            n_skipped += int(np.sum(~ev_mask))
+
+            if not ev_mask.any():
+                if args.max_events > 0 and n_total >= args.max_events:
+                    break
+                continue
+
+            crate = chunk[bnames["crate"]][ev_mask]
+            slot  = chunk[bnames["slot"]][ev_mask]
+            chnl  = chunk[bnames["channel"]][ev_mask]
+            npks  = chunk[bnames["npeaks"]][ev_mask]
+            ph    = chunk[bnames["peak_height"]][ev_mask]
+            pi    = chunk[bnames["peak_integral"]][ev_mask]
+
+            # Flatten across events. peak_height/integral are jagged in nch
+            # and fixed in the inner dim — we want index [0] (highest peak).
+            flat_crate = ak.flatten(crate).to_numpy().astype(np.int64)
+            flat_slot  = ak.flatten(slot).to_numpy().astype(np.int64)
+            flat_chnl  = ak.flatten(chnl).to_numpy().astype(np.int64)
+            flat_npks  = ak.flatten(npks).to_numpy().astype(np.int64)
+            flat_ph    = ak.flatten(ph[:, :, 0]).to_numpy().astype(np.float64)
+            flat_pi    = ak.flatten(pi[:, :, 0]).to_numpy().astype(np.float64)
+
+            # filter: npeaks > 0 and (crate,slot,chan) within bounds
+            ok = ((flat_npks > 0)
+                  & (flat_crate >= 0) & (flat_crate < MAX_CRATE)
+                  & (flat_slot  >= 0) & (flat_slot  < MAX_SLOT)
+                  & (flat_chnl  >= 0) & (flat_chnl  < MAX_CHAN))
+            flat_crate = flat_crate[ok]
+            flat_slot  = flat_slot[ok]
+            flat_chnl  = flat_chnl[ok]
+            flat_ph    = flat_ph[ok]
+            flat_pi    = flat_pi[ok]
+
+            if flat_crate.size == 0:
+                continue
+
+            # One vectorised lookup → channel IDs (or -1)
+            ids = lookup[flat_crate, flat_slot, flat_chnl]
+            valid = ids >= 0
+            ids = ids[valid]
+            ph_vals = flat_ph[valid]
+            pi_vals = flat_pi[valid]
+            if ids.size == 0:
+                continue
+
+            # Group by channel and bulk-fill each histogram
+            unique_ids, inverse = np.unique(ids, return_inverse=True)
+            for i, cid in enumerate(unique_ids):
+                name = id_to_name[cid]
+                cmask = inverse == i
+                get_or_make_ph(name).fill_many(ph_vals[cmask])
+                get_or_make_pi(name).fill_many(pi_vals[cmask])
+
+            if args.max_events > 0 and n_total >= args.max_events:
+                break
+
+        if args.max_events > 0 and n_total >= args.max_events:
+            break
+
+    elapsed = time.time() - t0
+    print(f"Processed {n_total} events ({n_passed} passed sum filter, "
+          f"{n_skipped} rejected) in {elapsed:.1f}s; filled {len(hists_ph)} channels.")
+    return hists_ph, hists_pi
+
+
+# ============================================================================
+#  Per-channel peak search + Gaussian fit
+# ============================================================================
+
+class FitOutcome:
+    __slots__ = ("mean", "sigma", "chi2_ndf", "status",
+                 "fit_lo", "fit_hi", "amp")
+
+    def __init__(self, mean: float, sigma: float, chi2_ndf: float,
+                 status: str, fit_lo: float = 0.0, fit_hi: float = 0.0,
+                 amp: float = 0.0):
+        self.mean     = mean
+        self.sigma    = sigma
+        self.chi2_ndf = chi2_ndf
+        self.status   = status
+        self.fit_lo   = fit_lo
+        self.fit_hi   = fit_hi
+        self.amp      = amp
+
+
+def _gauss(x, A, mu, sigma):
+    return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+
+
+def fit_one(hist: Histogram, args: argparse.Namespace) -> FitOutcome:
+    entries = hist.entries
+    if entries < args.min_entries:
+        return FitOutcome(0.0, 0.0, 0.0, "LOW_STATS")
+
+    centers = hist.bin_centers()
+    y = hist.counts.astype(np.float64)
+
+    ymax = float(y.max())
+    if ymax <= 0:
+        return FitOutcome(0.0, 0.0, 0.0, "NO_PEAK")
+    peaks, _ = find_peaks(y, prominence=args.peak_prom * ymax)
+    if peaks.size == 0:
+        peak_idx = int(np.argmax(y))
+    else:
+        peak_idx = int(peaks[np.argmax(y[peaks])])
+
+    peak_x = centers[peak_idx]
+    peak_y = y[peak_idx]
+    if peak_y <= 0:
+        return FitOutcome(peak_x, 0.0, 0.0, "NO_PEAK")
+
+    # rough sigma from FWHM around peak
+    half = peak_y / 2.0
+    lo_idx = peak_idx
+    while lo_idx > 0 and y[lo_idx] > half:
+        lo_idx -= 1
+    hi_idx = peak_idx
+    while hi_idx < hist.nbins - 1 and y[hi_idx] > half:
+        hi_idx += 1
+    fwhm = centers[hi_idx] - centers[lo_idx]
+    rough_sigma = max(fwhm / 2.355, 2 * hist.width)
+
+    fit_lo = max(peak_x - args.fit_window * rough_sigma, hist.lo)
+    fit_hi = min(peak_x + args.fit_window * rough_sigma, hist.hi)
+    mask = (centers >= fit_lo) & (centers <= fit_hi)
+    if mask.sum() < 4:
+        return FitOutcome(peak_x, rough_sigma, 0.0, "FIT_FAIL", fit_lo, fit_hi)
+
+    # Poisson errors (sqrt(N), floored at 1 for empty bins)
+    sigma_y = np.sqrt(np.maximum(y[mask], 1.0))
+    try:
+        popt, _ = curve_fit(
+            _gauss, centers[mask], y[mask],
+            p0=[peak_y, peak_x, rough_sigma],
+            sigma=sigma_y, absolute_sigma=False, maxfev=2000)
+    except Exception:
+        return FitOutcome(peak_x, rough_sigma, 0.0, "FIT_FAIL", fit_lo, fit_hi)
+
+    A, mu, sigma = popt
+    sigma = abs(sigma)
+    fit_y = _gauss(centers[mask], A, mu, sigma)
+    chi2 = float(np.sum(((y[mask] - fit_y) / sigma_y) ** 2))
+    ndf  = max(int(mask.sum()) - 3, 1)
+    return FitOutcome(float(mu), float(sigma), chi2 / ndf, "OK",
+                      fit_lo, fit_hi, float(A))
+
+
+# ============================================================================
+#  PDF output (matplotlib)
+# ============================================================================
+
+def write_pdf(out_pdf: str,
+              ordered: List[str],
+              hists_ph: Dict[str, Histogram],
+              hists_pi: Dict[str, Histogram],
+              fits_ph: Dict[str, FitOutcome],
+              fits_pi: Dict[str, FitOutcome],
+              rows_per_page: int = 4) -> None:
+    plt.rcParams.update({"font.size": 8})
+    with PdfPages(out_pdf) as pdf:
+        i = 0
+        fig, axes = plt.subplots(rows_per_page, 2, figsize=(10, 11))
+        for name in ordered:
+            row = i % rows_per_page
+            if row == 0 and i > 0:
+                fig.tight_layout()
+                pdf.savefig(fig)
+                plt.close(fig)
+                fig, axes = plt.subplots(rows_per_page, 2, figsize=(10, 11))
+
+            _draw_panel(axes[row][0], name, "peak height",
+                        hists_ph.get(name), fits_ph.get(name), "steelblue")
+            _draw_panel(axes[row][1], name, "peak integral",
+                        hists_pi.get(name), fits_pi.get(name), "seagreen")
+            i += 1
+
+        if i > 0:
+            tail = i % rows_per_page
+            if tail != 0:
+                for r in range(tail, rows_per_page):
+                    axes[r][0].axis("off")
+                    axes[r][1].axis("off")
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+
+
+def _draw_panel(ax, name: str, label: str,
+                hist: Optional[Histogram],
+                fit:  Optional[FitOutcome],
+                color: str) -> None:
+    if hist is None or hist.entries == 0:
+        ax.axis("off")
+        return
+    centers = hist.bin_centers()
+    ax.bar(centers, hist.counts, width=hist.width, color=color,
+           edgecolor="none", linewidth=0)
+    if fit is not None and fit.status == "OK":
+        xs = np.linspace(fit.fit_lo, fit.fit_hi, 200)
+        ys = _gauss(xs, fit.amp, fit.mean, fit.sigma)
+        ax.plot(xs, ys, "r-", lw=1.5)
+        ax.text(0.97, 0.95,
+                f"mu={fit.mean:.2f}\nsig={fit.sigma:.2f}\nchi2/ndf={fit.chi2_ndf:.2f}\nN={hist.entries}",
+                transform=ax.transAxes, ha="right", va="top",
+                family="monospace",
+                bbox=dict(boxstyle="round,pad=0.2",
+                          facecolor="white", alpha=0.8, edgecolor="0.5"))
+    elif fit is not None:
+        ax.text(0.97, 0.95, f"{fit.status}\nN={hist.entries}",
+                transform=ax.transAxes, ha="right", va="top",
+                color="red", family="monospace",
+                bbox=dict(boxstyle="round,pad=0.2",
+                          facecolor="white", alpha=0.8, edgecolor="0.5"))
+    ax.set_yscale("log")
+    ax.set_title(f"{name}  {label}", fontsize=9)
+    ax.set_xlabel("ADC", fontsize=8)
+    ax.tick_params(labelsize=7)
+
+
+# ============================================================================
+#  Main
+# ============================================================================
 
 def main() -> int:
     args = parse_args()
@@ -367,10 +526,8 @@ def main() -> int:
     print(f"Selected {len(wanted_names)} modules of types: {args.types}")
     module_set = set(wanted_names)
 
-    # Build histograms
     hists_ph, hists_pi = build_histograms(input_files, daq_map, module_set, args)
 
-    # Fit
     ordered = sorted(set(hists_ph.keys()) | set(hists_pi.keys()),
                      key=natural_module_sort_key)
     fits_ph: Dict[str, FitOutcome] = {}
@@ -379,15 +536,10 @@ def main() -> int:
         if name in hists_ph: fits_ph[name] = fit_one(hists_ph[name], args)
         if name in hists_pi: fits_pi[name] = fit_one(hists_pi[name], args)
         if not args.quiet:
-            r_ph = fits_ph.get(name)
-            r_pi = fits_pi.get(name)
+            r_ph = fits_ph.get(name); r_pi = fits_pi.get(name)
             line = f"  {name:<8}"
-            if r_ph:
-                line += (f"  PH μ={r_ph.mean:>8.2f} σ={r_ph.sigma:>6.2f}"
-                         f" {r_ph.status}")
-            if r_pi:
-                line += (f"  PI μ={r_pi.mean:>10.1f} σ={r_pi.sigma:>8.1f}"
-                         f" {r_pi.status}")
+            if r_ph: line += f"  PH mu={r_ph.mean:>8.2f} sig={r_ph.sigma:>6.2f} {r_ph.status}"
+            if r_pi: line += f"  PI mu={r_pi.mean:>10.1f} sig={r_pi.sigma:>8.1f} {r_pi.status}"
             print(line)
 
     # Optional HV query
@@ -405,12 +557,11 @@ def main() -> int:
                 print(f"WARNING: HV GET {name} failed: {e}")
                 hv_data[name] = None
 
-    # Append to history JSON
+    # Append to history
     channels = load_history(args.history)
     iter_idx = n_iterations(channels) + 1
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     input_basenames = [os.path.basename(p) for p in input_files]
-    # store one string when only a single file, else the list
     input_field: Any = (input_basenames[0] if len(input_basenames) == 1
                         else input_basenames)
 
@@ -418,16 +569,12 @@ def main() -> int:
         r_ph = fits_ph.get(name)
         r_pi = fits_pi.get(name)
         h_ph = hists_ph.get(name)
-        if h_ph is None:
-            count = 0
-        else:
-            count = int(h_ph.GetEntries())
+        count = h_ph.entries if h_ph is not None else 0
 
         hv_entry = hv_data.get(name)
         vset = hv_entry["vset"] if hv_entry else None
         vmon = hv_entry["vmon"] if hv_entry else None
 
-        # combined status — OK only if both fits succeeded
         if r_ph is None or r_pi is None:
             status = "MISSING"
         elif r_ph.status == "OK" and r_pi.status == "OK":
@@ -455,20 +602,9 @@ def main() -> int:
     save_history(args.history, channels)
     print(f"Appended iteration {iter_idx} to {args.history}")
 
-    # PDF
     pdf_path = args.pdf or f"{os.path.splitext(args.history)[0]}_iter{iter_idx}.pdf"
-    write_pdf(pdf_path, ordered, hists_ph, hists_pi)
+    write_pdf(pdf_path, ordered, hists_ph, hists_pi, fits_ph, fits_pi)
     print(f"Wrote {pdf_path}")
-
-    # Optional histograms ROOT file
-    if args.save_hists:
-        rf = ROOT.TFile.Open(args.save_hists, "RECREATE")
-        for name in ordered:
-            if name in hists_ph: hists_ph[name].Write()
-            if name in hists_pi: hists_pi[name].Write()
-        rf.Close()
-        print(f"Wrote {args.save_hists}")
-
     return 0
 
 

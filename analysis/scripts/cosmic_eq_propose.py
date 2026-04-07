@@ -67,10 +67,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("-o", "--output", required=True,
                    help="Output batch settings JSON path")
     p.add_argument("--target-mean", type=float, required=True,
-                   help="Target peak_height_mean (ADC)")
+                   help="Target value for the chosen --metric (ADC). "
+                        "This is the peak_height_mean OR peak_integral_mean "
+                        "you want every channel driven toward.")
     p.add_argument("--metric", choices=("peak_height", "peak_integral"),
                    default="peak_height",
-                   help="Which fitted mean to drive (default: peak_height)")
+                   help="Which fitted mean to drive: 'peak_height' (default) "
+                        "uses peak_height_mean/sigma; 'peak_integral' uses "
+                        "peak_integral_mean/sigma instead.")
     p.add_argument("--types", default="PbGlass,PWO",
                    help="Module types to include (default: PbGlass,PWO)")
     p.add_argument("--initial-step", type=float, default=100.0,
@@ -86,7 +90,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-good-fit", action="store_true",
                    help="Only propose for channels whose latest entry has status==OK")
     p.add_argument("--max-sigma", type=float, default=0.0,
-                   help="Skip channels whose latest peak_height_sigma exceeds this (0 = no cut)")
+                   help="Skip channels whose latest <metric>_sigma exceeds this (0 = no cut). "
+                        "Applies to whichever metric --metric selects.")
     p.add_argument("--hv-url", default="http://clonpc19:8765",
                    help="prad2hvd URL")
     p.add_argument("--query-hv", action="store_true",

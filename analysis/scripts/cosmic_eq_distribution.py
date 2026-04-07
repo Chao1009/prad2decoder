@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """
-cosmic_eq_distribution — pass 2 of the offline gain-equalization workflow.
+cosmic_eq_distribution — pass 2 of the offline cosmic-data gain-equalization
+workflow.
 
-Reads the unified gain history JSON, picks one iteration (latest by default),
+Reads the unified cosmic history JSON, picks one iteration (latest by default),
 and produces a histogram of per-channel mean values across all good fits.
 This is what shows the bimodal distribution: an "already equalized" group at
 high mean and an "underequalized" group at low mean.
 
 Outputs:
-    <out>.pdf — overview canvas with:
+    <out>.pdf — multi-page PDF with:
                   · histogram of peak_height_mean across channels
                   · histogram of peak_integral_mean
-                  · scatter peak_height_mean vs VSet (when HV recorded)
+                  · scatter peak_*_mean vs VSet (when HV recorded)
                   · per-iteration overlay (if multiple iters present)
     Stdout    — summary stats: n_channels, mean, median, group split estimate.
 
+Pure-Python dependencies (no ROOT install needed):
+    numpy, matplotlib
+
 Typical use:
-    python3 cosmic_eq_distribution.py gain_history.json
-    python3 cosmic_eq_distribution.py gain_history.json --iter 2
-    python3 cosmic_eq_distribution.py gain_history.json --max-sigma 200 --type W
+    python3 cosmic_eq_distribution.py cosmic_history.json
+    python3 cosmic_eq_distribution.py cosmic_history.json --iter 2
+    python3 cosmic_eq_distribution.py cosmic_history.json --max-sigma 4 --types W
+    python3 cosmic_eq_distribution.py cosmic_history.json --metric peak_integral
 """
 
 from __future__ import annotations
@@ -28,7 +33,11 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-import ROOT  # noqa: E402
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 from cosmic_eq_common import (
     filter_modules_by_type, load_history, load_hycal_modules,
@@ -43,17 +52,19 @@ from cosmic_eq_common import (
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Plot the distribution of fitted means across channels")
-    p.add_argument("history", help="Path to gain history JSON")
+    p.add_argument("history", help="Path to cosmic history JSON")
     p.add_argument("--iter", type=int, default=-1,
                    help="Iteration index (1-based). Default -1 = latest.")
+    p.add_argument("--metric", choices=("peak_height", "peak_integral"),
+                   default="peak_height",
+                   help="Which fitted mean drives the iteration overlay and stats "
+                        "(default: peak_height). The 2x2 overview always shows both.")
     p.add_argument("--types", default="PbGlass,PWO",
                    help="Module types to include (default: PbGlass,PWO; 'all' for everything)")
     p.add_argument("--max-sigma", type=float, default=0.0,
-                   help="Quality cut: drop channels with peak_height_sigma above this. "
-                        "0 = no cut.")
+                   help="Quality cut: drop channels with <metric>_sigma above this. 0 = no cut.")
     p.add_argument("--max-chi2", type=float, default=0.0,
-                   help="Quality cut: drop channels with peak_height_chi2 above this. "
-                        "0 = no cut.")
+                   help="Quality cut: drop channels with <metric>_chi2 above this. 0 = no cut.")
     p.add_argument("-o", "--output", default=None,
                    help="Output PDF path (default: <history>_dist_iterN.pdf)")
     p.add_argument("--ph-bins", type=int, default=80, help="Hist bins for PH means")
@@ -68,15 +79,21 @@ def parse_args() -> argparse.Namespace:
 #  Iteration extraction
 # ============================================================================
 
+def metric_keys(metric: str):
+    if metric == "peak_integral":
+        return "peak_integral_mean", "peak_integral_sigma", "peak_integral_chi2"
+    return "peak_height_mean", "peak_height_sigma", "peak_height_chi2"
+
+
 def extract_iteration(channels: Dict[str, List[dict]],
                       iter_idx: int,
                       wanted: set,
                       max_sigma: float,
-                      max_chi2: float) -> List[dict]:
-    """Pull one iteration entry per channel, applying quality cuts.
-
-    iter_idx <= 0 → latest.
-    """
+                      max_chi2: float,
+                      metric: str = "peak_height") -> List[dict]:
+    """Pull one iteration entry per channel, applying quality cuts on the
+    chosen metric. iter_idx <= 0 → latest."""
+    mean_key, sigma_key, chi2_key = metric_keys(metric)
     out: List[dict] = []
     for name, entries in channels.items():
         if name not in wanted:
@@ -86,16 +103,15 @@ def extract_iteration(channels: Dict[str, List[dict]],
         if iter_idx <= 0:
             entry = entries[-1]
         else:
-            # match by 1-based "iter" field, not by index — entries can be out of order
             match = [e for e in entries if e.get("iter") == iter_idx]
             if not match:
                 continue
             entry = match[-1]
 
-        if entry.get("peak_height_mean") is None:
+        if entry.get(mean_key) is None:
             continue
-        sig = entry.get("peak_height_sigma") or 0.0
-        chi = entry.get("peak_height_chi2") or 0.0
+        sig = entry.get(sigma_key) or 0.0
+        chi = entry.get(chi2_key) or 0.0
         if max_sigma > 0 and sig > max_sigma:
             continue
         if max_chi2 > 0 and chi > max_chi2:
@@ -103,6 +119,7 @@ def extract_iteration(channels: Dict[str, List[dict]],
 
         record = dict(entry)
         record["name"] = name
+        record["_metric_mean"] = entry[mean_key]
         out.append(record)
     out.sort(key=lambda r: natural_module_sort_key(r["name"]))
     return out
@@ -120,119 +137,114 @@ def parse_range(s: str, default: tuple) -> tuple:
         return default
 
 
-def make_overview(records: List[dict],
-                  iter_idx: int,
-                  args: argparse.Namespace,
-                  out_pdf: str) -> None:
-    ROOT.gROOT.SetBatch(True)
-    ROOT.gStyle.SetOptStat(1110)
-
+def make_overview(records: List[dict], iter_idx: int,
+                  args: argparse.Namespace, pdf: PdfPages) -> None:
     ph_lo, ph_hi = parse_range(args.ph_range, (0, 4096))
     pi_lo, pi_hi = parse_range(args.pi_range, (0, 80000))
 
-    h_ph = ROOT.TH1F("h_ph_mean",
-                      f"Peak-height mean per channel (iter {iter_idx});"
-                      f"peak_height_mean [ADC];channels",
-                      args.ph_bins, ph_lo, ph_hi)
-    h_pi = ROOT.TH1F("h_pi_mean",
-                      f"Peak-integral mean per channel (iter {iter_idx});"
-                      f"peak_integral_mean [ADC];channels",
-                      args.pi_bins, pi_lo, pi_hi)
+    ph_means = np.array([r["peak_height_mean"]
+                          for r in records
+                          if r.get("peak_height_mean") is not None], dtype=float)
+    pi_means = np.array([r["peak_integral_mean"]
+                          for r in records
+                          if r.get("peak_integral_mean") is not None], dtype=float)
 
-    g_ph_vs_v = ROOT.TGraph()
-    g_ph_vs_v.SetTitle(f"Peak-height mean vs VSet (iter {iter_idx});"
-                       f"VSet [V];peak_height_mean [ADC]")
-    g_ph_vs_v.SetMarkerStyle(20)
-    g_ph_vs_v.SetMarkerSize(0.6)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+    fig.suptitle(f"Cosmic-eq overview — iteration {iter_idx}", fontsize=12)
 
-    n_with_hv = 0
+    # Pad 1: peak-height mean histogram
+    ax = axes[0][0]
+    ax.hist(ph_means, bins=args.ph_bins, range=(ph_lo, ph_hi),
+            color="steelblue", alpha=0.85, edgecolor="black", linewidth=0.3)
+    ax.set_xlabel("peak_height_mean [ADC]")
+    ax.set_ylabel("channels")
+    ax.set_title("Peak-height mean per channel")
+    ax.grid(True, alpha=0.3)
+
+    # Pad 2: peak-integral mean histogram
+    ax = axes[0][1]
+    ax.hist(pi_means, bins=args.pi_bins, range=(pi_lo, pi_hi),
+            color="seagreen", alpha=0.85, edgecolor="black", linewidth=0.3)
+    ax.set_xlabel("peak_integral_mean [ADC]")
+    ax.set_ylabel("channels")
+    ax.set_title("Peak-integral mean per channel")
+    ax.grid(True, alpha=0.3)
+
+    # Pad 3: scatter mean vs VSet (using the chosen metric)
+    ax = axes[1][0]
+    metric_label = ("peak_height_mean" if args.metric == "peak_height"
+                    else "peak_integral_mean")
+    vsets, ms = [], []
     for r in records:
-        h_ph.Fill(r["peak_height_mean"])
-        if r.get("peak_integral_mean") is not None:
-            h_pi.Fill(r["peak_integral_mean"])
         v = r.get("VSet")
-        if v is not None:
-            g_ph_vs_v.SetPoint(n_with_hv, v, r["peak_height_mean"])
-            n_with_hv += 1
-
-    canvas = ROOT.TCanvas("c_dist", "gain distribution", 1400, 900)
-    canvas.Divide(2, 2)
-
-    canvas.cd(1)
-    h_ph.SetFillColorAlpha(ROOT.kBlue - 7, 0.6)
-    h_ph.Draw()
-
-    canvas.cd(2)
-    h_pi.SetFillColorAlpha(ROOT.kGreen - 7, 0.6)
-    h_pi.Draw()
-
-    canvas.cd(3)
-    if n_with_hv > 0:
-        g_ph_vs_v.Draw("AP")
+        if v is not None and r.get("_metric_mean") is not None:
+            vsets.append(v); ms.append(r["_metric_mean"])
+    if vsets:
+        ax.scatter(vsets, ms, s=12, color="purple", alpha=0.7)
+        ax.set_xlabel("VSet [V]")
+        ax.set_ylabel(f"{metric_label} [ADC]")
+        ax.set_title(f"{metric_label} vs VSet")
+        ax.grid(True, alpha=0.3)
     else:
-        t = ROOT.TLatex(0.5, 0.5, "no VSet recorded for this iteration")
-        t.SetNDC(True); t.SetTextAlign(22); t.Draw()
+        ax.text(0.5, 0.5, "no VSet recorded for this iteration",
+                ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
 
-    # Summary text in pad 4
-    canvas.cd(4)
+    # Pad 4: stats summary
+    ax = axes[1][1]
+    ax.axis("off")
     summ = compute_stats(records)
-    t = ROOT.TLatex()
-    t.SetNDC(True)
-    t.SetTextSize(0.045)
-    t.SetTextFont(82)
-    y = 0.88
-    for line in summ:
-        t.DrawLatex(0.05, y, line)
-        y -= 0.06
+    text = "\n".join(summ)
+    ax.text(0.05, 0.95, text, transform=ax.transAxes,
+            ha="left", va="top", family="monospace", fontsize=11)
 
-    canvas.Update()
-    canvas.Print(out_pdf)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    pdf.savefig(fig)
+    plt.close(fig)
 
-
-# ============================================================================
-#  Per-iteration overlay (when ≥ 2 iterations exist)
-# ============================================================================
 
 def make_iteration_overlay(channels: Dict[str, List[dict]],
                            wanted: set,
                            args: argparse.Namespace,
-                           out_pdf: str) -> None:
+                           pdf: PdfPages) -> None:
     n_iters = max((len(v) for v in channels.values()), default=0)
     if n_iters < 2:
         return
 
     ph_lo, ph_hi = parse_range(args.ph_range, (0, 4096))
-    canvas = ROOT.TCanvas("c_overlay", "iteration overlay", 1200, 800)
-    canvas.SetLogy(False)
+    metric_label = ("peak_height_mean" if args.metric == "peak_height"
+                    else "peak_integral_mean")
 
-    leg = ROOT.TLegend(0.7, 0.7, 0.95, 0.92)
-    hists = []
-    colors = [ROOT.kBlue + 1, ROOT.kRed + 1, ROOT.kGreen + 2,
-              ROOT.kMagenta + 1, ROOT.kOrange + 1, ROOT.kCyan + 2]
+    fig, ax = plt.subplots(figsize=(11, 7))
+    colors = plt.cm.tab10.colors
 
+    drew_any = False
     for it in range(1, n_iters + 1):
-        recs = extract_iteration(channels, it, wanted, args.max_sigma, args.max_chi2)
+        recs = extract_iteration(channels, it, wanted, args.max_sigma,
+                                  args.max_chi2, args.metric)
         if not recs:
             continue
-        h = ROOT.TH1F(f"h_overlay_{it}",
-                      "Peak-height mean per iteration;peak_height_mean [ADC];channels",
-                      args.ph_bins, ph_lo, ph_hi)
-        h.SetDirectory(0)
-        for r in recs:
-            h.Fill(r["peak_height_mean"])
-        col = colors[(it - 1) % len(colors)]
-        h.SetLineColor(col); h.SetLineWidth(2)
-        hists.append(h)
-        leg.AddEntry(h, f"iter {it}  (n={int(h.GetEntries())})", "l")
+        means = np.array([r["_metric_mean"] for r in recs], dtype=float)
+        if means.size == 0:
+            continue
+        ax.hist(means, bins=args.ph_bins, range=(ph_lo, ph_hi),
+                histtype="step", linewidth=2,
+                color=colors[(it - 1) % len(colors)],
+                label=f"iter {it}  (n={means.size})")
+        drew_any = True
 
-    if not hists:
+    if not drew_any:
+        plt.close(fig)
         return
-    hists[0].Draw("HIST")
-    for h in hists[1:]:
-        h.Draw("HIST SAME")
-    leg.Draw()
-    canvas.Update()
-    canvas.Print(out_pdf)
+
+    ax.set_xlabel(f"{metric_label} [ADC]")
+    ax.set_ylabel("channels")
+    ax.set_title(f"Iteration overlay — {metric_label}")
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
 
 
 # ============================================================================
@@ -243,12 +255,11 @@ def compute_stats(records: List[dict]) -> List[str]:
     n = len(records)
     if n == 0:
         return ["no records"]
-    means = sorted(r["peak_height_mean"] for r in records)
+    means = sorted(r["_metric_mean"] for r in records)
     median = means[n // 2]
     avg = sum(means) / n
     mn, mx = means[0], means[-1]
 
-    # crude bimodal split: bin 1/3 from min toward max
     split = mn + (mx - mn) / 3.0
     n_low  = sum(1 for m in means if m <  split)
     n_high = sum(1 for m in means if m >= split)
@@ -297,32 +308,20 @@ def main() -> int:
     print(f"Using iteration {iter_idx}")
 
     records = extract_iteration(channels, iter_idx, wanted,
-                                 args.max_sigma, args.max_chi2)
+                                 args.max_sigma, args.max_chi2, args.metric)
     print(f"After cuts: {len(records)} channels")
 
     out_pdf = (args.output or
                f"{os.path.splitext(args.history)[0]}_dist_iter{iter_idx}.pdf")
-    if os.path.exists(out_pdf):
-        os.remove(out_pdf)
 
-    # write the multi-page output: overview, then per-iteration overlay
-    ROOT.gROOT.SetBatch(True)
-    canvas_seed = ROOT.TCanvas("seed", "seed", 100, 100)
-    canvas_seed.Print(f"{out_pdf}[")  # open
-    canvas_seed.Close()
-
-    make_overview(records, iter_idx, args, out_pdf)
-    make_iteration_overlay(channels, wanted, args, out_pdf)
-
-    closer = ROOT.TCanvas("close", "close", 100, 100)
-    closer.Print(f"{out_pdf}]")  # close
-    closer.Close()
+    with PdfPages(out_pdf) as pdf:
+        make_overview(records, iter_idx, args, pdf)
+        make_iteration_overlay(channels, wanted, args, pdf)
 
     print(f"Wrote {out_pdf}")
     print()
     for line in compute_stats(records):
         print(f"  {line}")
-
     return 0
 
 
