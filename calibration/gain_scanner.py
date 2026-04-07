@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from scan_utils import Module, module_to_ptrans, ptrans_in_limits
 from scan_epics import epics_move_to, epics_is_moving, epics_stop, SPMG
+from pmt_response import PMTGainModel
 
 
 # ============================================================================
@@ -120,30 +121,6 @@ class SpectrumAnalyzer:
     def edge_to_adc(self, bin_index: int) -> float:
         """Convert bin index to ADC value (centre of bin)."""
         return self.bin_min + (bin_index + 0.5) * self.bin_step
-
-    def compute_voltage_step(self, edge_adc: float,
-                             current_vset: float = 0.0) -> float:
-        """Compute HV adjustment based on the ADC difference from target.
-
-        | ADC difference | Step  |
-        |----------------|-------|
-        | > 1000         | 50 V  |
-        | 500 – 1000     | 30 V  |
-        | 200 – 500      | 20 V  |
-        | 100 – 200      |  5 V  |
-        | < 100          | diff/20 V |
-
-        Sign: positive = edge too low → increase voltage.
-        """
-        diff = self.target_adc - edge_adc  # positive = need more gain
-        sign = 1 if diff > 0 else -1
-        ad = abs(diff)
-        if ad > 1000:    dv = 50.0
-        elif ad > 500:   dv = 30.0
-        elif ad > 200:   dv = 20.0
-        elif ad > 100:   dv = 5.0
-        else:            dv = ad / 20.0
-        return round(sign * dv, 1)
 
 
 # ============================================================================
@@ -368,9 +345,6 @@ class GainScanEngine:
     edge_adc_max: float = 3900.0     # reject edges above this
     use_log_y: bool = True           # log y scale for report snapshots
 
-    # Linear-response model
-    RESPONSE_CHANGE_TOL: float = 0.20    # max relative change in response_constant before fallback
-
     # VMon settle wait
     VMON_INITIAL_WAIT: float = 3.0       # seconds — mandatory wait before checking
     VMON_POLL_INTERVAL: float = 1.5      # seconds between HV reads
@@ -409,12 +383,9 @@ class GainScanEngine:
         self.module_counts = 0
         self.collect_rate: float = 0.0  # Hz, updated during collection
 
-        # linear response model state (per module)
-        self._linear_response: bool = False
-        self._response_constant: Optional[float] = None  # ADC per V slope
-        self._prev_vmon: Optional[float] = None
-        self._prev_edge: Optional[float] = None
-        self._prev_vset: Optional[float] = None
+        # PMT gain model — accumulates (vmon, edge) points for one module
+        # and proposes ΔV via a power-law fit (or lookup table fallback).
+        self._pmt_fit = PMTGainModel()
 
         # per-iteration history for the current module (for screenshot report)
         self.iteration_history: List[Dict] = []
@@ -530,12 +501,8 @@ class GainScanEngine:
                 self.module_counts = 0
                 self.collect_rate = 0.0
                 self.iteration_history = []
-                # reset linear response state
-                self._linear_response = False
-                self._response_constant = None
-                self._prev_vmon = None
-                self._prev_edge = None
-                self._prev_vset = None
+                # reset PMT response model for this module
+                self._pmt_fit.clear()
                 mod = self.path[i]
 
                 self.log(f"── [{i+1}/{len(self.path)}] {mod.name} ──")
@@ -608,6 +575,7 @@ class GainScanEngine:
                 self.last_edge_bin = None
                 self.last_dv = None
                 self.last_bins = []
+                self._pmt_fit.clear()
                 self.log(f"Module {mod.name} redo — restarting iterations")
                 continue
             iteration += 1
@@ -685,44 +653,9 @@ class GainScanEngine:
             current_vmon = info.get("vmon", current_v)
             limit_v = info.get("limit", 99999)
 
-            # -- update linear response model --
-            mode_tag = "lookup"
-            if (self._prev_vmon is not None and self._prev_edge is not None):
-                dvmon_meas = current_vmon - self._prev_vmon
-                if abs(dvmon_meas) > 1e-6:
-                    new_response = (edge_adc - self._prev_edge) / dvmon_meas
-                    if new_response <= 0:
-                        # non-physical
-                        self._linear_response = False
-                        mode_tag = (f"fallback: response={new_response:.2f} "
-                                    f"ADC/V (non-physical)")
-                    elif self._linear_response and self._response_constant:
-                        rel = abs(new_response - self._response_constant) \
-                            / abs(self._response_constant)
-                        if rel > self.RESPONSE_CHANGE_TOL:
-                            self._linear_response = False
-                            mode_tag = (f"fallback: response "
-                                        f"{self._response_constant:.2f}→"
-                                        f"{new_response:.2f} ADC/V "
-                                        f"(Δ{rel*100:.0f}%)")
-                        else:
-                            self._response_constant = new_response
-                            self._linear_response = True
-                    else:
-                        # first slope measurement (or coming back from fallback)
-                        self._response_constant = new_response
-                        self._linear_response = True
-
-            # -- compute dV --
-            if self._linear_response and self._response_constant \
-                    and self._response_constant > 0:
-                dv = (self.target_adc - edge_adc) / self._response_constant
-                # round to 0.1 V for HV crate granularity
-                dv = round(dv, 1)
-                if mode_tag == "lookup":
-                    mode_tag = f"linear: response={self._response_constant:.2f} ADC/V"
-            else:
-                dv = self.analyzer.compute_voltage_step(edge_adc, current_v)
+            # -- update PMT response model and compute ΔV --
+            self._pmt_fit.add_point(current_vmon, edge_adc)
+            dv, mode_tag = self._pmt_fit.delta_v_to_target(self.target_adc)
 
             self.last_dv = dv
             new_v = current_v + dv
@@ -734,11 +667,6 @@ class GainScanEngine:
 
             self.log(f"{mod.name} iter {iteration+1}: edge={edge_adc:.0f} "
                      f"ΔV={dv:+.1f} ({current_v:.1f}→{new_v:.1f})  [{mode_tag}]")
-
-            # save prev state for next iteration's slope calc
-            self._prev_vmon = current_vmon
-            self._prev_edge = edge_adc
-            self._prev_vset = current_v
 
             if not self.hv.set_voltage(mod.name, new_v, old_value=current_v):
                 self.log(f"{mod.name}: HV set failed", level="error")
