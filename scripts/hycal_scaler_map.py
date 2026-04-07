@@ -511,7 +511,7 @@ class ScalerMapWindow(QMainWindow):
                         topSum += v
                     else:
                         botSum += v
-                    if(int(((float(m.name.strip("W"))/34.0)%1)*10)<=5):
+                    if(int(((float(m.name.strip("W"))/34.0)%1)*100)<=50):
                         leftSum += v
                     else:
                         rightSum += v
