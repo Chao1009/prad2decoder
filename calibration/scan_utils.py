@@ -162,15 +162,19 @@ QPushButton {
 }
 QPushButton:hover { background: #21262d; border-color: #58a6ff; }
 QPushButton:pressed { background: #0d1117; }
-QPushButton:disabled { color: #484f58; border-color: #21262d; }
+QPushButton:disabled { color: #6e7681; border-color: #21262d; }
 QPushButton[cssClass="green"]  { background: #238636; color: white; border-color: #2ea043; }
 QPushButton[cssClass="green"]:hover  { background: #2ea043; }
+QPushButton[cssClass="green"]:disabled  { background: #1a3a22; color: #5a7060; border-color: #1f4528; }
 QPushButton[cssClass="danger"] { background: #da3633; color: white; border-color: #f85149; }
 QPushButton[cssClass="danger"]:hover { background: #f85149; }
+QPushButton[cssClass="danger"]:disabled { background: #3a1818; color: #785050; border-color: #4a1f1f; }
 QPushButton[cssClass="warn"]   { background: #9e6a03; color: white; border-color: #d29922; }
 QPushButton[cssClass="warn"]:hover   { background: #d29922; }
+QPushButton[cssClass="warn"]:disabled   { background: #3a2a08; color: #786850; border-color: #4a3510; }
 QPushButton[cssClass="accent"] { background: #1f6feb; color: white; border-color: #388bfd; }
 QPushButton[cssClass="accent"]:hover { background: #388bfd; }
+QPushButton[cssClass="accent"]:disabled { background: #16294a; color: #506578; border-color: #1d365e; }
 QComboBox {
     background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
     border-radius: 3px; padding: 3px 8px; font: 13pt 'Consolas'; min-height: 20px;
