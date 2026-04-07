@@ -209,6 +209,11 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 1156; i++) {
         if (peakHeight_hist_module[i]->GetEntries() > 0) {
             float max = peakHeight_hist_module[i]->GetBinCenter(peakHeight_hist_module[i]->GetMaximumBin());
+            if(max < 20){
+                peak_height[i] = max;
+                rms_height[i] = 0.1;
+                continue;
+            }
             peakHeight_hist_module[i]->Fit("gaus", "Q", "r", max*0.7, max*1.5);
             TF1 *fit = peakHeight_hist_module[i]->GetFunction("gaus");
             if (fit) {
