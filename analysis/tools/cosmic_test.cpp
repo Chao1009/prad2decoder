@@ -123,7 +123,7 @@ int main(int argc, char *argv[])
         std::string name = "peak_module_" + std::to_string(i+1);
         peak_hist_module[i] = new TH1F(name.c_str(), name.c_str(), 80, 0, 800);
         std::string name_height = "peakHeight_module_" + std::to_string(i+1);
-        peakHeight_hist_module[i] = new TH1F(name_height.c_str(), name_height.c_str(), 100, 0, 500);
+        peakHeight_hist_module[i] = new TH1F(name_height.c_str(), name_height.c_str(), 80, 0, 200);
     }
     TH1F *peak_hist_LG_module[1000];
     for (int i = 0; i < 1000; i++) {
