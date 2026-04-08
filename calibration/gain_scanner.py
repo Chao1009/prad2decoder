@@ -598,6 +598,16 @@ class GainScanEngine:
             if not self._wait_for_counts(mod, key):
                 if self._stop.is_set():
                     return
+                if self._skip.is_set():
+                    self._skip.clear()
+                    self.log(f"Module {mod.name} skipped")
+                    return
+                if self._redo.is_set():
+                    # back off the just-incremented iteration count so the
+                    # top-of-loop redo handler is reached on the next pass
+                    # (resets state and restarts from iteration 0)
+                    iteration -= 1
+                    continue
                 self._mark_failed(i, mod); return
 
             # analyze

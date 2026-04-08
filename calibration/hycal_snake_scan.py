@@ -52,7 +52,6 @@ from scan_utils import (
     C, Module, load_modules, module_to_ptrans, ptrans_to_module,
     ptrans_in_limits, filter_scan_modules, DARK_QSS,
     BEAM_CENTER_X, BEAM_CENTER_Y, DEFAULT_DB_PATH,
-    PTRANS_X_MIN, PTRANS_X_MAX, PTRANS_Y_MIN, PTRANS_Y_MAX,
 )
 from scan_epics import (
     SPMG, SPMG_LABELS, epics_move_to, epics_stop,

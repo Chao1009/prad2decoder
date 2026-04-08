@@ -35,12 +35,10 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 
 from scan_utils import (
     C, Module, load_modules, module_to_ptrans, ptrans_to_module,
-    ptrans_in_limits, filter_scan_modules, DARK_QSS,
+    filter_scan_modules, DARK_QSS,
     BEAM_CENTER_X, BEAM_CENTER_Y, DEFAULT_DB_PATH,
 )
-from scan_epics import (
-    SPMG, SPMG_LABELS, epics_move_to, epics_stop,
-)
+from scan_epics import epics_move_to, epics_stop
 from scan_engine import (
     build_scan_path,
     DEFAULT_POS_THRESHOLD, DEFAULT_BEAM_THRESHOLD, MAX_LG_LAYERS,
