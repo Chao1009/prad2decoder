@@ -149,11 +149,13 @@ int main(int argc, char *argv[])
     outfile.mkdir("peak_histograms")->cd();
     for (int i = 0; i < 1156; i++) {
         if (peak_hist_module[i]->GetEntries() > 0) peak_hist_module[i]->Write();
+        if (peakHeight_hist_module[i]->GetEntries() > 0) peakHeight_hist_module[i]->Write();
     }
     outfile.cd();
     outfile.mkdir("peak_histograms_LG")->cd();
-    for(int i = 0; i < 1000; i++) {
+    for(int i = 0; i < LG_num; i++) {
         if (peak_hist_LG_module[i]->GetEntries() > 0) peak_hist_LG_module[i]->Write();
+        if (peakHeight_hist_LG_module[i]->GetEntries() > 0) peakHeight_hist_LG_module[i]->Write();
     }
 
     outfile.cd();
