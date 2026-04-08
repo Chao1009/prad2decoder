@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from scan_utils import Module, module_to_ptrans, ptrans_in_limits
-from scan_epics import epics_move_to, epics_is_moving, epics_stop, SPMG
+from scan_epics import epics_move_to, epics_is_moving, epics_read_rbv, epics_stop, SPMG
 from pmt_response import PMTGainModel
 
 
@@ -552,7 +552,7 @@ class GainScanEngine:
         if not epics_move_to(self.ep, px, py):
             self.log(f"SKIPPED {mod.name}: outside limits", level="warn")
             return
-        if not self._wait_move_done(timeout):
+        if not self._wait_move_done(px, py, timeout=timeout):
             return
 
         # check DAQ key
@@ -838,7 +838,16 @@ class GainScanEngine:
         img.save(path)
         self.log(f"Report saved: {fname}")
 
-    def _wait_move_done(self, timeout: float = None) -> bool:
+    def _wait_move_done(self, target_x: float, target_y: float,
+                        timeout: float = None) -> bool:
+        """Wait for the motor to stop and be at the target position.
+
+        "On position" requires BOTH MOVN=0 AND RBV within pos_threshold
+        of the target.  Checking only MOVN is unsafe because MOVN is
+        still 0 in the brief window after issuing a move command before
+        the IOC has processed it — a check in that window would declare
+        the move "done" before it started.
+        """
         if timeout is None:
             timeout = self.move_timeout
         t0 = time.time()
@@ -847,7 +856,10 @@ class GainScanEngine:
             if self._stop.is_set():
                 return False
             if not epics_is_moving(self.ep):
-                return True
+                rx, ry = epics_read_rbv(self.ep)
+                err = math.sqrt((rx - target_x) ** 2 + (ry - target_y) ** 2)
+                if err <= self.pos_threshold:
+                    return True
             if time.time() - t0 > timeout:
                 self.log(f"MOVE TIMEOUT after {timeout:.0f}s", level="error")
                 return False
