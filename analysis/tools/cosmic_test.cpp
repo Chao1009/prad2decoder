@@ -44,6 +44,13 @@ void SetReadBranches(TTree *tree, EventVars &ev, bool write_peaks)
     }
 }
 
+const int LG_num = 76;
+int LG_module_id[LG_num] = 
+{156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174,
+ 186, 216, 246, 276, 306, 336, 366, 396, 426, 456, 486, 516, 546, 576, 606, 636, 666, 696, 726,
+ 175, 205, 235, 265, 295, 325, 355, 385, 415, 445, 475, 505, 535, 565, 595, 625, 655, 685, 715,
+ 727, 728, 729, 730, 731, 732, 733, 734, 735, 736, 737, 738, 739, 740, 741, 742, 743, 744, 745}
+
 int main(int argc, char *argv[])
 {
     std::string input;
@@ -93,10 +100,13 @@ int main(int argc, char *argv[])
         std::string name_height = "peakHeight_module_" + std::to_string(i+1);
         peakHeight_hist_module[i] = new TH1F(name_height.c_str(), name_height.c_str(), 80, 0, 200);
     }
-    TH1F *peak_hist_LG_module[1000];
-    for (int i = 0; i < 1000; i++) {
-        std::string name = "peak_LG_module_" + std::to_string(i+1);
-        peak_hist_LG_module[i] = new TH1F(name.c_str(), name.c_str(), 100, 0, 500);
+    TH1F *peak_hist_LG_module[LG_num];
+    TH1F *peakHeight_hist_LG_module[LG_num];
+    for (int i = 0; i < LG_num; i++) {
+        std::string name = "peak_LG_module_" + std::to_string(LG_module_id[i]);
+        peak_hist_LG_module[i] = new TH1F(name.c_str(), name.c_str(), 80, 0, 800);
+        std::string name_height = "peakHeight_LG_module_" + std::to_string(LG_module_id[i]);
+        peakHeight_hist_LG_module[i] = new TH1F(name_height.c_str(), name_height.c_str(), 80, 0, 200);
     }
 
     TH2F *cosmic_eventNum = new TH2F("cosmic_eventNum", "Cosmic Event Number", 34, -17.*20.75, 17.*20.75, 34, -17.*20.75, 17.*20.75);
@@ -117,16 +127,18 @@ int main(int argc, char *argv[])
             event_num_module[mod->id]++;
             int module_id = mod->id-1000;
             if (module_id >= 1 && module_id <= 1156){
-                float peak = ev.peak_integral[j][0];
-                peak_hist_module[module_id-1]->Fill(peak);
-                if(ev.npeaks[j] == 1) peakHeight_hist_module[module_id-1]->Fill(ev.peak_height[j][0]);
+                if(ev.npeaks[j] != 1) continue;
+                peak_hist_module[module_id-1]->Fill(ev.peak_integral[j][0]);
+                peakHeight_hist_module[module_id-1]->Fill(ev.peak_height[j][0]);
                 cosmic_eventNum->Fill(mod->x, mod->y);
             }
-            else if(module_id < 0 && module_id >= -1000){
-                int lg_module_id = module_id+1000;
-                float peak = ev.peak_integral[j][0];
-                peak_hist_LG_module[lg_module_id-1]->Fill(peak);
-                cosmic_eventNum_LG->Fill(mod->x, mod->y);
+            for(int k = 0; k < LG_num; k++){
+                if(mod->id == LG_module_id[k]) {
+                    if(ev.npeaks[j] != 1) continue;
+                    peak_hist_LG_module[k]->Fill(ev.peak_integral[j][0]);
+                    peakHeight_hist_LG_module[k]->Fill(ev.peak_height[j][0]);
+                    cosmic_eventNum_LG->Fill(mod->x, mod->y);
+                }
             }
         }
     }
@@ -160,7 +172,7 @@ int main(int argc, char *argv[])
                 TCanvas *c = new TCanvas();
                 peak_hist_module[i]->Draw();
                 fit->Draw("same");
-                c->SaveAs(("./fit_canvas3/fit_module_" + std::to_string(i+1) + ".png").c_str());
+                c->SaveAs(("./fit_canvas/fit_module_" + std::to_string(i+1) + ".png").c_str());
                 delete c;
             }
             else {
@@ -190,7 +202,7 @@ int main(int argc, char *argv[])
                 TCanvas *c = new TCanvas();
                 peakHeight_hist_module[i]->Draw();
                 fit->Draw("same");
-                c->SaveAs(("./fit_canvas3/fit_peakHeight_module_" + std::to_string(i+1) + ".png").c_str());
+                c->SaveAs(("./fit_canvas/fit_peakHeight_module_" + std::to_string(i+1) + ".png").c_str());
                 delete c;
             }
             else {
@@ -203,11 +215,70 @@ int main(int argc, char *argv[])
         }
     }
 
+    float peak_LG[LG_num], rms_LG[LG_num];
+    for (int i = 0; i < LG_num; i++) {
+        if (peak_hist_LG_module[i]->GetEntries() > 0) {
+            float max = peak_hist_LG_module[i]->GetBinCenter(peak_hist_LG_module[i]->GetMaximumBin());
+            peak_hist_LG_module[i]->Fit("gaus", "Q", "r", max*0.7, max*1.5);
+            TF1 *fit = peak_hist_LG_module[i]->GetFunction("gaus");
+            if (fit) {
+                peak_LG[i] = fit->GetParameter(1); // mean
+                rms_LG[i] = fit->GetParameter(2);  // sigma
+                TCanvas *c = new TCanvas();
+                peak_hist_LG_module[i]->Draw();
+                fit->Draw("same");
+                c->SaveAs(("./fit_canvas/fit_LG_module_" + std::to_string(LG_module_id[i]) + ".png").c_str());
+                delete c;
+            }
+            else {
+                peak_LG[i] = 0.1;
+                rms_LG[i] = 1e5;
+            }
+        } else {
+            peak_LG[i] = 0.1;
+            rms_LG[i] = 1e5;
+        }
+    }
+
+    float peakHeight_LG[LG_num], rms_height_LG[LG_num];
+    for (int i = 0; i < LG_num; i++) {
+        if (peakHeight_hist_LG_module[i]->GetEntries() > 0) {
+            float max = peakHeight_hist_LG_module[i]->GetBinCenter(peakHeight_hist_LG_module[i]->GetMaximumBin());
+            if(max < 20){
+                peakHeight_LG[i] = max;
+                rms_height_LG[i] = 1.;
+                continue;
+            }
+            peakHeight_hist_LG_module[i]->Fit("gaus", "Q", "r", max*0.7, max*1.5);
+            TF1 *fit = peakHeight_hist_LG_module[i]->GetFunction("gaus");
+            if (fit) {
+                peakHeight_LG[i] = fit->GetParameter(1); // mean
+                rms_height_LG[i] = fit->GetParameter(2);  // sigma
+                TCanvas *c = new TCanvas();
+                peakHeight_hist_LG_module[i]->Draw();
+                fit->Draw("same");
+                c->SaveAs(("./fit_canvas/fit_peakHeight_LG_module_" + std::to_string(LG_module_id[i]) + ".png").c_str());
+                delete c;
+            }
+            else {
+                peakHeight_LG[i] = 0.1;
+                rms_height_LG[i] = 1e5;
+            }
+        } else {
+            peakHeight_LG[i] = 0.1;
+            rms_height_LG[i] = 1e5;
+        }
+    }
+
     TH1F *peak_module = new TH1F("peak_module", "Peak Integral by Module", 100, 0, 500);
     TH1F *rms_module = new TH1F("rms_module", "RMS of Peak Integral by Module", 100, 0, 400);
     for (int i = 0; i < 1156; i++) {
         peak_module->Fill(peak[i]);
         rms_module->Fill(rms[i]);
+    }
+    for(int i = 0; i < LG_num; i++) {
+        peak_module->Fill(peak_LG[i]);
+        rms_module->Fill(rms_LG[i]);
     }
     peak_module->Write();
     rms_module->Write();
@@ -217,8 +288,8 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 1156; i++) {
         csv_out << "W" << (i+1) << "  " << peak[i] << "  " << rms[i] << "\n";
     }
-    for (int i = 0; i < 1000; i++) {
-        csv_out << "G" << (i+1) << "  " << peak_hist_LG_module[i]->GetMean() << "  " << peak_hist_LG_module[i]->GetRMS() << "\n";
+    for (int i = 0; i < LG_num; i++) {
+        csv_out << "G" << LG_module_id[i] << "  " << peak_LG[i] << "  " << rms_LG[i] << "\n";
     }
     csv_out.close();
 
@@ -227,8 +298,8 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 1156; i++) {
         rate_out << "W" << (i+1) << "  " << event_num_module[i+1000+1] << "\n";
     }
-    for (int i = 0; i < 1000; i++) {
-        rate_out << "G" << (i+1) << "  " << event_num_module[i+1] << "\n";
+    for (int i = 0; i < LG_num; i++) {
+        rate_out << "G" << LG_module_id[i] << "  " << event_num_module[LG_module_id[i]] << "\n";
     }
     rate_out.close();
 
@@ -249,6 +320,22 @@ int main(int argc, char *argv[])
                 peak_height[i], rms_height[i], peak_height[i] - 35.,
                 peak[i], rms[i], peak[i] - 250.,
                 event_num_module[i+1000+1]);
+            return std::string(buf);
+        };
+        auto make_entry_LG = [&](int i) -> std::string {
+            char buf[512];
+            std::snprintf(buf, sizeof(buf),
+                "{\"run\": %d, \"peak_height_mean\": %g"
+                ", \"peak_height_sigma\": %g"
+                ", \"peak_height_diff\": %g"
+                ", \"peak_integral_mean\": %g"
+                ", \"peak_integral_sigma\": %g"
+                ", \"peak_integral_diff\": %g"
+                ", \"count\": %d}",
+                run_number,
+                peakHeight_LG[i], rms_height_LG[i], peakHeight_LG[i] - 35.,
+                peak_LG[i], rms_LG[i], peak_LG[i] - 250.,
+                event_num_module[LG_module_id[i]]);
             return std::string(buf);
         };
 
@@ -273,6 +360,13 @@ int main(int argc, char *argv[])
                         l.insert(pos + 1, new_entry);
                         mod_idx++;
                     }
+                    if (mod_idx >= 1156){
+                        if (l.rfind("}]") != std::string::npos) {
+                            std::string new_entry = ", " + make_entry_LG(mod_idx - 1156);
+                            l.insert(l.rfind("}]"), new_entry);
+                        }
+                        mod_idx++;
+                    }
                 }
 
                 std::ofstream fout(in_json);
@@ -288,6 +382,11 @@ int main(int argc, char *argv[])
             for (int i = 0; i < 1156; i++) {
                 json_out << "  \"W" << (i+1) << "\": [" << make_entry(i) << "]";
                 if (i < 1155) json_out << ",";
+                json_out << "\n";
+            }
+            for (int i = 0; i < LG_num; i++) {
+                json_out << "  \"G" << LG_module_id[i] << "\": [" << make_entry_LG(i) << "]";
+                if (i < LG_num - 1) json_out << ",";
                 json_out << "\n";
             }
             json_out << "}\n";
