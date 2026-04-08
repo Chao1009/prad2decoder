@@ -119,7 +119,7 @@ int main(int argc, char *argv[])
     for(int i = 0; i < nentries; i++){
         tree->GetEntry(i);
         std::cout << "Event " << ev.event_num << ": nch = " << ev.nch << "\r" << std::flush;
-        if (ev.nch > 100) continue; // skip noisy events
+        if (ev.nch > 50 || ev.nch < 4) continue; // skip noisy events
         for (int j = 0; j < ev.nch; j++) {
             const auto *mod = hycal.module_by_daq(ev.crate[j], ev.slot[j], ev.channel[j]);
             if (!mod || !mod->is_hycal()) continue;
