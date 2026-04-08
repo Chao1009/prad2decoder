@@ -660,7 +660,19 @@ class GainEqualizerWindow(QMainWindow):
             return
 
         if not self.scan_modules:
-            self._log("Select a path first", level="error"); return
+            # no path loaded — fall back to single-module mode if the user
+            # has clicked a scannable module on the canvas
+            if not self._selected_mod_name:
+                self._log("Select a path, or click a module on the canvas "
+                          "to equalize a single module", level="error")
+                return
+            mod = self._mod_by_name.get(self._selected_mod_name)
+            if mod is None or mod.mod_type not in ("PbWO4", "PbGlass"):
+                self._log(f"Module {self._selected_mod_name!r} is not scannable "
+                          f"(needs to be PbWO4 or PbGlass)", level="error")
+                return
+            self._setPath([mod])
+            self._log(f"Single-module start: {mod.name}")
         # sync start index from combo selection
         self._onStartSelected(0)
 
