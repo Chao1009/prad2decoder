@@ -524,8 +524,8 @@ class ScalerMapWindow(QMainWindow):
         y_asym = (topSum-botSum)/1000.0
         x_asym = (rightSum-leftSum)/1000.0
         #Get Center of the Rate Relative to the center of the beam hole
-        x_COM = x_asym/(20.5*17)
-        y_COM = y_asym/(20.5*17)
+        #x_COM = x_asym/(20.5*17)
+        #y_COM = y_asym/(20.5*17)
 
         if self._auto_range_on and self._values:
             self._do_auto_range()
@@ -544,8 +544,8 @@ class ScalerMapWindow(QMainWindow):
                 f"Channels: {len(self._values)}  "
                 f"PbWO4 Total: {W_totalSum:.2f}kHz  "
                 f"Ave: {W_totalSum/1152:3f}kHz  "
-                f"Asym (kHz): [{x_asym:.3f}, {y_asym:.3f}]  "
-                f"CoR (mm): [{x_COM:.3f},{y_COM:.3f}]")
+                f"Asym (kHz): [{x_asym:.3f}, {y_asym:.3f}]")
+                #f"CoR (mm): [{x_COM:.3f},{y_COM:.3f}]")
 
     def _toggle_polling(self):
         self._polling = not self._polling
