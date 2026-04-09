@@ -24,9 +24,9 @@ void new_vset(){
         return -1;
     };
 
-    std::string vset_file = "vset_iter3_new.json";
-    std::string cosmic_file = "cosmic_modules_run561.json";
-    std::string output_file = "vset_iter4.json";
+    std::string vset_file = "vset_iter1.json";
+    std::string cosmic_file = "cosmic_modules_run575.json";
+    std::string output_file = "vset_iter2.json";
 
     // ---- Read vset_iter3_new.json: V0Set per channel ----
     {
@@ -109,7 +109,7 @@ void new_vset(){
     int n_increase[3] = {0}, n_decrease[3] = {0}, n_unchanged = 0;
 
     for (int i = 0; i < NMODULES+LG_num; i++) {
-        if (!has_vset[i] || !has_run[i]) { n_skip++; continue; }
+        if (!has_vset[i] || !has_run[i] || i == 1018 || i == 1019) { n_skip++; continue; }
 
         vsetnew[i] = vset[i];
 

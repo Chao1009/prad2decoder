@@ -4,6 +4,7 @@
 #include "HyCalCluster.h"
 #include "DaqConfig.h"
 #include "WaveAnalyzer.h"
+#include "EventData.h"
 
 #include <TFile.h>
 #include <TTree.h>
