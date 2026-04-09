@@ -166,8 +166,15 @@ int main(int argc, char *argv[])
     float peak[1156], rms[1156];
     for (int i = 0; i < 1156; i++) {
         if (peak_hist_module[i]->GetEntries() > 0) {
+            float max_l1 = peak_hist_module[i]->GetBinContent(peak_hist_module[i]->GetMaximumBin()-1);
+            float max_l2 = peak_hist_module[i]->GetBinContent(peak_hist_module[i]->GetMaximumBin()-2);
+            if(max_l1 < 0.5 * peak_hist_module[i]->GetBinContent(peak_hist_module[i]->GetMaximumBin())
+               || max_l2 < 0.4 * peak_hist_module[i]->GetBinContent(peak_hist_module[i]->GetMaximumBin())){
+                for(int b = 1; b <= 8; b++){
+                    peak_hist_module[i]->SetBinContent(b, 0);
+                }
+            }
             float max = peak_hist_module[i]->GetBinCenter(peak_hist_module[i]->GetMaximumBin());
-
             peak_hist_module[i]->Fit("gaus", "Q", "r", max*0.7, max*1.5);
             TF1 *fit = peak_hist_module[i]->GetFunction("gaus");
             if (fit) {
