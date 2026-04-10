@@ -64,10 +64,6 @@ struct RawEventData {
     uint8_t strip[kMaxGemStrips]      = {};
     int16_t ssp_samples[kMaxGemStrips][ssp::SSP_TIME_SAMPLES] = {};
 
-    // ssp trigger bank tag
-    int n_ssp_triggers = 0;
-    uint32_t ssp_trigger_tags[256][ssp::SSP_TIME_SAMPLES] = {};
-
     // Raw 0xE10C SSP trigger bank words (one variable-length entry per event)
     std::vector<uint32_t> ssp_raw;
 };
@@ -115,10 +111,6 @@ struct ReconEventData {
     float matchG_y[kMaxClusters][2] = {};
     float matchG_z[kMaxClusters][2] = {};
     uint8_t matchG_det_id[kMaxClusters][2] = {};
-
-    // ssp trigger bank tag
-    int n_ssp_triggers = 0;
-    uint32_t ssp_trigger_tags[256][ssp::SSP_TIME_SAMPLES] = {};
 
     // Raw 0xE10C SSP trigger bank words (one variable-length entry per event)
     std::vector<uint32_t> ssp_raw;
