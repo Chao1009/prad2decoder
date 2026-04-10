@@ -187,7 +187,7 @@ def parse_dat_file(filepath: str) -> Optional[RunData]:
 
     # First 3 lines: LMS reference channels
     for i in range(3):
-        parts = lines[i].strip().split(",")
+        parts = re.split(r'[,\s\t]+', lines[i].strip())
         if len(parts) < 7:
             continue
         try:
@@ -205,7 +205,7 @@ def parse_dat_file(filepath: str) -> Optional[RunData]:
 
     # Remaining lines: module data
     for line in lines[3:]:
-        parts = line.strip().split(",")
+        parts = re.split(r'[,\s\t]+', line.strip())
         if len(parts) < 7:
             continue
         try:
