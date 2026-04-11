@@ -102,54 +102,54 @@ void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
     tree->Branch("trigger_type", &ev.trigger_type, "trigger_type/b");
     tree->Branch("trigger",      &ev.trigger,      "trigger/i");
     tree->Branch("timestamp",    &ev.timestamp,    "timestamp/L");
-    tree->Branch("hycal.nch",       &ev.nch,       "nch/I");
-    tree->Branch("hycal.module_id", ev.module_id,  "module_id[nch]/s");
-    tree->Branch("hycal.nsamples",  ev.nsamples,   "nsamples[nch]/I");
-    tree->Branch("hycal.samples",   ev.samples,    "samples[nch][hycal.nsamples]/s");
-    tree->Branch("hycal.ped_mean",  ev.ped_mean,   "ped_mean[nch]/F");
-    tree->Branch("hycal.ped_rms",   ev.ped_rms,    "ped_rms[nch]/F");
-    tree->Branch("hycal.integral",  ev.integral,   "integral[nch]/F");
+    tree->Branch("hycal.nch",       &ev.nch,       "hycal.nch/I");
+    tree->Branch("hycal.module_id", ev.module_id,  "hycal.module_id[hycal.nch]/s");
+    tree->Branch("hycal.nsamples",  ev.nsamples,   "hycal.nsamples[hycal.nch]/I");
+    tree->Branch("hycal.samples",   ev.samples,    "hycal.samples[hycal.nch][hycal.nsamples]/s");
+    tree->Branch("hycal.ped_mean",  ev.ped_mean,   "hycal.ped_mean[hycal.nch]/F");
+    tree->Branch("hycal.ped_rms",   ev.ped_rms,    "hycal.ped_rms[hycal.nch]/F");
+    tree->Branch("hycal.integral",  ev.integral,   "hycal.integral[hycal.nch]/F");
     if (write_peaks) {
-        tree->Branch("hycal.npeaks",       &ev.npeaks,       "npeaks[nch]/I");
-        tree->Branch("hycal.peak_height",  ev.peak_height,  "peak_height[nch][hycal.npeaks]/F");
-        tree->Branch("hycal.peak_time",    ev.peak_time,    "peak_time[nch][hycal.npeaks]/F");
-        tree->Branch("hycal.peak_integral",ev.peak_integral, "peak_integral[nch][hycal.npeaks]/F");
+        tree->Branch("hycal.npeaks",       &ev.npeaks,       "hycal.npeaks[hycal.nch]/I");
+        tree->Branch("hycal.peak_height",  ev.peak_height,  "hycal.peak_height[hycal.nch][hycal.npeaks]/F");
+        tree->Branch("hycal.peak_time",    ev.peak_time,    "hycal.peak_time[hycal.nch][hycal.npeaks]/F");
+        tree->Branch("hycal.peak_integral",ev.peak_integral, "hycal.peak_integral[hycal.nch][hycal.npeaks]/F");
     }
     //veto branches
-    tree->Branch("veto.nch",       &ev.veto_nch,       "veto_nch/I");
-    tree->Branch("veto.id",        ev.veto_id,        "veto_id[veto_nch]/b");
-    tree->Branch("veto.nsamples",  ev.veto_nsamples,  "veto_nsamples[veto_nch]/I");
-    tree->Branch("veto.samples",   ev.veto_samples,   "veto_samples[veto_nch][veto.nsamples]/s");
-    tree->Branch("veto.ped_mean",  ev.veto_ped_mean,   "veto_ped_mean[veto_nch]/F");
-    tree->Branch("veto.ped_rms",   ev.veto_ped_rms,    "veto_ped_rms[veto_nch]/F");
-    tree->Branch("veto.integral",  ev.veto_integral,    "veto_integral[veto_nch]/F");
+    tree->Branch("veto.nch",       &ev.veto_nch,       "veto.nch/I");
+    tree->Branch("veto.id",        ev.veto_id,        "veto.id[veto.nch]/b");
+    tree->Branch("veto.nsamples",  ev.veto_nsamples,  "veto.nsamples[veto.nch]/I");
+    tree->Branch("veto.samples",   ev.veto_samples,   "veto.samples[veto.nch][veto.nsamples]/s");
+    tree->Branch("veto.ped_mean",  ev.veto_ped_mean,   "veto.ped_mean[veto.nch]/F");
+    tree->Branch("veto.ped_rms",   ev.veto_ped_rms,    "veto.ped_rms[veto.nch]/F");
+    tree->Branch("veto.integral",  ev.veto_integral,    "veto.integral[veto.nch]/F");
     if (write_peaks) {
-        tree->Branch("veto.npeaks",       &ev.veto_npeaks,       "veto_npeaks[veto_nch]/I");
-        tree->Branch("veto.peak_height",  ev.veto_peak_height,  "veto_peak_height[veto_nch][veto.npeaks]/F");
-        tree->Branch("veto.peak_time",    ev.veto_peak_time,    "veto_peak_time[veto_nch][veto.npeaks]/F");
-        tree->Branch("veto.peak_integral",ev.veto_peak_integral, "veto_peak_integral[veto_nch][veto.npeaks]/F");
+        tree->Branch("veto.npeaks",       &ev.veto_npeaks,       "veto.npeaks[veto.nch]/I");
+        tree->Branch("veto.peak_height",  ev.veto_peak_height,  "veto.peak_height[veto.nch][veto.npeaks]/F");
+        tree->Branch("veto.peak_time",    ev.veto_peak_time,    "veto.peak_time[veto.nch][veto.npeaks]/F");
+        tree->Branch("veto.peak_integral",ev.veto_peak_integral, "veto.peak_integral[veto.nch][veto.npeaks]/F");
     }
     //LMS branches
-    tree->Branch("lms.nch",       &ev.lms_nch,       "lms_nch/I");
-    tree->Branch("lms.id",        ev.lms_id,        "lms_id[lms_nch]/b");
-    tree->Branch("lms.nsamples",  ev.lms_nsamples,   "lms_nsamples[lms_nch]/I");
-    tree->Branch("lms.samples",   ev.lms_samples,    "lms_samples[lms_nch][lms.nsamples]/s");
-    tree->Branch("lms.ped_mean",  ev.lms_ped_mean,   "lms_ped_mean[lms_nch]/F");
-    tree->Branch("lms.ped_rms",   ev.lms_ped_rms,    "lms_ped_rms[lms_nch]/F");
-    tree->Branch("lms.integral",  ev.lms_integral,    "lms_integral[lms_nch]/F");
+    tree->Branch("lms.nch",       &ev.lms_nch,       "lms.nch/I");
+    tree->Branch("lms.id",        ev.lms_id,        "lms.id[lms.nch]/b");
+    tree->Branch("lms.nsamples",  ev.lms_nsamples,   "lms.nsamples[lms.nch]/I");
+    tree->Branch("lms.samples",   ev.lms_samples,    "lms.samples[lms.nch][lms.nsamples]/s");
+    tree->Branch("lms.ped_mean",  ev.lms_ped_mean,   "lms.ped_mean[lms.nch]/F");
+    tree->Branch("lms.ped_rms",   ev.lms_ped_rms,    "lms.ped_rms[lms.nch]/F");
+    tree->Branch("lms.integral",  ev.lms_integral,    "lms.integral[lms.nch]/F");
     if (write_peaks) {
-        tree->Branch("lms.npeaks",       &ev.lms_npeaks,       "lms_npeaks[lms_nch]/I");
-        tree->Branch("lms.peak_height",  ev.lms_peak_height,  "lms_peak_height[lms_nch][lms.npeaks]/F");
-        tree->Branch("lms.peak_time",    ev.lms_peak_time,    "lms_peak_time[lms_nch][lms.npeaks]/F");
-        tree->Branch("lms.peak_integral",ev.lms_peak_integral, "lms_peak_integral[lms_nch][lms.npeaks]/F");
+        tree->Branch("lms.npeaks",       &ev.lms_npeaks,       "lms.npeaks[lms.nch]/I");
+        tree->Branch("lms.peak_height",  ev.lms_peak_height,  "lms.peak_height[lms.nch][lms.npeaks]/F");
+        tree->Branch("lms.peak_time",    ev.lms_peak_time,    "lms.peak_time[lms.nch][lms.npeaks]/F");
+        tree->Branch("lms.peak_integral",ev.lms_peak_integral, "lms.peak_integral[lms.nch][lms.npeaks]/F");
     }
     //GEM part
-    tree->Branch("gem.nch",        &ev.gem_nch,   "gem_nch/I");
-    tree->Branch("gem.mpd_crate",  ev.mpd_crate,  "mpd_crate[gem_nch]/b");
-    tree->Branch("gem.mpd_fiber",  ev.mpd_fiber,  "mpd_fiber[gem_nch]/b");
-    tree->Branch("gem.apv",        ev.apv,        "apv[gem_nch]/b");
-    tree->Branch("gem.strip",        ev.strip,        "strip[gem_nch]/b");
-    tree->Branch("gem.ssp_samples",  ev.ssp_samples,  Form("ssp_samples[gem_nch][%d]/S", ssp::SSP_TIME_SAMPLES));
+    tree->Branch("gem.nch",        &ev.gem_nch,   "gem.nch/I");
+    tree->Branch("gem.mpd_crate",  ev.mpd_crate,  "gem.mpd_crate[gem.nch]/b");
+    tree->Branch("gem.mpd_fiber",  ev.mpd_fiber,  "gem.mpd_fiber[gem.nch]/b");
+    tree->Branch("gem.apv",        ev.apv,        "gem.apv[gem.nch]/b");
+    tree->Branch("gem.strip",        ev.strip,        "gem.strip[gem.nch]/b");
+    tree->Branch("gem.ssp_samples",  ev.ssp_samples,  Form("gem.ssp_samples[gem.nch][%d]/S", ssp::SSP_TIME_SAMPLES));
     // Raw 0xE10C SSP trigger bank words (variable-length per event)
     tree->Branch("ssp_raw", &ev.ssp_raw);
 }
