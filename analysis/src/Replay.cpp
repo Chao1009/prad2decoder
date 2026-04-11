@@ -345,7 +345,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                                 lms_nch++;
                             }
                             else{
-                                std::cerr << "Replay: unknown module " << mod_name << " at crate " << crate << " slot " << s << " channel " << c << "\n";
+                                //std::cerr << "Replay: unknown module " << mod_name << " at crate " << crate << " slot " << s << " channel " << c << "\n";
                             }
                             continue;
                         }
