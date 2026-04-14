@@ -306,6 +306,8 @@ int main (int argc, char *argv[])
         for (int i = 0; i < ev->n_gem_hits; ++i)
             gem_hits[ev->det_id[i]].push_back(GEMHit{ev->gem_x[i], ev->gem_y[i], gem_z[ev->det_id[i]], ev->det_id[i]});
 
+        TransformDetData(hc_hits, 0.f, 0.f, hycal_z);
+
         matching.SetMatchRange(10.f); // matching radius in mm, 15mm default
         //matching.SetSquareSelection(true); // use square cut instead of circular cut
         std::vector<MatchHit> matched_hits = matching.Match(hc_hits, gem_hits[0], gem_hits[1], gem_hits[2], gem_hits[3]);
