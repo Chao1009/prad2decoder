@@ -225,6 +225,13 @@ Note: the `EC_PEAK` and `EC_CLUSTER` formats here come from the XML dictionary
 and supersede the older single-word layouts in `rol2.c` (which appears to be an
 earlier version of the parser).
 
+**Decoder:** `prad2dec/src/VtpDecoder.cpp` parses block headers/trailers,
+EVTHDR, TRGTIME, and stores EC_PEAK / EC_CLUSTER records in
+`vtp::VtpEventData`. CLAS12 records (HTCC, FT, FTOF, CTOF, CND, PCU,
+tag-expansion) are parsed past but not stored. The decoder is invoked by
+`EvChannel::DecodeEvent` whenever a caller passes a `vtp::VtpEventData*`
+(3rd optional argument).
+
 ### Banks defined in the official dictionary
 
 Names and field layouts taken from `clonbanks_20260406.xml`. Banks marked
@@ -263,7 +270,7 @@ tags can be looked up quickly.
 | 0xE11F | UINT32    | SRS Raw Data                                  | not used                                                           |
 | 0xE120 | UINT32    | FASTBUS Raw Data                              | **observed** — used by PRad-1 ADC1881M legacy decoder              |
 | 0xE121 | UINT32    | PGEM crate Raw Data                           | not used (separate GEM crate readout)                              |
-| 0xE122 | UINT32    | VTP Hardware Data                             | **observed in TI slave crates as 3-word stub**. Full format documented above (EC_PEAK, EC_CLUSTER, etc.). |
+| 0xE122 | UINT32    | VTP Hardware Data                             | **observed in TI slave crates as 3-word stub; decoder in `prad2dec/src/VtpDecoder.cpp`**. Full format documented above (EC_PEAK, EC_CLUSTER, etc.). |
 | 0xE123 | UINT32    | SSP-RICH Hardware Data                        | reserved in rol1.c, not used in PRad-II                            |
 | 0xE124 | COMPOSITE | SSP-RICH Composite Data                       | not used                                                           |
 | 0xE125 | UINT32    | **SIS3801 Scalers raw format**                | reserved in rol1.c. (Previously misnamed "Per-slot data" — corrected per official dictionary.) |

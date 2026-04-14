@@ -914,6 +914,7 @@ static int doBankDebug(EvChannel &ch, bool verbose)
         else if (tag == cfg.fadc_composite_tag) std::cout << "-> Fadc250Decoder";
         else if (tag == cfg.fadc_raw_tag)     std::cout << "-> Fadc250RawDecoder";
         else if (cfg.is_ssp_bank(tag))        std::cout << "-> SspDecoder";
+        else if (tag == 0xE122)               std::cout << "-> VtpDecoder";
         else if (tag == cfg.adc1881m_bank_tag) std::cout << "-> Adc1881mDecoder";
         else if (tag == cfg.daq_config_tag)   std::cout << "-> skip (config string)";
         else {
@@ -939,7 +940,8 @@ static int doBankDebug(EvChannel &ch, bool verbose)
         total_d2 += s.count;
         if (tag == cfg.ti_bank_tag || tag == cfg.run_info_tag ||
             tag == cfg.fadc_composite_tag || tag == cfg.fadc_raw_tag ||
-            cfg.is_ssp_bank(tag) || tag == cfg.adc1881m_bank_tag)
+            cfg.is_ssp_bank(tag) || tag == cfg.adc1881m_bank_tag ||
+            tag == 0xE122)
             dispatched_d2 += s.count;
         else if (tag == cfg.daq_config_tag ||
                  (findBankInfo(tag) && std::string(findBankInfo(tag)->status) == "info"))

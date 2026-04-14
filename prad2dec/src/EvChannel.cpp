@@ -3,6 +3,7 @@
 #include "Fadc250RawDecoder.h"
 #include "Adc1881mDecoder.h"
 #include "SspDecoder.h"
+#include "VtpDecoder.h"
 #include "evio.h"
 #include <cstring>
 #include <iostream>
@@ -309,7 +310,7 @@ static const KnownBankTag known_bank_tags[] = {
     { 0xE105, "DCRB Hardware Data",           false },
     { 0xE115, "DSC2 Scalers raw format",      false },
     { 0xE112, "HEAD bank raw format",         false },
-    { 0xE122, "VTP Hardware Data",            false },
+    { 0xE122, "VTP Hardware Data",            true  },
     { 0xE123, "SSP-RICH Hardware Data",       false },
     { 0xE125, "SIS3801 Scalers raw format",   false },
     { 0xE131, "VFTDC Hardware Data",          false },
@@ -326,10 +327,12 @@ static const KnownBankTag *lookupKnownTag(uint32_t tag)
 }
 
 bool EvChannel::DecodeEvent(int i, fdec::EventData &evt,
-                            ssp::SspEventData *ssp_evt) const
+                            ssp::SspEventData *ssp_evt,
+                            vtp::VtpEventData *vtp_evt) const
 {
     evt.clear();
     if (ssp_evt) ssp_evt->clear();
+    if (vtp_evt) vtp_evt->clear();
     if (i < 0 || i >= nevents) return false;
     if (nodes.empty()) return false;
 
@@ -451,6 +454,15 @@ bool EvChannel::DecodeEvent(int i, fdec::EventData &evt,
             int napvs = ssp::SspDecoder::DecodeRoc(GetData(n), n.data_words,
                                                     crate_id, *ssp_evt);
             if (napvs > 0) ssp_decoded = true;  // only count if actual APV data found
+            continue;
+        }
+
+        // VTP Hardware Data (0xE122) — ECAL peaks/clusters when present.
+        // Swallows the 3-word stub case found in TI slave crates.
+        if (n.tag == 0xE122 && n.type == DATA_UINT32) {
+            if (vtp_evt)
+                vtp::VtpDecoder::DecodeRoc(GetData(n), n.data_words,
+                                            roc_tag, *vtp_evt);
             continue;
         }
 

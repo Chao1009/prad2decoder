@@ -97,6 +97,11 @@ void ViewerServer::etReaderThread()
                 }
                 if (!ch.Scan()) continue;
 
+                // skip monitoring events (TI only, no waveforms) — same
+                // as file viewer path in evio_data_source.cpp
+                if (app_online_.daq_cfg.is_monitoring(ch.GetEvHeader().tag))
+                    continue;
+
                 if (app_online_.sync_unix == 0) {
                     uint32_t ct = ch.GetControlTime();
                     if (ct != 0) app_online_.recordSyncTime(ct, last_ti_ts);
