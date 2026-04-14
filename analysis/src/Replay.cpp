@@ -373,6 +373,8 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                 }
             }
             ev->nch = nch;
+            ev->veto_nch = veto_nch;
+            ev->lms_nch = lms_nch;
 
             // decode GEM SSP data
             int gem_ch = 0;
