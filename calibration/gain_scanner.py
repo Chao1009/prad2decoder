@@ -39,7 +39,8 @@ class SpectrumAnalyzer:
                  smooth_window: int = 5,
                  edge_fraction: float = 0.05,
                  use_log_cumul: bool = True,
-                 pedestal_adc: float = 200.0):
+                 pedestal_adc: float = 200.0,
+                 smooth_floor: float = 1.0):
         self.target_adc = target_adc
         self.bin_step = bin_step
         self.bin_min = bin_min
@@ -47,6 +48,7 @@ class SpectrumAnalyzer:
         self.edge_fraction = edge_fraction  # cumulative fraction threshold
         self.use_log_cumul = use_log_cumul  # use log(1+count) for cumulative
         self.pedestal_adc = pedestal_adc    # exclude bins below this ADC
+        self.smooth_floor = smooth_floor    # min smoothed count to be spectrum
 
     def find_right_edge(self, bins: List[int]) -> Optional[int]:
         """Find the right-edge bin of the Bremsstrahlung continuum spectrum.
@@ -55,13 +57,20 @@ class SpectrumAnalyzer:
 
         1. **Exclude pedestal**: bins below ``pedestal_adc`` (default 200).
         2. **Smooth** with moving average (window=5).
-        3. **Log-scale cumulative from right** (default): accumulate
-           ``log(1 + count)`` from the rightmost bin leftward.  The log
-           transform compresses high-count body bins so sparse tail bins
-           carry more relative weight.  When the cumulative reaches
-           ``edge_fraction`` (default 2%) of the log-total, we've found
-           the edge.  If ``use_log_cumul`` is False, raw counts are used.
-        4. **Confirm falling edge** via smoothed slope.
+        3. **Skip pile-up tail**: find the spectrum peak and walk
+           rightward until the smoothed value drops below
+           ``smooth_floor`` (default 1.0 count).  This traces the
+           contiguous body and stops at the first gap, excluding any
+           isolated pile-up clusters beyond it — even if those clusters
+           smooth above the floor.
+        4. **Log-scale cumulative from right** (default): accumulate
+           ``log(1 + count)`` from the pile-up-free boundary leftward.
+           The log transform compresses high-count body bins so sparse
+           tail bins carry more relative weight.  When the cumulative
+           reaches ``edge_fraction`` (default 5%) of the log-total,
+           we've found the edge.  If ``use_log_cumul`` is False, raw
+           counts are used.
+        5. **Confirm falling edge** via smoothed slope.
 
         Returns the bin index, or None if no edge found.
         """
@@ -82,12 +91,31 @@ class SpectrumAnalyzer:
             hi = min(n, i + hw + 1)
             smooth[i] = sum(bins[lo:hi]) / (hi - lo)
 
-        # step 3: cumulative from right
+        # step 3: skip pile-up tail — find the right boundary of the
+        # contiguous spectrum body.  Start at the peak (always inside
+        # the body for Bremsstrahlung) and walk rightward until the
+        # smoothed value drops below ``smooth_floor``.  Everything
+        # beyond that point — including isolated pile-up clusters whose
+        # smoothed values may exceed the floor — is excluded.
+        peak_bin = ped_bin
+        for i in range(ped_bin + 1, n):
+            if smooth[i] > smooth[peak_bin]:
+                peak_bin = i
+        if smooth[peak_bin] < self.smooth_floor:
+            return None  # entire spectrum below floor
+        right_limit = peak_bin
+        for i in range(peak_bin + 1, n):
+            if smooth[i] >= self.smooth_floor:
+                right_limit = i
+            else:
+                break
+
+        # step 4: cumulative from right (starting at pile-up-free boundary)
         if self.use_log_cumul:
-            total = sum(math.log1p(bins[i]) for i in range(ped_bin, n))
+            total = sum(math.log1p(bins[i]) for i in range(ped_bin, right_limit + 1))
             weight_fn = math.log1p
         else:
-            total = sum(bins[ped_bin:])
+            total = sum(bins[ped_bin:right_limit + 1])
             weight_fn = float
         if total <= 0:
             return None
@@ -95,7 +123,7 @@ class SpectrumAnalyzer:
         threshold = total * self.edge_fraction
         cumul = 0.0
         candidate = None
-        for i in range(n - 1, ped_bin - 1, -1):
+        for i in range(right_limit, ped_bin - 1, -1):
             cumul += weight_fn(bins[i])
             if cumul >= threshold:
                 candidate = i
@@ -103,7 +131,7 @@ class SpectrumAnalyzer:
         if candidate is None:
             return None
 
-        # step 3: confirm falling edge — walk right from candidate to find
+        # step 5: confirm falling edge — walk right from candidate to find
         # where the smoothed value starts dropping consistently
         # (candidate might be slightly inside the body; refine outward)
         peak_smooth = max(smooth)
