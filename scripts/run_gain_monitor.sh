@@ -1,10 +1,13 @@
 #!/bin/bash
 
-# Usage: ./run_gain_monitor.sh <run_number> <num_cpus>
+# Usage: ./run_gain_monitor.sh <run_number> <num_cpus> [subfile_min] [subfile_max]
 # Example: ./run_gain_monitor.sh 023545 10
+#          ./run_gain_monitor.sh 023545 10 5 20   (only sub-files 5 through 20)
 
 RUN=$1
 NCPU=$2
+SUBFILE_MIN=$3
+SUBFILE_MAX=$4
 
 INPUTDIR="/data/stage6"
 OUTPUTDIR="/home/clasrun/prad2_daq/gain_monitoring/gain_monitor_output"
@@ -17,9 +20,23 @@ if [ ! -d "${RUNDIR}" ]; then
 fi
 
 # Collect all file numbers from evio filenames, sorted numerically
-FILENUMS=($(ls "${RUNDIR}/prad_${RUN}.evio."* 2>/dev/null \
+ALL_FILENUMS=($(ls "${RUNDIR}/prad_${RUN}.evio."* 2>/dev/null \
     | sed 's/.*\.evio\.//' \
     | sort -n))
+
+# Filter by sub-file range if third and fourth parameters are given
+if [ -n "${SUBFILE_MIN}" ] && [ -n "${SUBFILE_MAX}" ]; then
+    echo "Filtering sub-files from ${SUBFILE_MIN} to ${SUBFILE_MAX}"
+    FILENUMS=()
+    for NUM in "${ALL_FILENUMS[@]}"; do
+        N=$(( 10#${NUM} ))
+        if [ "${N}" -ge "${SUBFILE_MIN}" ] && [ "${N}" -le "${SUBFILE_MAX}" ]; then
+            FILENUMS+=("${NUM}")
+        fi
+    done
+else
+    FILENUMS=("${ALL_FILENUMS[@]}")
+fi
 
 NFILES=${#FILENUMS[@]}
 if [ "${NFILES}" -eq 0 ]; then
