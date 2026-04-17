@@ -39,6 +39,10 @@ add_library(prad2det STATIC
     src/GemCluster.cpp
 )
 
+# PIC so the archive can be pulled into shared objects (pybind11 module,
+# ACLiC-compiled ROOT macros).  See prad2dec/CMakeLists.txt for details.
+set_target_properties(prad2det PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 target_include_directories(prad2det
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

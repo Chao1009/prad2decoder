@@ -116,18 +116,50 @@ target_compile_definitions(livetime PRIVATE DATABASE_DIR="${DATABASE_DIR}")
 set_target_properties(livetime PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ---------------------------------------------------------------------------
-# Analysis tools + ROOT viewer (share a single ROOT dependency).
-# Analysis is the *producer* of ROOT replay files; the viewer is the
-# *consumer*.  They are always built together — a separate WITH_ROOT
-# switch would let you compile the consumer without a producer, which is
-# not useful.  Set -DBUILD_ANALYSIS=ON to enable both.
+# Optional features — default ON with graceful fallback.
+#
+# Each feature probes for its prerequisites with find_package(... QUIET).
+# If the prereqs are missing we turn the feature OFF automatically and
+# print an actionable warning.  If the user explicitly passed
+# -DBUILD_XXX=ON on the command line and the dependency is still missing,
+# we fail with a clear message pointing at the fix.
+#
+# Core targets (prad2dec, prad2det, prad2srv, prad2_server, the dump
+# tools) always build regardless of these options.
 # ---------------------------------------------------------------------------
-option(BUILD_ANALYSIS "Build analysis tools and ROOT data-source (requires ROOT)" OFF)
+
+# Record which feature flags the user explicitly passed on the command line
+# BEFORE option() sets defaults — otherwise the variables are always DEFINED
+# once option() has run and we can't tell default from explicit.
+foreach(_f BUILD_ANALYSIS BUILD_PYTHON BUILD_GUI)
+    if(DEFINED ${_f})
+        set(${_f}_EXPLICIT TRUE)
+    else()
+        set(${_f}_EXPLICIT FALSE)
+    endif()
+endforeach()
+
+# ----- Analysis tools + ROOT viewer (shared ROOT dependency) ----------------
+# Analysis is the producer of ROOT replay files; the ROOT data-source in
+# the viewer is the consumer.  They are always enabled together.
+option(BUILD_ANALYSIS "Build analysis tools and ROOT data-source (requires ROOT)" ON)
 
 if(BUILD_ANALYSIS)
-    find_package(ROOT 6.0 REQUIRED CONFIG COMPONENTS Core Tree RIO)
-    include(${ROOT_USE_FILE})
-    message(STATUS "ROOT: using ${ROOT_VERSION}")
+    find_package(ROOT 6.0 QUIET CONFIG COMPONENTS Core Tree RIO)
+    if(ROOT_FOUND)
+        include(${ROOT_USE_FILE})
+        message(STATUS "ROOT: using ${ROOT_VERSION}")
+    elseif(BUILD_ANALYSIS_EXPLICIT)
+        message(FATAL_ERROR
+            "BUILD_ANALYSIS=ON but ROOT was not found.\n"
+            "Install ROOT 6.x (https://root.cern) and add its bin/ to PATH,\n"
+            "or re-configure with -DBUILD_ANALYSIS=OFF to skip.")
+    else()
+        message(WARNING
+            "ROOT not found — disabling BUILD_ANALYSIS. "
+            "Core targets still build. Set -DBUILD_ANALYSIS=OFF to silence.")
+        set(BUILD_ANALYSIS OFF CACHE BOOL "" FORCE)
+    endif()
 endif()
 
 # Sources use ``#ifdef WITH_ROOT`` to guard ROOT-dependent blocks; expose
@@ -182,27 +214,65 @@ if(BUILD_ANALYSIS)
 endif()
 
 # ---------------------------------------------------------------------------
-# Python bindings (optional, uses pybind11 fetched via FetchContent)
+# Python bindings (prad2py).  pybind11 itself is fetched via FetchContent;
+# we only need a Python 3 interpreter + development headers on the host.
 # ---------------------------------------------------------------------------
-option(BUILD_PYTHON "Build Python bindings (prad2py)" OFF)
+option(BUILD_PYTHON "Build Python bindings (prad2py)" ON)
 if(BUILD_PYTHON)
-    add_subdirectory(python)
+    find_package(Python 3.7 QUIET COMPONENTS Interpreter Development)
+    if(Python_FOUND AND Python_Development_FOUND)
+        message(STATUS "Python: ${Python_EXECUTABLE} "
+                       "(headers: ${Python_INCLUDE_DIRS})")
+        add_subdirectory(python)
+    elseif(BUILD_PYTHON_EXPLICIT)
+        message(FATAL_ERROR
+            "BUILD_PYTHON=ON but Python dev headers were not found.\n"
+            "RHEL/Rocky:  sudo dnf install python3-devel\n"
+            "Debian/Ubuntu:  sudo apt install python3-dev\n"
+            "Or point CMake at a specific interpreter with "
+            "-DPython_EXECUTABLE=$(which python3).\n"
+            "Re-configure with -DBUILD_PYTHON=OFF to skip.")
+    else()
+        message(WARNING
+            "Python dev headers not found — disabling BUILD_PYTHON. "
+            "Core targets still build. "
+            "Install python3-devel / python3-dev and re-configure, "
+            "or set -DBUILD_PYTHON=OFF to silence.")
+        set(BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
-# Qt standalone viewer + thin client (optional)
+# Qt standalone viewer + thin client.  Qt6 preferred, Qt5 as fallback.
 # ---------------------------------------------------------------------------
-option(BUILD_GUI "Build Qt GUI applications" OFF)
+option(BUILD_GUI "Build Qt GUI applications (prad2evviewer, prad2_client)" ON)
 if(BUILD_GUI)
     find_package(Qt6 QUIET COMPONENTS Widgets WebEngineWidgets)
     if(Qt6_FOUND)
         set(QT_VERSION_MAJOR 6)
         message(STATUS "Qt: using Qt6")
     else()
-        find_package(Qt5 REQUIRED COMPONENTS Widgets WebEngineWidgets)
-        set(QT_VERSION_MAJOR 5)
-        message(STATUS "Qt: Qt6 not found, falling back to Qt5")
+        find_package(Qt5 QUIET COMPONENTS Widgets WebEngineWidgets)
+        if(Qt5_FOUND)
+            set(QT_VERSION_MAJOR 5)
+            message(STATUS "Qt: Qt6 not found, falling back to Qt5")
+        elseif(BUILD_GUI_EXPLICIT)
+            message(FATAL_ERROR
+                "BUILD_GUI=ON but neither Qt6 nor Qt5 was found.\n"
+                "Install Qt6/5 Widgets + WebEngineWidgets "
+                "(Qt6 recommended), or re-configure with "
+                "-DBUILD_GUI=OFF to skip.")
+        else()
+            message(WARNING
+                "Qt6/Qt5 not found — disabling BUILD_GUI. "
+                "Core targets still build. "
+                "Install Qt6 Widgets + WebEngineWidgets (or Qt5) and "
+                "re-configure, or set -DBUILD_GUI=OFF to silence.")
+            set(BUILD_GUI OFF CACHE BOOL "" FORCE)
+        endif()
     endif()
+endif()
+if(BUILD_GUI)
 
     # Standalone viewer (embedded server + WebEngine)
     add_executable(prad2evviewer src/prad2evviewer.cpp)
