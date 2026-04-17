@@ -8,6 +8,8 @@
 #include "DaqConfig.h"
 
 #include <TF1.h>
+#include <TMath.h>
+
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
@@ -102,6 +104,13 @@ int main(int argc, char *argv[])
         std::cerr << "No DAQ config file provided, ROC tag to crate mapping will be unavailable.\n";
     }
 
+    if(output.empty()) output = "gain_replay_output.root";
+    TFile *outfile = TFile::Open(output.c_str(), "RECREATE");
+    if (!outfile || !outfile->IsOpen()) {
+        std::cerr << "Cannot create output ROOT file\n";
+        return 1;
+    }
+
     evc::EvChannel ch;
     ch.SetConfig(daq_cfg);
 
@@ -113,7 +122,7 @@ int main(int argc, char *argv[])
     for (const auto &input_evio : evio_files) {
         if (ch.Open(input_evio) != evc::status::success) {
             std::cerr << "Replay: cannot open " << input_evio << "\n";
-            return false;
+            return 1;
         }
 
         while (ch.Read() == evc::status::success) {
@@ -155,9 +164,12 @@ int main(int argc, char *argv[])
                                     if(mod_name[3] == 'P') lms_id = 0;
                                     else lms_id = mod_name[3] - '0';
                                     ana.Analyze(cd.samples, cd.nsamples, wres);
-                                    if(wres.npeaks != 1) continue;;
-                                    float peak_height = wres.peaks[0].height;
-                                    float peak_integral = wres.peaks[0].integral;
+                                    //if(wres.npeaks != 1) continue;
+                                    int idx = 0;
+                                    for (int k = 0; k < wres.npeaks; ++k)
+                                        if (wres.peaks[k].height > wres.peaks[idx].height) idx = k;
+                                    float peak_height = wres.peaks[idx].height;
+                                    float peak_integral = wres.peaks[idx].integral;
                                     if(trigger_bits & TBIT_lms) {
                                         physics.Fill_lmsCH_lmsHeight(lms_id, peak_height);
                                         physics.Fill_lmsCH_lmsIntegral(lms_id, peak_integral);
@@ -246,17 +258,26 @@ done:
 
         if (lms_ref[i] > 0) n_lms++;
     }
+    out << std::left;
+    out << std::setw(6) << "Name" << std::setw(12) << "lms_peak" << std::setw(12) << "lms_sigma" << std::setw(12) << "lms_chi2" 
+        << std::setw(16) << "alpha_peak (g1)" << std::setw(16) << "alpha_sigma (g2)" << std::setw(16) << "alpha_chi2 (g3)\n";
     for(int i = 1; i <= 3; i++){
-        out << "LMS" << i << " " << lms_ref[i] << " " << lms_sigma[i] << " " << lms_chi2[i] << " "
-            << alpha_ref[i] << " " << alpha_sigma[i] << " " << alpha_chi2[i] << "\n";
+        out << std::setw(6) << ("LMS" + std::to_string(i))
+            << std::setw(12) << std::fixed << std::setprecision(3) << lms_ref[i]
+            << std::setw(12) << std::fixed << std::setprecision(3) << lms_sigma[i]
+            << std::setw(12) << std::fixed << std::setprecision(3) << lms_chi2[i]
+            << std::setw(16) << std::fixed << std::setprecision(3) << alpha_ref[i]
+            << std::setw(16) << std::fixed << std::setprecision(3) << alpha_sigma[i]
+            << std::setw(16) << std::fixed << std::setprecision(3) << alpha_chi2[i]
+            << "\n";
     }
     int n_mod = 0;
     for (int i = 0; i < hycal.module_count(); ++i) {
         if (!hycal.module(i).is_hycal()) continue;
         if (hycal.module(i).name[0] != 'W') continue;
 
-        TH1F *h_lms = physics.Get_modCH_lmsHeightHist(i);
-        if (h_lms == nullptr || h_lms->GetEntries() < 10) continue;
+        TH1F *h_lms = physics.Get_modCH_lmsHeightHist(hycal.module(i).id);
+        if (h_lms == nullptr) continue;
 
         {
             double peak0 = h_lms->GetBinCenter(h_lms->GetMaximumBin());
@@ -264,7 +285,7 @@ done:
             double lo = peak0 - 2.0 * rms0, hi = peak0 + 2.0 * rms0;
             TF1 f_gaus("f_mod", "gaus", lo, hi);
             f_gaus.SetParameters(h_lms->GetMaximum(), peak0, rms0);
-            h_lms->Fit(&f_gaus, "RQ0");
+            h_lms->Fit(&f_gaus, "RQ");
             mod_lms[i]       = f_gaus.GetParameter(1);
             mod_lms_sigma[i] = f_gaus.GetParameter(2);
             mod_lms_chi2[i]  = (f_gaus.GetNDF() > 0) ? f_gaus.GetChisquare() / f_gaus.GetNDF() : 0;
@@ -274,10 +295,32 @@ done:
             g[i][j] = (lms_ref[j] > 0 && mod_lms[i] > 0 && alpha_ref[j] > 0) ? 
                         mod_lms[i] * alpha_ref[j] / lms_ref[j] : 0;
         }
-        out << hycal.module(i).name << " " << mod_lms[i] << " " << mod_lms_sigma[i] << " " << mod_lms_chi2[i]
-            << " " << g[i][1] << " " << g[i][2] << " " << g[i][3] << "\n";
+        out << std::setw(6) << hycal.module(i).name
+            << std::setw(12) << std::fixed << std::setprecision(3) << mod_lms[i]
+            << std::setw(12) << std::fixed << std::setprecision(3) << mod_lms_sigma[i]
+            << std::setw(12) << std::fixed << std::setprecision(3) << mod_lms_chi2[i]
+            << std::setw(16) << std::fixed << std::setprecision(3) << g[i][1]
+            << std::setw(16) << std::fixed << std::setprecision(3) << g[i][2]
+            << std::setw(16) << std::fixed << std::setprecision(3) << g[i][3]
+            << "\n";
         n_mod++;
     }
     out.close();
     std::cerr << "LMS and alpha peak analysis completed for " << n_lms << " LMS channels and " << n_mod << " modules. Results saved to lms_alpha_peaks.dat\n";
+
+    outfile->cd();
+    outfile->mkdir("lms");
+    outfile->cd("lms");
+    for (int i = 0; i < 4; ++i) {
+        if (physics.Get_lmsCH_lmsHeightHist(i)) physics.Get_lmsCH_lmsHeightHist(i)->Write();
+        if (physics.Get_lmsCH_lmsIntegralHist(i)) physics.Get_lmsCH_lmsIntegralHist(i)->Write();
+        if (physics.Get_lmsCH_alphaHeightHist(i)) physics.Get_lmsCH_alphaHeightHist(i)->Write();
+        if (physics.Get_lmsCH_alphaIntegralHist(i)) physics.Get_lmsCH_alphaIntegralHist(i)->Write();
+    }
+    outfile->mkdir("modules");
+    outfile->cd("modules");
+    for (int i = 0; i < hycal.module_count(); ++i) {
+        if (physics.Get_modCH_lmsHeightHist(hycal.module(i).id)) physics.Get_modCH_lmsHeightHist(hycal.module(i).id)->Write();
+    }
+    outfile->Close();
 }
