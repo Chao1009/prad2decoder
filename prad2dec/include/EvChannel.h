@@ -98,6 +98,18 @@ public:
                      vtp::VtpEventData *vtp_evt = nullptr,
                      tdc::TdcEventData *tdc_evt = nullptr) const;
 
+    // Fast path: extract only the event-level info (event_tag, trigger_type,
+    // event_number, trigger_number, trigger_bits, timestamp, run_number,
+    // unix_time) without decoding FADC/SSP/VTP/TDC payloads.
+    //
+    // Use this when you need the TI/trigger metadata but don't care about
+    // per-channel waveforms — e.g. trigger-bit histograms, event filtering,
+    // timestamp extraction across a full run.  Typically 5-10× faster than
+    // DecodeEvent() on physics events with full FADC waveforms.
+    //
+    // Returns true on success.  Requires Scan() to have been called.
+    bool DecodeEventInfo(int i, fdec::EventInfo &info) const;
+
     // --- Control event extraction (Prestart/Go/End) -------------------------
 
     // Extract unix timestamp from PRESTART or GO event.

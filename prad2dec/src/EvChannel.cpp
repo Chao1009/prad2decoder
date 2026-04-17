@@ -550,6 +550,59 @@ bool EvChannel::DecodeEvent(int i, fdec::EventData &evt,
     return roc_idx > 0 || ssp_decoded;
 }
 
+// === Info-only fast path ====================================================
+// Mirrors the event-info extraction inside DecodeEvent without touching any
+// FADC/SSP/VTP/TDC bank.  Useful for trigger-bit scans over a whole run, where
+// DecodeEvent would waste time running Fadc250Decoder on every waveform.
+bool EvChannel::DecodeEventInfo(int i, fdec::EventInfo &info) const
+{
+    info = fdec::EventInfo{};
+    info.clear();
+    if (i < 0 || i >= nevents) return false;
+    if (nodes.empty()) return false;
+
+    BankHeader evh(&buffer[0]);
+    info.event_tag = evh.tag;
+    info.type = static_cast<uint8_t>(evtype);
+
+    if (config.is_physics(evh.tag) && evh.tag >= config.physics_base)
+        info.trigger_type = static_cast<uint8_t>(evh.tag - config.physics_base);
+
+    if (auto *tb = FindFirstByTag(config.trigger_bank_tag))
+        decodeTriggerInfo(*tb, info);
+
+    bool have_info = false;
+    for (auto &n : nodes) {
+        if (n.tag != config.ti_bank_tag || n.type != DATA_UINT32) continue;
+
+        if (!have_info) {
+            decodeTIBank(n, info, false);
+            have_info = true;
+        }
+
+        if (info.trigger_bits == 0 && config.ti_trigger_type_word >= 0 &&
+            static_cast<size_t>(config.ti_trigger_type_word) < n.data_words)
+        {
+            const uint32_t *d = GetData(n);
+            info.trigger_bits = (d[config.ti_trigger_type_word]
+                                 >> config.ti_trigger_type_shift)
+                                & config.ti_trigger_type_mask;
+        }
+    }
+
+    for (auto &n : nodes) {
+        if (n.depth == 1 && n.tag == config.ti_master_tag) {
+            for (size_t ci = 0; ci < n.child_count; ++ci) {
+                auto &child = nodes[n.child_first + ci];
+                if (child.tag == config.run_info_tag && child.type == DATA_UINT32)
+                    decodeRunInfo(child, info);
+            }
+            break;
+        }
+    }
+    return true;
+}
+
 // === Control event time extraction ==========================================
 
 uint32_t EvChannel::GetControlTime() const
