@@ -10,11 +10,25 @@
 
 include(FetchContent)
 
+# Resolve a Python interpreter + development headers up front so the error
+# (if any) points at the real problem — missing Python.h — instead of at a
+# cryptic pybind11 failure downstream.
+#
+# If this fails on RHEL 9 you probably need:
+#   sudo dnf install python3-devel
+# To use a specific interpreter (conda/virtualenv) pass:
+#   -DPython_EXECUTABLE=$(which python3)
+find_package(Python 3.7 COMPONENTS Interpreter Development REQUIRED)
+message(STATUS "prad2py: Python  = ${Python_EXECUTABLE}")
+message(STATUS "prad2py: headers = ${Python_INCLUDE_DIRS}")
+
 FetchContent_Declare(pybind11
     GIT_REPOSITORY https://github.com/pybind/pybind11.git
     GIT_TAG        v2.13.6
     GIT_SHALLOW    TRUE
 )
+# Tell pybind11 to skip its own Python search — use the one we just resolved.
+set(PYBIND11_FINDPYTHON ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(pybind11)
 
 pybind11_add_module(prad2py MODULE prad2py.cpp)
