@@ -56,6 +56,29 @@ PhysicsTools::PhysicsTools(fdec::HyCalSystem &hycal)
     moller_z_ = std::make_unique<TH1F>(
         "h_moller_z", "Moller Z Position (HyCal);Z (mm);Counts",
         1000, 5000, 8000);
+
+    // histograms for gain monitoring replay
+    for (int ch = 0; ch < 4; ++ch) {
+        h_lmsCH_lmsHeight_[ch] = std::make_unique<TH1F>(
+            Form("h_lmsCH%d_lmsHeight", ch), Form("LMS%d Peak Height;Height (ADC);Counts", ch), 500, 0, 4000);
+        h_lmsCH_lmsIntegral_[ch] = std::make_unique<TH1F>(
+            Form("h_lmsCH%d_lmsIntegral", ch), Form("LMS%d Peak Integral;Integral (ADC*ns);Counts", ch), 500, 0, 40000);
+        h_lmsCH_alphaHeight_[ch] = std::make_unique<TH1F>(
+            Form("h_lmsCH%d_alphaHeight", ch), Form("LMS%d Alpha Peak Height;Height (ADC);Counts", ch), 500, 0, 4000);
+        h_lmsCH_alphaIntegral_[ch] = std::make_unique<TH1F>(
+            Form("h_lmsCH%d_alphaIntegral", ch), Form("LMS%d Alpha Peak Integral;Integral (ADC*ns);Counts", ch), 500, 0, 400000);
+    }
+    h_modCH_lmsHeight_.resize(nmod);
+    h_modCH_lmsIntegral_.resize(nmod);
+    for (int i = 0; i < nmod; ++i) {
+        auto &mod = hycal_.module(i);
+        std::string name_height = "h_mod" + mod.name + "_lmsHeight";
+        std::string title_height = mod.name + " LMS Peak Height;Height (ADC);Counts";
+        h_modCH_lmsHeight_[i] = std::make_unique<TH1F>(name_height.c_str(), title_height.c_str(), 500, 0, 4000);
+        std::string name_integral = "h_mod" + mod.name + "_lmsIntegral";
+        std::string title_integral = mod.name + " LMS Peak Integral;Integral (ADC*ns);Counts";
+        h_modCH_lmsIntegral_[i] = std::make_unique<TH1F>(name_integral.c_str(), title_integral.c_str(), 500, 0, 40000);
+    }
 }
 
 PhysicsTools::~PhysicsTools() = default;
@@ -82,22 +105,27 @@ void TransformDetData(std::vector<GEMHit> &gem_hits, float beamX, float beamY, f
     }
 }
 
-void PhysicsTools::FillModuleEnergy(int module_index, float energy)
-{
-    if (module_index >= 0 && module_index < (int)module_hists_.size())
-        module_hists_[module_index]->Fill(energy);
+void PhysicsTools::FillModuleEnergy(int module_id, float energy)
+{   
+    if (module_id >= 0){
+        int module_index = hycal_.id_to_index(module_id);
+        if (module_index >= 0 && module_index < (int)module_hists_.size())
+            module_hists_[module_index]->Fill(energy);
+    }
 }
 
-TH1F *PhysicsTools::GetModuleEnergyHist(int module_index) const
+TH1F *PhysicsTools::GetModuleEnergyHist(int module_id) const
 {
+    int module_index = hycal_.id_to_index(module_id);
     if (module_index >= 0 && module_index < (int)module_hists_.size())
         return module_hists_[module_index].get();
     return nullptr;
 }
 
-void PhysicsTools::FillEnergyVsModule(int module_index, float energy)
+void PhysicsTools::FillEnergyVsModule(int module_id, float energy)
 {
-    if (h2_energy_module_)
+    int module_index = hycal_.id_to_index(module_id);
+    if (module_index >= 0 && module_index < (int)module_hists_.size())
         h2_energy_module_->Fill(module_index, energy);
 }
 
@@ -170,8 +198,9 @@ void PhysicsTools::Fill2armMollerPosHist(float x, float y)
         h2_moller_pos_->Fill(x, y);
 }
 
-std::array<float, 2> PhysicsTools::FitPeakResolution(int module_index) const
+std::array<float, 2> PhysicsTools::FitPeakResolution(int module_id) const
 {
+    int module_index = hycal_.id_to_index(module_id);
     if (module_index < 0 || module_index >= (int)module_hists_.size())
         return {0.f, 0.f};
 
@@ -208,7 +237,8 @@ void PhysicsTools::Resolution2Database(int run_id)
 
     int module_count = hycal_.module_count();
     for (int m = 0; m < module_count; m++) {
-        auto [peak, sigma] = FitPeakResolution(m);
+        int module_id = hycal_.module(m).id;
+        auto [peak, sigma] = FitPeakResolution(module_id);
         if (peak > 0 && sigma > 0) {
             std::string name = hycal_.module(m).name;
             out << name << " " << peak << " " << sigma << "\n";

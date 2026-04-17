@@ -45,6 +45,12 @@ int HyCalSystem::name_to_id(const std::string &name)
     return -1;
 }
 
+int HyCalSystem::id_to_index(int id)
+{
+    auto it = id_map_.find(id);
+    return (it != id_map_.end()) ? it->second : -1;
+}
+
 std::string HyCalSystem::id_to_name(int id)
 {
     if (id < 0 || id > 2156) return "UNKNOWN";
