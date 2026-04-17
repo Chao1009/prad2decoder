@@ -248,6 +248,7 @@ public:
 
     // --- static helpers -----------------------------------------------------
     static int          name_to_id(const std::string &name);
+    int                 id_to_index(int id);
     static std::string  id_to_name(int id);
     static ModuleType   parse_type(const std::string &t);
 
@@ -258,7 +259,7 @@ private:
     void  build_neighbors();
 
     // line-segment intersection (ported from cana::intersection)
-    static int line_intersect(double x1, double y1, double x2, double y2,
+    static int line_intersect(double x1, double y1, double x2, double y2,       
                               double x3, double y3, double x4, double y4,
                               double &xc, double &yc);
 

@@ -46,11 +46,11 @@ public:
     ~PhysicsTools();
 
     // --- per-module cluster energy histograms --------------------------------
-    void FillModuleEnergy(int module_index, float energy);
-    TH1F *GetModuleEnergyHist(int module_index) const;
+    void FillModuleEnergy(int module_id, float energy);
+    TH1F *GetModuleEnergyHist(int module_id) const;
 
     // --- 2D energy vs module index -------------------------------------------
-    void FillEnergyVsModule(int module_index, float energy);
+    void FillEnergyVsModule(int module_id, float energy);
     TH2F *GetEnergyVsModuleHist() const { return h2_energy_module_.get(); }
 
     // --- energy vs scattering angle -------------------------------------------
@@ -68,7 +68,7 @@ public:
 
     // --- peak / resolution analysis ------------------------------------------
     // Returns {peak, resolution} from Gaussian fit. Resolution = sigma/mean.
-    std::array<float, 2> FitPeakResolution(int module_index) const;
+    std::array<float, 2> FitPeakResolution(int module_id) const;
     void Resolution2Database(int run_id);
 
     // --- kinematics ----------------------------------------------------------
@@ -131,6 +131,14 @@ private:
     std::unique_ptr<TH1F> moller_x_;
     std::unique_ptr<TH1F> moller_y_;
     std::unique_ptr<TH1F> moller_z_;
+
+    //histograms for gain monitoring replay
+    std::unique_ptr<TH1F> h_lmsCH_lmsHeight_[4];
+    std::unique_ptr<TH1F> h_lmsCH_lmsIntegral_[4];
+    std::unique_ptr<TH1F> h_lmsCH_alphaHeight_[4];
+    std::unique_ptr<TH1F> h_lmsCH_alphaIntegral_[4];
+    std::vector<std::unique_ptr<TH1F>> h_modCH_lmsHeight_; //per module
+    std::vector<std::unique_ptr<TH1F>> h_modCH_lmsIntegral_;
 };
 
 } // namespace analysis
