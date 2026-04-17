@@ -104,11 +104,6 @@ target_link_libraries(ts_dump PRIVATE prad2dec nlohmann_json::nlohmann_json)
 target_compile_definitions(ts_dump PRIVATE DATABASE_DIR="${DATABASE_DIR}")
 set_target_properties(ts_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-add_executable(tdc_dump test/tdc_dump.cpp)
-target_link_libraries(tdc_dump PRIVATE prad2dec nlohmann_json::nlohmann_json)
-target_compile_definitions(tdc_dump PRIVATE DATABASE_DIR="${DATABASE_DIR}")
-set_target_properties(tdc_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-
 add_executable(livetime test/livetime.cpp)
 target_link_libraries(livetime PRIVATE prad2dec nlohmann_json::nlohmann_json)
 target_compile_definitions(livetime PRIVATE DATABASE_DIR="${DATABASE_DIR}")

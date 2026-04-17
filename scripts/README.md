@@ -66,33 +66,59 @@ python scripts/gem_cluster_view.py <event.json> [gem_map.json] [--det N] [-o fil
 ## tdc_viewer.py
 
 PyQt6 viewer for V1190 TDC hits from the tagger crate (ROC `0x008E`, bank
-`0xE107`). Shows a per-slot bar chart of hits/channel plus the TDC-value
-histogram for any selected channel. No matplotlib; plots are drawn with
-QPainter (numpy is the only scientific dep). The bar chart auto-sizes its
-x-axis to 16 / 32 / 64 / 128 channels based on the highest channel hit.
+`0xE107`). Shows a per-slot bar chart of hits/channel, a single-channel
+TDC-value histogram, plus event-wise correlation tabs (Δt = A − B and a
+2-D tdc(A) vs tdc(B) heatmap). No matplotlib / pyqtgraph; plots are
+drawn with QPainter (numpy is the only scientific dep). The bar chart
+auto-sizes its x-axis to 16 / 32 / 64 / 128 channels based on the
+highest channel actually hit. Human-readable counter names come from
+`database/tagger_map.json`.
 
-Two ways to feed it data:
+Two data sources:
 
-**Direct (preferred)** — point the viewer at an `.evio` file; the built-in
-`prad2py` pybind11 extension decodes hits in-process:
+**Offline — evio file** (decoded in-process by `prad2py`):
 
 ```bash
 cmake -DBUILD_PYTHON=ON -S . -B build && cmake --build build
-export PYTHONPATH="$PWD/build/python:$PYTHONPATH"   # optional; the viewer
-                                                    # also auto-adds build/python
+# optional — the viewer auto-adds build/python/ to sys.path
+export PYTHONPATH="$PWD/build/python:$PYTHONPATH"
 python scripts/tdc_viewer.py /data/stage6/prad_023667/prad_023667.evio.00000 \
        -n 200000          # limit number of physics events (optional)
        --roc 0x8E         # restrict to the tagger ROC (optional)
 ```
 
-**Indirect (fallback)** — if you cannot build `prad2py`, use `tdc_dump -b`
-to write a flat binary and open that instead:
+**Online — live ET stream** from a running `prad2_server`. The server
+only decodes TDC when at least one client is subscribed, so regular
+monitoring is unaffected:
 
 ```bash
-./build/bin/tdc_dump /data/stage6/prad_023667/prad_023667.evio.00000 \
-    -b /tmp/tagger_hits.bin -n 200000
-python scripts/tdc_viewer.py /tmp/tagger_hits.bin
+# DAQ machine (one-time)
+./build/bin/prad2_server --online --port 5051
+
+# Viewer (anywhere with PyQt6 + QtWebSockets installed)
+python scripts/tdc_viewer.py --live ws://clondaq6:5051
 ```
 
-`tdc_dump` also writes a CSV (`event_num,trigger_bits,roc_tag,slot,channel,edge,tdc`)
-to stdout when no `-o` / `-b` is given, which is handy for `awk`/`head` checks.
+On startup with `--live`, a fast subscribe/ack round-trip is done
+*before* the main window opens — if the server is unreachable or the
+protocol doesn't match, `tdc_viewer` exits with a clear error rather
+than showing an empty window. Pass `--no-smoke-test` to skip it.
+
+The File menu also has *Connect to prad2_server…* (Ctrl+L) and
+*Disconnect*. Pause / Clear buttons sit next to the Bins spinner.
+Memory is capped at 10 M hits (rolling — oldest half is dropped).
+
+Binary frame format (useful for anyone writing a different client):
+
+```
+magic        "TDC1"   (4 bytes)
+flags        u32      (bit 0 = some frames have been dropped)
+n_hits       u32
+first_seq    u32
+last_seq     u32
+dropped      u32      (cumulative since server start)
+records      n_hits × 16-byte packed BinHit
+               u32 event_num, u32 trigger_bits, u16 roc_tag,
+               u8 slot, u8 channel_edge (bit 7 = edge, bits 6:0 = channel),
+               u32 tdc
+```

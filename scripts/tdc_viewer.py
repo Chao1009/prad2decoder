@@ -4,13 +4,13 @@ Tagger TDC Viewer (PyQt6)
 =========================
 
 Interactive viewer for the V1190 TDC banks (0xE107) produced by the tagger
-crate (ROC 0x008E).  Accepts two input forms:
+crate (ROC 0x008E).  Two data sources:
 
   1. An evio file (``*.evio``, ``*.evio.*``) — decoded in-process via the
-     ``prad2py`` pybind11 module.  Requires building with
-     ``-DBUILD_PYTHON=ON`` and adding ``build/python`` to ``PYTHONPATH``.
-  2. A binary hit dump produced by ``tdc_dump -b`` (no C++ extension
-     needed, works as a fallback on hosts without prad2py built).
+     ``prad2py`` pybind11 module.  Build with ``-DBUILD_PYTHON=ON`` and add
+     ``build/python`` to ``PYTHONPATH`` (or just run the viewer from the
+     repo root — it auto-discovers ``build/python/`` next to the script).
+  2. Live ET stream — subscribe to a running ``prad2_server`` WebSocket.
 
 Displays:
 
@@ -18,40 +18,36 @@ Displays:
     to 16 / 32 / 64 / 128 based on the highest channel actually hit —
     click a bar to pick that channel).
   * A TDC value histogram for the selected (slot, channel).
-  * A tree on the left with per-slot / per-channel hit counts.
+  * Event-wise correlation tabs: Δt = A − B, and 2-D tdc(A) vs tdc(B).
+  * A tree on the left with per-slot / per-channel hit counts and the
+    human-readable counter name loaded from database/tagger_map.json.
 
 Usage
 -----
 
-    # Direct: read an evio file (needs prad2py on PYTHONPATH)
+    # Offline (evio file via prad2py)
     python scripts/tdc_viewer.py /data/.../prad_023667.evio.00000
 
-    # Indirect: pre-dumped binary file
-    ./build/bin/tdc_dump /data/.../prad_023667.evio.00000 -b hits.bin
-    python scripts/tdc_viewer.py hits.bin
+    # Live (online ET via prad2_server)
+    python scripts/tdc_viewer.py --live ws://clondaq6:5051
 
-Only PyQt6 and numpy are required.  Plots are drawn with QPainter, so the
-usual matplotlib/pyqtgraph stack is *not* needed.
-
-Binary file format (produced by tdc_dump -b)
---------------------------------------------
-
-    magic        : 16 ASCII bytes "PRAD2_TDC_HITS_1"
-    record_count : uint32_le
-    records      : record_count × 16-byte BinHit  (see test/tdc_dump.cpp)
+Only PyQt6 and numpy are required.  Plots are drawn with QPainter, so
+matplotlib / pyqtgraph are NOT needed.
 """
 
 from __future__ import annotations
 
 import argparse
+import json as _json
 import os
 import sys
+import time as _time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
 
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QRectF, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -59,6 +55,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -72,13 +69,15 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PyQt6.QtWebSockets import QWebSocket
 
 
 # ---------------------------------------------------------------------------
-# Binary file loader
+# Hit dtypes (shared by the live stream and the evio loader)
 # ---------------------------------------------------------------------------
 
-BIN_MAGIC = b"PRAD2_TDC_HITS_1"
+# 16-byte packed record, matches both the prad2py numpy output and the
+# per-hit payload carried by prad2_server's TDC WebSocket frames.
 RAW_DTYPE = np.dtype(
     [
         ("event_num", "<u4"),
@@ -89,9 +88,10 @@ RAW_DTYPE = np.dtype(
         ("tdc", "<u4"),
     ]
 )
-assert RAW_DTYPE.itemsize == 16, "BinHit must be 16 bytes"
+assert RAW_DTYPE.itemsize == 16, "raw record must be 16 bytes"
 
-# Exposed view with edge/channel split out for convenience.
+# Internal representation used everywhere downstream (splits channel/edge
+# so the rest of the code doesn't have to mask bits).
 RECORD_DTYPE = np.dtype(
     [
         ("event_num", "<u4"),
@@ -105,27 +105,57 @@ RECORD_DTYPE = np.dtype(
 )
 
 
-def load_hits(path: str) -> np.ndarray:
-    """Load hits from a binary dump. Returns a structured numpy array
-    with (event_num, trigger_bits, roc_tag, slot, channel, edge, tdc)."""
-    size = os.path.getsize(path)
-    if size < 20:
-        raise ValueError(f"{path}: file too small ({size} bytes)")
+# ---------------------------------------------------------------------------
+# Live stream frame parser (prad2_server TDC broadcast)
+# ---------------------------------------------------------------------------
 
-    with open(path, "rb") as f:
-        magic = f.read(16)
-        if magic != BIN_MAGIC:
-            raise ValueError(
-                f"{path}: bad magic {magic!r} (expected {BIN_MAGIC!r})"
-            )
-        count_bytes = f.read(4)
-        count = int.from_bytes(count_bytes, "little")
-        payload_bytes = size - 20
-        if count * RAW_DTYPE.itemsize > payload_bytes:
-            # File was truncated or count header wasn't finalised.
-            count = payload_bytes // RAW_DTYPE.itemsize
-        raw = np.fromfile(f, dtype=RAW_DTYPE, count=count)
+# Header is little-endian:
+#   char magic[4] ("TDC1")
+#   u32 flags, u32 n_hits, u32 first_seq, u32 last_seq, u32 dropped
+STREAM_HEADER_DTYPE = np.dtype(
+    [
+        ("magic",     "S4"),
+        ("flags",     "<u4"),
+        ("n_hits",    "<u4"),
+        ("first_seq", "<u4"),
+        ("last_seq",  "<u4"),
+        ("dropped",   "<u4"),
+    ]
+)
+assert STREAM_HEADER_DTYPE.itemsize == 24, "TDC stream header must be 24 bytes"
+STREAM_MAGIC = b"TDC1"
 
+
+def parse_stream_frame(buf) -> Tuple[dict, np.ndarray]:
+    """Parse one server-broadcast TDC frame. Returns (header_dict, raw_hits)
+    where raw_hits has RAW_DTYPE (packed 16-byte records) ready to be
+    translated into RECORD_DTYPE via raw_to_record()."""
+    mv = memoryview(buf).tobytes() if not isinstance(buf, (bytes, bytearray)) else bytes(buf)
+    if len(mv) < STREAM_HEADER_DTYPE.itemsize:
+        raise ValueError(f"frame too short ({len(mv)} bytes)")
+    hdr = np.frombuffer(mv, dtype=STREAM_HEADER_DTYPE, count=1)[0]
+    if bytes(hdr["magic"]) != STREAM_MAGIC:
+        raise ValueError(f"bad magic: {bytes(hdr['magic'])!r}")
+    n = int(hdr["n_hits"])
+    expected = STREAM_HEADER_DTYPE.itemsize + n * RAW_DTYPE.itemsize
+    if len(mv) < expected:
+        raise ValueError(f"frame truncated: {len(mv)} < {expected}")
+    raw = np.frombuffer(mv, dtype=RAW_DTYPE, count=n,
+                        offset=STREAM_HEADER_DTYPE.itemsize)
+    return (
+        {
+            "flags":     int(hdr["flags"]),
+            "n_hits":    n,
+            "first_seq": int(hdr["first_seq"]),
+            "last_seq":  int(hdr["last_seq"]),
+            "dropped":   int(hdr["dropped"]),
+        },
+        raw,
+    )
+
+
+def raw_to_record(raw: np.ndarray) -> np.ndarray:
+    """Unpack RAW_DTYPE rows into RECORD_DTYPE rows (splits channel_edge)."""
     hits = np.empty(raw.size, dtype=RECORD_DTYPE)
     hits["event_num"]    = raw["event_num"]
     hits["trigger_bits"] = raw["trigger_bits"]
@@ -163,11 +193,6 @@ except Exception as _exc:  # noqa: BLE001
     PRAD2PY_ERROR = f"{type(_exc).__name__}: {_exc}"
 
 
-def _looks_like_evio(path: str) -> bool:
-    name = os.path.basename(path).lower()
-    return name.endswith(".evio") or ".evio." in name
-
-
 def load_hits_from_evio(
     path: str,
     *,
@@ -192,13 +217,6 @@ def load_hits_from_evio(
     )
 
 
-def load_hits_auto(path: str, **kwargs) -> np.ndarray:
-    """Dispatch on filename: .evio -> prad2py, otherwise -> binary loader."""
-    if _looks_like_evio(path):
-        return load_hits_from_evio(path, **kwargs)
-    return load_hits(path)
-
-
 def round_up_channels(max_ch: int) -> int:
     """Round the observed max channel number up to a V1190-friendly power
     of two (16, 32, 64, 128). Channels are 0-indexed in the data, so we
@@ -208,6 +226,40 @@ def round_up_channels(max_ch: int) -> int:
         if need <= n:
             return n
     return 128
+
+
+# ---------------------------------------------------------------------------
+# Channel-name map (database/tagger_map.json)
+# ---------------------------------------------------------------------------
+
+def load_channel_map(path: Optional[Path] = None) -> Dict[Tuple[int, int], str]:
+    """Load slot+channel -> name mapping. Silently returns {} on any failure
+    (missing file, bad JSON, etc.) — names are purely decorative."""
+    import json
+
+    if path is None:
+        candidates = [
+            _SCRIPT_DIR.parent / "database" / "tagger_map.json",
+            Path.cwd() / "database" / "tagger_map.json",
+        ]
+    else:
+        candidates = [Path(path)]
+
+    for p in candidates:
+        if not p.is_file():
+            continue
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            out: Dict[Tuple[int, int], str] = {}
+            for e in data.get("channels", []):
+                slot = int(e["slot"])
+                channel = int(e["channel"])
+                out[(slot, channel)] = str(e["name"])
+            return out
+        except Exception:
+            continue
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +603,128 @@ class Heatmap2D(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Live WebSocket stream (prad2_server)
+# ---------------------------------------------------------------------------
+
+
+class LiveStream(QObject):
+    """QWebSocket-based live subscriber for prad2_server TDC broadcasts.
+
+    All Qt signals emit on the main GUI thread (QWebSocket runs inside the
+    Qt event loop), so callers do not need any additional locking around
+    the numpy arrays passed through ``hitsReceived``.
+    """
+
+    hitsReceived = pyqtSignal(np.ndarray)   # RECORD_DTYPE rows (one batch)
+    stateChanged = pyqtSignal(str)          # free-form label for the status bar
+    statsUpdate  = pyqtSignal(dict)         # {rate_hz, total_hits, dropped, flags}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._ws = QWebSocket()
+        self._ws.connected.connect(self._on_open)
+        self._ws.disconnected.connect(self._on_close)
+        self._ws.binaryMessageReceived.connect(self._on_binary)
+        self._ws.textMessageReceived.connect(self._on_text)
+        try:
+            self._ws.errorOccurred.connect(self._on_error)
+        except AttributeError:
+            # Qt 6.0 spelled this differently; don't crash on older binaries.
+            pass
+
+        self._paused = False
+        self._total_hits = 0
+        self._last_dropped = 0
+        self._last_flags = 0
+        self._stats_t = _time.monotonic()
+        self._stats_hits = 0
+
+        self._stats_timer = QTimer(self)
+        self._stats_timer.setInterval(500)
+        self._stats_timer.timeout.connect(self._emit_stats)
+
+    # --- public ---------------------------------------------------------
+
+    def open(self, url: str):
+        self.stateChanged.emit(f"connecting to {url} …")
+        self._total_hits = 0
+        self._last_dropped = 0
+        self._last_flags = 0
+        self._stats_t = _time.monotonic()
+        self._stats_hits = 0
+        self._ws.open(QUrl(url))
+        self._stats_timer.start()
+
+    def close(self):
+        self._stats_timer.stop()
+        if self._ws.state() != self._ws.state().UnconnectedState:
+            try:
+                self._ws.sendTextMessage(
+                    _json.dumps({"type": "tdc_unsubscribe"})
+                )
+            except Exception:
+                pass
+        self._ws.close()
+
+    def set_paused(self, paused: bool):
+        self._paused = bool(paused)
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    # --- QWebSocket callbacks -------------------------------------------
+
+    def _on_open(self):
+        self.stateChanged.emit("connected, subscribing…")
+        self._ws.sendTextMessage(_json.dumps({"type": "tdc_subscribe"}))
+
+    def _on_close(self):
+        self._stats_timer.stop()
+        self.stateChanged.emit("disconnected")
+
+    def _on_text(self, msg: str):
+        try:
+            d = _json.loads(msg)
+        except Exception:
+            return
+        t = d.get("type")
+        if t == "tdc_subscribed":
+            n = d.get("subscribers", "?")
+            self.stateChanged.emit(f"subscribed ({n} client(s))")
+
+    def _on_binary(self, data):
+        if self._paused:
+            return
+        try:
+            hdr, raw = parse_stream_frame(bytes(data))
+        except Exception as exc:
+            self.stateChanged.emit(f"frame error: {exc}")
+            return
+        hits = raw_to_record(raw)
+        self._total_hits += hits.size
+        self._last_dropped = hdr["dropped"]
+        self._last_flags = hdr["flags"]
+        if hits.size:
+            self.hitsReceived.emit(hits)
+
+    def _on_error(self, _err):
+        self.stateChanged.emit(f"error: {self._ws.errorString()}")
+
+    def _emit_stats(self):
+        now = _time.monotonic()
+        dt = max(now - self._stats_t, 1e-6)
+        rate = (self._total_hits - self._stats_hits) / dt
+        self._stats_t = now
+        self._stats_hits = self._total_hits
+        self.statsUpdate.emit({
+            "rate_hz":    rate,
+            "total_hits": self._total_hits,
+            "dropped":    self._last_dropped,
+            "flags":      self._last_flags,
+        })
+
+
+# ---------------------------------------------------------------------------
 # Event-wise correlation helpers
 # ---------------------------------------------------------------------------
 
@@ -622,9 +796,31 @@ class TdcViewer(QMainWindow):
         # Channel A / B for event-wise correlations (Δt, A vs B).
         self._channel_a: Optional[Tuple[int, int]] = None
         self._channel_b: Optional[Tuple[int, int]] = None
+        # slot,channel -> human-readable name (from database/tagger_map.json).
+        # Empty dict if file is missing — everything still works, just without names.
+        self._ch_names: Dict[Tuple[int, int], str] = load_channel_map()
         self._load_max_events = max_events
         self._load_daq_config = daq_config
         self._load_roc_filter = roc_filter
+
+        # --- live-stream state ---
+        self._stream = LiveStream(self)
+        self._stream.hitsReceived.connect(self._on_live_hits)
+        self._stream.stateChanged.connect(self._on_live_state)
+        self._stream.statsUpdate.connect(self._on_live_stats)
+        # Batches accumulated between GUI ticks — flushed by _live_timer.
+        self._live_batches: list = []
+        self._live_total = 0
+        self._live_rate_hz = 0.0
+        self._live_dropped = 0
+        self._live_flags = 0
+        # Rolling memory cap; drop the oldest half when exceeded.
+        self._max_live_hits = 10_000_000
+        self._last_live_url = "ws://localhost:5051"
+
+        self._live_timer = QTimer(self)
+        self._live_timer.setInterval(333)   # ~3 Hz repaint
+        self._live_timer.timeout.connect(self._live_tick)
 
         self._build_ui()
         self._make_menu()
@@ -658,14 +854,28 @@ class TdcViewer(QMainWindow):
         self.bins_spin.valueChanged.connect(self._refresh)
         top.addWidget(self.bins_spin)
 
+        # Live-stream controls — only useful when connected, but cheap to show.
+        top.addSpacing(16)
+        self.btn_pause = QPushButton("Pause")
+        self.btn_pause.setCheckable(True)
+        self.btn_pause.setEnabled(False)
+        self.btn_pause.toggled.connect(self._toggle_pause)
+        top.addWidget(self.btn_pause)
+        self.btn_clear_live = QPushButton("Clear buffer")
+        self.btn_clear_live.setToolTip("Drop all accumulated hits and start empty")
+        self.btn_clear_live.clicked.connect(self._clear_live_buffer)
+        top.addWidget(self.btn_clear_live)
+
         main_layout.addLayout(top)
 
         # Main splitter: left (tree) | right (plots)
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Slot / Channel", "Hits"])
-        self.tree.setColumnWidth(0, 150)
+        self.tree.setHeaderLabels(["Slot / Channel", "Hits", "Name"])
+        self.tree.setColumnWidth(0, 130)
+        self.tree.setColumnWidth(1, 70)
+        self.tree.setColumnWidth(2, 80)
         self.tree.itemSelectionChanged.connect(self._on_tree_select)
         splitter.addWidget(self.tree)
 
@@ -742,10 +952,18 @@ class TdcViewer(QMainWindow):
 
     def _make_menu(self):
         m = self.menuBar().addMenu("&File")
-        a_open = QAction("&Open…", self)
+        a_open = QAction("&Open file…", self)
         a_open.setShortcut("Ctrl+O")
         a_open.triggered.connect(self._open_dialog)
         m.addAction(a_open)
+        m.addSeparator()
+        a_live = QAction("&Connect to prad2_server…", self)
+        a_live.setShortcut("Ctrl+L")
+        a_live.triggered.connect(self._connect_live_dialog)
+        m.addAction(a_live)
+        a_disc = QAction("&Disconnect", self)
+        a_disc.triggered.connect(self._disconnect_live)
+        m.addAction(a_disc)
         m.addSeparator()
         a_quit = QAction("&Quit", self)
         a_quit.setShortcut("Ctrl+Q")
@@ -755,27 +973,24 @@ class TdcViewer(QMainWindow):
     # --- loading ---------------------------------------------------------
 
     def _open_dialog(self):
-        filt = ("All supported (*.evio *.evio.* *.bin);;"
-                "EVIO files (*.evio *.evio.*);;"
-                "Binary dumps (*.bin);;"
-                "All files (*)")
-        path, _ = QFileDialog.getOpenFileName(self, "Open TDC source", "", filt)
+        filt = "EVIO files (*.evio *.evio.*);;All files (*)"
+        path, _ = QFileDialog.getOpenFileName(self, "Open evio file", "", filt)
         if path:
             self.load(path)
 
     def load(self, path: str):
+        # Loading a static file is mutually exclusive with the live stream.
+        if self._live_timer.isActive():
+            self._disconnect_live()
         self.statusBar().showMessage(f"Loading {path}…")
         QApplication.processEvents()
         try:
-            if _looks_like_evio(path):
-                hits = load_hits_from_evio(
-                    path,
-                    max_events=self._load_max_events,
-                    daq_config=self._load_daq_config,
-                    roc_filter=self._load_roc_filter,
-                )
-            else:
-                hits = load_hits(path)
+            hits = load_hits_from_evio(
+                path,
+                max_events=self._load_max_events,
+                daq_config=self._load_daq_config,
+                roc_filter=self._load_roc_filter,
+            )
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", f"{path}\n\n{exc}")
             self.statusBar().showMessage("")
@@ -786,20 +1001,39 @@ class TdcViewer(QMainWindow):
 
     # --- indexing --------------------------------------------------------
 
-    def _rebuild_index(self):
+    def _rebuild_index(self, *, reset_selection: bool = True):
+        """Rebuild the slot/channel tree from ``self._hits``.
+
+        ``reset_selection=True`` (default) clears _current / A / B — used when
+        loading a brand-new file.  Live-stream ticks pass False so the user's
+        tree selection and A/B pair survive across rebuilds.
+        """
         hits = self._hits
-        self.file_label.setText(
-            f"{os.path.basename(self._path)} — {hits.size:,} hits"
-            if self._path
-            else f"(in-memory) — {hits.size:,} hits"
-        )
+        # File label: file name in file/binary mode, "(live)" + rate in live mode.
+        if self._stream._stats_timer.isActive():
+            self.file_label.setText(
+                f"(live) {self._last_live_url} — {hits.size:,} hits"
+            )
+        elif self._path:
+            self.file_label.setText(
+                f"{os.path.basename(self._path)} — {hits.size:,} hits"
+            )
+        else:
+            self.file_label.setText(f"(in-memory) — {hits.size:,} hits")
+
+        # Snapshot current selections so we can restore them below.
+        saved_current = self._current
+        saved_a = self._channel_a
+        saved_b = self._channel_b
+
         self.tree.clear()
         self._slot_ch_counts.clear()
-        self._current = None
-        # Drop stale A/B picks — the new file may not contain those channels.
-        self._channel_a = None
-        self._channel_b = None
-        self._update_ab_labels()
+
+        if reset_selection:
+            self._current = None
+            self._channel_a = None
+            self._channel_b = None
+            self._update_ab_labels()
 
         if hits.size == 0:
             self._refresh()
@@ -809,32 +1043,167 @@ class TdcViewer(QMainWindow):
         for slot in slots:
             smask = hits["slot"] == slot
             sub = hits[smask]
-            slot_item = QTreeWidgetItem([f"slot {int(slot)}", f"{sub.size:,}"])
+            slot_item = QTreeWidgetItem([f"slot {int(slot)}", f"{sub.size:,}", ""])
             slot_item.setData(0, Qt.ItemDataRole.UserRole, ("slot", int(slot)))
             self.tree.addTopLevelItem(slot_item)
 
             chs, counts = np.unique(sub["channel"], return_counts=True)
             for ch, c in zip(chs, counts):
                 self._slot_ch_counts[(int(slot), int(ch))] = int(c)
-                ch_item = QTreeWidgetItem([f"  ch {int(ch):3d}", f"{int(c):,}"])
+                name = self._name_for(int(slot), int(ch))
+                ch_item = QTreeWidgetItem([
+                    f"  ch {int(ch):3d}", f"{int(c):,}", name,
+                ])
                 ch_item.setData(
                     0, Qt.ItemDataRole.UserRole, ("channel", int(slot), int(ch))
                 )
                 slot_item.addChild(ch_item)
             slot_item.setExpanded(False)
 
-        # Auto-select the slot with the most hits
-        best_slot = int(
-            max(slots, key=lambda s: int(np.count_nonzero(hits["slot"] == s)))
-        )
+        # Re-select prior item when preserving, otherwise auto-pick busiest slot.
+        if not reset_selection and saved_current is not None:
+            self._current = saved_current
+            self._channel_a = saved_a
+            self._channel_b = saved_b
+            self._update_ab_labels()
+            self._select_current_in_tree()
+        else:
+            best_slot = int(
+                max(slots, key=lambda s: int(np.count_nonzero(hits["slot"] == s)))
+            )
+            for i in range(self.tree.topLevelItemCount()):
+                it = self.tree.topLevelItem(i)
+                data = it.data(0, Qt.ItemDataRole.UserRole)
+                if data and data[0] == "slot" and data[1] == best_slot:
+                    self.tree.setCurrentItem(it)
+                    break
+
+        self._refresh()
+
+    def _select_current_in_tree(self):
+        """Best-effort: find a tree item matching self._current and select it."""
+        if self._current is None:
+            return
+        slot, ch = self._current
         for i in range(self.tree.topLevelItemCount()):
             it = self.tree.topLevelItem(i)
             data = it.data(0, Qt.ItemDataRole.UserRole)
-            if data and data[0] == "slot" and data[1] == best_slot:
+            if not data or data[0] != "slot" or data[1] != slot:
+                continue
+            if ch is None:
                 self.tree.setCurrentItem(it)
-                break
+                return
+            it.setExpanded(True)
+            for j in range(it.childCount()):
+                child = it.child(j)
+                cdata = child.data(0, Qt.ItemDataRole.UserRole)
+                if cdata and cdata[0] == "channel" and cdata[2] == ch:
+                    self.tree.setCurrentItem(child)
+                    return
+            # Slot exists but channel gone — settle for the slot.
+            self.tree.setCurrentItem(it)
+            return
 
-        self._refresh()
+    # --- live streaming -------------------------------------------------
+
+    def _connect_live_dialog(self):
+        url, ok = QInputDialog.getText(
+            self, "Connect to prad2_server",
+            "WebSocket URL:", text=self._last_live_url,
+        )
+        if not ok or not url.strip():
+            return
+        self._open_live(url.strip())
+
+    def _connect_live_dialog_auto(self):
+        """Called by --live CLI flag after the event loop starts."""
+        self._open_live(self._last_live_url)
+
+    def _open_live(self, url: str):
+        self._last_live_url = url
+        # Any in-memory file data is replaced by the live stream.
+        self._path = ""
+        self._hits = np.zeros(0, dtype=RECORD_DTYPE)
+        self._live_batches.clear()
+        self._live_total = 0
+        self._live_dropped = 0
+        self._live_flags = 0
+        self._rebuild_index(reset_selection=True)
+        self.btn_pause.setEnabled(True)
+        self.btn_pause.setChecked(False)
+        self._stream.set_paused(False)
+        self._stream.open(self._last_live_url)
+        self._live_timer.start()
+
+    def _disconnect_live(self):
+        self._live_timer.stop()
+        self._stream.close()
+        self.btn_pause.setEnabled(False)
+        self.btn_pause.setChecked(False)
+
+    def _toggle_pause(self, paused: bool):
+        self._stream.set_paused(paused)
+        self.btn_pause.setText("Resume" if paused else "Pause")
+
+    def _clear_live_buffer(self):
+        # Drop everything — applies in both live and file modes.
+        self._live_batches.clear()
+        self._hits = np.zeros(0, dtype=RECORD_DTYPE)
+        self._live_total = 0
+        self._rebuild_index(reset_selection=False)
+
+    def _on_live_hits(self, batch: np.ndarray):
+        # Called from the Qt event loop on every binary frame. Just queue —
+        # the timer flushes to self._hits at a steady 3 Hz.
+        self._live_batches.append(batch)
+
+    def _on_live_state(self, state: str):
+        self.statusBar().showMessage(f"live: {state}")
+
+    def _on_live_stats(self, s: dict):
+        self._live_rate_hz = float(s.get("rate_hz", 0.0))
+        self._live_total   = int(s.get("total_hits", 0))
+        self._live_dropped = int(s.get("dropped", 0))
+        self._live_flags   = int(s.get("flags", 0))
+
+    def _live_tick(self):
+        if not self._live_batches:
+            # Nothing new — just refresh stats in the file label / status bar.
+            self._update_live_status()
+            return
+        batches = self._live_batches
+        self._live_batches = []
+        new_hits = (batches[0] if len(batches) == 1
+                    else np.concatenate(batches))
+        if self._hits.size == 0:
+            self._hits = new_hits
+        else:
+            self._hits = np.concatenate([self._hits, new_hits])
+
+        # Rolling memory cap — drop the oldest half when we blow past the cap.
+        if self._hits.size > self._max_live_hits:
+            self._hits = self._hits[self._hits.size // 2:].copy()
+
+        # Rebuild tree (preserving user's selection), then repaint.
+        self._rebuild_index(reset_selection=False)
+        self._update_live_status()
+
+    def _update_live_status(self):
+        if not self._stream._stats_timer.isActive():
+            return
+        extra = ""
+        if self._live_flags & 1:
+            extra = f"  DROPPED {self._live_dropped} frames"
+        self.statusBar().showMessage(
+            f"live @ {self._last_live_url}  "
+            f"hits={self._hits.size:,}  "
+            f"rate={self._live_rate_hz:,.0f}/s{extra}"
+        )
+        # Also refresh the file-label summary line.
+        self.file_label.setText(
+            f"(live) {self._last_live_url} — {self._hits.size:,} hits  "
+            f"({self._live_rate_hz:,.0f}/s)"
+        )
 
     # --- interaction -----------------------------------------------------
 
@@ -876,10 +1245,20 @@ class TdcViewer(QMainWindow):
                 break
         self._refresh()
 
+    # --- channel naming -------------------------------------------------
+
+    def _name_for(self, slot: int, channel: int) -> str:
+        """Return the human-readable name for (slot, channel), or '' if
+        the map doesn't cover it."""
+        return self._ch_names.get((int(slot), int(channel)), "")
+
     # --- A / B channel pairing ------------------------------------------
 
     def _fmt_pair(self, p: Optional[Tuple[int, int]]) -> str:
-        return "—" if p is None else f"slot {p[0]}, ch {p[1]}"
+        if p is None:
+            return "—"
+        name = self._name_for(p[0], p[1])
+        return f"slot {p[0]}, ch {p[1]}" + (f"  [{name}]" if name else "")
 
     def _update_ab_labels(self):
         self.lbl_a.setText(self._fmt_pair(self._channel_a))
@@ -1018,14 +1397,16 @@ class TdcViewer(QMainWindow):
             if edge_sel is None
             else ("leading" if edge_sel == 0 else "trailing")
         )
+        name = self._name_for(slot, ch)
+        name_tag = f" [{name}]" if name else ""
         title = (
-            f"TDC histogram — slot {slot}, ch {ch}, {edge_name} "
+            f"TDC histogram — slot {slot}, ch {ch}{name_tag}, {edge_name} "
             f"— {sub.size:,} hits, mean={tdc_vals.mean():.1f}, rms={tdc_vals.std():.1f}"
         )
         self.tdc_hist.setTitle(title)
 
         self.statusBar().showMessage(
-            f"slot={slot} ch={ch}  n={sub.size:,}  "
+            f"slot={slot} ch={ch}{name_tag}  n={sub.size:,}  "
             f"min={tmin}  max={tmax}  mean={tdc_vals.mean():.2f}"
         )
 
@@ -1119,6 +1500,18 @@ class TdcViewer(QMainWindow):
             f"A:[{amin},{amax}]  B:[{bmin},{bmax}]  ρ={rho:+.3f}"
         )
 
+    # --- cleanup --------------------------------------------------------
+
+    def closeEvent(self, ev):
+        # Make sure the WebSocket is torn down cleanly so the server sees our
+        # unsubscribe and the subs counter reaches zero.
+        try:
+            if self._live_timer.isActive():
+                self._disconnect_live()
+        except Exception:
+            pass
+        super().closeEvent(ev)
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -1140,8 +1533,7 @@ def _cli_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "path",
         nargs="?",
-        help="Input file. .evio(.*) -> decoded via prad2py; "
-             ".bin -> read as tdc_dump binary dump.",
+        help="Offline mode: evio file (*.evio / *.evio.*) decoded via prad2py.",
     )
     p.add_argument(
         "-n", "--max-events",
@@ -1159,7 +1551,77 @@ def _cli_parser() -> argparse.ArgumentParser:
         default="",
         help="Only keep hits from this parent ROC tag, e.g. --roc 0x8E (default: all).",
     )
+    p.add_argument(
+        "--live",
+        default="",
+        metavar="URL",
+        help="Auto-connect to a prad2_server WebSocket on startup, "
+             "e.g. --live ws://clondaq6:5051",
+    )
+    p.add_argument(
+        "--no-smoke-test",
+        action="store_true",
+        help="Skip the pre-flight subscribe/ack handshake against --live URL "
+             "(the round-trip defaults to ON and aborts startup on failure).",
+    )
     return p
+
+
+def smoke_test_live(url: str, timeout_ms: int = 5000) -> Optional[str]:
+    """Open a WebSocket, send tdc_subscribe, wait for the tdc_subscribed
+    acknowledgement.  Returns None on success, a human-readable error string
+    otherwise.  Uses a local QEventLoop so it's safe to call after
+    QApplication() is constructed but before the main window is shown.
+    """
+    # Lazy import because we want this function to be importable even if the
+    # caller wants to skip it.
+    from PyQt6.QtCore import QEventLoop
+
+    loop = QEventLoop()
+    ws = QWebSocket()
+    state = {"error": "timeout (no tdc_subscribed ack)"}
+
+    def finish(err: Optional[str]):
+        state["error"] = err
+        if loop.isRunning():
+            loop.quit()
+
+    def on_connected():
+        try:
+            ws.sendTextMessage(_json.dumps({"type": "tdc_subscribe"}))
+        except Exception as exc:
+            finish(f"send failed: {exc}")
+
+    def on_text(msg: str):
+        try:
+            d = _json.loads(msg)
+        except Exception:
+            return
+        if d.get("type") == "tdc_subscribed":
+            finish(None)
+
+    def on_error(_err):
+        finish(f"{ws.errorString()}")
+
+    ws.connected.connect(on_connected)
+    ws.textMessageReceived.connect(on_text)
+    try:
+        ws.errorOccurred.connect(on_error)
+    except AttributeError:
+        pass
+
+    QTimer.singleShot(timeout_ms, lambda: finish(state["error"]))
+    ws.open(QUrl(url))
+    loop.exec()
+
+    # Clean up: unsubscribe and close so the server doesn't see a dangling
+    # subscriber hanging around until we reconnect for real.
+    try:
+        ws.sendTextMessage(_json.dumps({"type": "tdc_unsubscribe"}))
+    except Exception:
+        pass
+    ws.close()
+    return state["error"]
 
 
 def main(argv):
@@ -1168,20 +1630,28 @@ def main(argv):
 
     app = QApplication(argv[:1])
 
+    # Pre-flight check for --live: fast subscribe/ack round-trip.  Bail out
+    # before building the GUI if the server isn't reachable or our protocol
+    # doesn't match — saves the user from a blank window with no feedback.
+    if args.live and not args.no_smoke_test:
+        err = smoke_test_live(args.live)
+        if err:
+            sys.stderr.write(f"tdc_viewer: cannot connect to {args.live}: {err}\n")
+            QMessageBox.critical(None, "Live stream unreachable",
+                                 f"{args.live}\n\n{err}")
+            return 1
+
     hits = None
     path = ""
     if args.path:
         path = args.path
         try:
-            if _looks_like_evio(path):
-                hits = load_hits_from_evio(
-                    path,
-                    max_events=args.max_events,
-                    daq_config=args.daq_config,
-                    roc_filter=roc,
-                )
-            else:
-                hits = load_hits(path)
+            hits = load_hits_from_evio(
+                path,
+                max_events=args.max_events,
+                daq_config=args.daq_config,
+                roc_filter=roc,
+            )
         except Exception as exc:
             QMessageBox.critical(None, "Load failed", f"{path}\n\n{exc}")
             return 1
@@ -1193,6 +1663,11 @@ def main(argv):
         daq_config=args.daq_config,
         roc_filter=roc,
     )
+    if args.live:
+        win._last_live_url = args.live
+        # Defer the connection until the event loop is running so QWebSocket
+        # is properly parented and the window is realised first.
+        QTimer.singleShot(0, win._connect_live_dialog_auto)
     win.show()
     return app.exec()
 

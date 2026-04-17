@@ -192,9 +192,19 @@ void ViewerServer::setupServer(int port)
         ws_clients_.insert(hdl);
     });
     server_->set_close_handler([this](websocketpp::connection_hdl hdl) {
-        std::lock_guard<std::mutex> lk(ws_mtx_);
-        ws_clients_.erase(hdl);
+        {
+            std::lock_guard<std::mutex> lk(ws_mtx_);
+            ws_clients_.erase(hdl);
+        }
+        // Always remove from TDC subscribers on disconnect so the gate flips
+        // cleanly when the last subscriber drops.
+        tdcUnsubscribe(hdl);
     });
+    server_->set_message_handler(
+        [this](websocketpp::connection_hdl hdl,
+               WsServer::message_ptr msg) {
+            handleWsMessage(hdl, msg->get_payload());
+        });
 
     // bind — retry a few ports if port==0
     if (port == 0) {
@@ -335,6 +345,70 @@ void ViewerServer::wsBroadcast(const std::string &msg)
     for (auto &hdl : ws_clients_) {
         try { server_->send(hdl, msg, websocketpp::frame::opcode::text); }
         catch (...) {}
+    }
+}
+
+// ── Incoming WebSocket messages (JSON text) ────────────────────────────────
+
+void ViewerServer::handleWsMessage(websocketpp::connection_hdl hdl,
+                                   const std::string &payload)
+{
+    // Ignore empty / binary frames.  We only speak a tiny control vocabulary.
+    if (payload.empty() || payload[0] != '{') return;
+
+    auto j = json::parse(payload, nullptr, false);
+    if (j.is_discarded() || !j.is_object() || !j.contains("type")) return;
+    const std::string t = j["type"].get<std::string>();
+
+    if (t == "tdc_subscribe") {
+        tdcSubscribe(hdl);
+        // Acknowledge so the client can confirm its subscription took effect.
+        try {
+            server_->send(hdl,
+                json({{"type", "tdc_subscribed"},
+                      {"subscribers", tdc_subs_count_.load()}}).dump(),
+                websocketpp::frame::opcode::text);
+        } catch (...) {}
+    }
+    else if (t == "tdc_unsubscribe") {
+        tdcUnsubscribe(hdl);
+        try {
+            server_->send(hdl,
+                json({{"type", "tdc_unsubscribed"},
+                      {"subscribers", tdc_subs_count_.load()}}).dump(),
+                websocketpp::frame::opcode::text);
+        } catch (...) {}
+    }
+    // Unknown types are silently ignored — old clients stay happy.
+}
+
+// ── TDC subscription registry ──────────────────────────────────────────────
+
+void ViewerServer::tdcSubscribe(websocketpp::connection_hdl hdl)
+{
+    std::lock_guard<std::mutex> lk(tdc_subs_mtx_);
+    if (tdc_subs_.insert(hdl).second)
+        tdc_subs_count_.store(static_cast<int>(tdc_subs_.size()));
+}
+
+void ViewerServer::tdcUnsubscribe(websocketpp::connection_hdl hdl)
+{
+    std::lock_guard<std::mutex> lk(tdc_subs_mtx_);
+    if (tdc_subs_.erase(hdl))
+        tdc_subs_count_.store(static_cast<int>(tdc_subs_.size()));
+}
+
+void ViewerServer::tdcBroadcastBinary(const void *data, size_t nbytes)
+{
+    std::lock_guard<std::mutex> lk(tdc_subs_mtx_);
+    for (auto &hdl : tdc_subs_) {
+        try {
+            server_->send(hdl, data, nbytes,
+                          websocketpp::frame::opcode::binary);
+        }
+        catch (...) {
+            tdc_dropped_frames_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 

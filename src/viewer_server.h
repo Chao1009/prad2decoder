@@ -10,6 +10,7 @@
 #include "app_state.h"
 #include "Fadc250Data.h"
 #include "SspData.h"
+#include "TdcData.h"
 
 #include <nlohmann/json.hpp>
 
@@ -129,6 +130,23 @@ private:
     std::mutex ws_mtx_;
 
     void wsBroadcast(const std::string &msg);
+    void handleWsMessage(websocketpp::connection_hdl hdl,
+                         const std::string &payload);
+
+    // ── TDC live stream (binary broadcast to subscribed WebSocket clients) ─
+    // Zero-cost when no one is subscribed: the ET reader only runs the TDC
+    // decoder when tdc_subs_count_ > 0.  Frames are a 24-byte header followed
+    // by N × 16B packed BinHit records — see viewer_server_et.cpp for the
+    // exact layout (the Python client in scripts/tdc_viewer.py mirrors it).
+    std::set<websocketpp::connection_hdl,
+             std::owner_less<websocketpp::connection_hdl>> tdc_subs_;
+    std::mutex                 tdc_subs_mtx_;
+    std::atomic<int>           tdc_subs_count_{0};
+    std::atomic<uint64_t>      tdc_dropped_frames_{0};  // incremented on per-subscriber send failure
+
+    void tdcSubscribe(websocketpp::connection_hdl hdl);
+    void tdcUnsubscribe(websocketpp::connection_hdl hdl);
+    void tdcBroadcastBinary(const void *data, size_t nbytes);
 
     // ── File mode ────────────────────────────────────────────────────────
     std::shared_ptr<FileData> file_data_;
