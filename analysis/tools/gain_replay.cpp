@@ -221,7 +221,7 @@ done:
         {
             double peak0 = h_lms->GetBinCenter(h_lms->GetMaximumBin());
             double rms0  = h_lms->GetRMS();
-            double lo = peak0 - 1.0 * rms0, hi = peak0 + 1.0 * rms0;
+            double lo = peak0 - 2.0 * rms0, hi = peak0 + 2.0 * rms0;
             TF1 f_gaus("f_lms", "gaus", lo, hi);
             f_gaus.SetParameters(h_lms->GetMaximum(), peak0, rms0);
             h_lms->Fit(&f_gaus, "RQ0");
@@ -235,7 +235,7 @@ done:
         {
             double peak0 = h_alpha->GetBinCenter(h_alpha->GetMaximumBin());
             double rms0  = h_alpha->GetRMS();
-            double lo = peak0 - 1.0 * rms0, hi = peak0 + 1.0 * rms0;
+            double lo = peak0 - 2.0 * rms0, hi = peak0 + 2.0 * rms0;
             TF1 f_gaus("f_alpha", "gaus", lo, hi);
             f_gaus.SetParameters(h_alpha->GetMaximum(), peak0, rms0);
             h_alpha->Fit(&f_gaus, "RQ0");
@@ -247,9 +247,10 @@ done:
         if (lms_ref[i] > 0) n_lms++;
     }
     for(int i = 1; i <= 3; i++){
-        out << "LMS" << i << " " << lms_ref[i-1] << " " << lms_sigma[i-1] << " " << lms_chi2[i-1] << " "
-            << alpha_ref[i-1] << " " << alpha_sigma[i-1] << " " << alpha_chi2[i-1] << "\n";
+        out << "LMS" << i << " " << lms_ref[i] << " " << lms_sigma[i] << " " << lms_chi2[i] << " "
+            << alpha_ref[i] << " " << alpha_sigma[i] << " " << alpha_chi2[i] << "\n";
     }
+    int n_mod = 0;
     for (int i = 0; i < hycal.module_count(); ++i) {
         if (!hycal.module(i).is_hycal()) continue;
         if (hycal.module(i).name[0] != 'W') continue;
@@ -260,7 +261,7 @@ done:
         {
             double peak0 = h_lms->GetBinCenter(h_lms->GetMaximumBin());
             double rms0  = h_lms->GetRMS();
-            double lo = peak0 - 1.0 * rms0, hi = peak0 + 1.0 * rms0;
+            double lo = peak0 - 2.0 * rms0, hi = peak0 + 2.0 * rms0;
             TF1 f_gaus("f_mod", "gaus", lo, hi);
             f_gaus.SetParameters(h_lms->GetMaximum(), peak0, rms0);
             h_lms->Fit(&f_gaus, "RQ0");
@@ -275,7 +276,8 @@ done:
         }
         out << hycal.module(i).name << " " << mod_lms[i] << " " << mod_lms_sigma[i] << " " << mod_lms_chi2[i]
             << " " << g[i][1] << " " << g[i][2] << " " << g[i][3] << "\n";
+        n_mod++;
     }
     out.close();
-    std::cerr << "LMS and alpha peak analysis completed for " << n_lms << " LMS channels. Results saved to lms_alpha_peaks.dat\n";
+    std::cerr << "LMS and alpha peak analysis completed for " << n_lms << " LMS channels and " << n_mod << " modules. Results saved to lms_alpha_peaks.dat\n";
 }
