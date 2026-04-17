@@ -58,6 +58,14 @@ std::string default_daq_config_path()
 
 py::dtype make_tdc_dtype()
 {
+    // Build an equivalent of:
+    //   np.dtype([('event_num','<u4'), ('trigger_bits','<u4'), ('roc_tag','<u2'),
+    //             ('slot','u1'), ('channel','u1'), ('edge','u1'), ('tdc','<u4')])
+    //
+    // Must go through py::dtype::from_args(...) — the plain dtype(list)
+    // constructor inherited from object just wraps the list without
+    // invoking NumPy's dtype() converter, and downstream use then fails
+    // with "object of type 'list' is not an instance of dtype".
     py::list fields;
     fields.append(py::make_tuple("event_num",    "<u4"));
     fields.append(py::make_tuple("trigger_bits", "<u4"));
@@ -66,7 +74,7 @@ py::dtype make_tdc_dtype()
     fields.append(py::make_tuple("channel",      "u1"));
     fields.append(py::make_tuple("edge",         "u1"));
     fields.append(py::make_tuple("tdc",          "<u4"));
-    return py::dtype(fields);
+    return py::dtype::from_args(fields);
 }
 
 py::array load_tdc_hits(
