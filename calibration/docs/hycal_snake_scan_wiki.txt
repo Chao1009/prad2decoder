@@ -1,0 +1,183 @@
+= HyCal Snake Scan — Operator Manual =
+
+== Purpose ==
+
+Drive the HyCal transporter in a snake pattern, centring the beam on each
+scanned crystal module and dwelling for a configurable time before advancing
+to the next module. Used for systematic data collection across the calorimeter
+(e.g. for trigger studies, cosmic calibration, or any per-module measurement
+that needs a fixed beam exposure).
+
+For automatic gain equalization, use '''hycal_gain_equalizer.py''' instead.
+
+== Quick Start ==
+
+On a counting house machine, logged in as '''clasrun''':
+
+<pre>
+cd /home/clasrun/prad2_daq/prad2evviewer
+python calibration/hycal_snake_scan.py --expert
+</pre>
+
+== Modes ==
+
+{| class="wikitable"
+! Flag !! Mode !! Behaviour
+|-
+| (none) || Simulation || Fake motor, no real EPICS writes
+|-
+| --expert || Expert || Real motor control, full write access
+|-
+| --observer || Observer || Real EPICS reads, all writes blocked
+|}
+
+== Running a Scan ==
+
+# Select '''Path''' profile:
+#* <code>(none)</code> — no scan path, direct control only
+#* <code>(autogen)</code> — auto-generated snake path; set '''LG layers''' (0 = PbWO4 only, 1–2 to include PbGlass)
+#* a named profile from <code>paths.json</code>
+# Talk to the RC if you are not sure about the scan path.
+# Set '''Start''' module and '''Count''' (0 = scan all from start to end).
+# Set '''Dwell time''' (seconds per module) and '''Pos. threshold''' (mm).
+# Set '''Beam threshold''' (nA) — pause dwell when beam current drops below this; "off" disables.
+# Click '''Start Scan'''.
+
+== Control Buttons ==
+
+{| class="wikitable"
+! Button !! Action
+|-
+| '''Start Scan''' || Begin scan from the selected start module
+|-
+| '''Pause''' / '''Resume''' || Suspend/resume the scan
+|-
+| '''Stop''' || Stop the scan and the motors
+|-
+| '''Skip Module''' || Skip the current dwell, move to next module
+|-
+| '''Ack Error''' || Acknowledge a position error and continue
+|-
+| '''Move to Starting Point''' || Direct move to the selected start module (no scan)
+|-
+| '''Reset to Beam Center''' || Direct move to ptrans (-126.75, 10.11)
+|}
+
+== Module Map Colours ==
+
+{| class="wikitable"
+! Colour !! Meaning
+|-
+| Dark grey  || Todo (in scan path, not yet processed)
+|-
+| Light grey || Skipped (outside selected start/count range)
+|-
+| Yellow     || Moving (currently moving to this module)
+|-
+| Green      || Dwelling (beam on this module, accumulating data)
+|-
+| Blue       || Done
+|-
+| Red        || Error
+|-
+| Orange     || Selected start module
+|-
+| Dim blue   || PbGlass (not in scan)
+|}
+
+== During the Scan ==
+
+Verify that:
+
+# The '''red marker''' position matches the '''scaler hot spot''' — the current module should have the highest scaler reading.
+# '''WARN/ERROR''' messages in the event log are addressed promptly.
+# The beam current shown in the top bar is above your beam threshold.
+
+== Resume After Interruption ==
+
+# Find the last completed module (the '''Done''' colour on the map, or check the event log).
+# Select the next module as '''Start'''.
+# Click '''Start Scan'''.
+
+== Map Interaction ==
+
+* '''Left-click''' a module: select and show its info popup
+* '''Left-click + drag''': pan the view (also right-click + drag)
+* '''Mouse wheel''': zoom in/out at cursor
+* '''Middle-click''': reset view
+* '''Reset button''' (bottom-right of map): reset zoom/pan
+
+== Scaler Overlay ==
+
+The HyCal map shows live FADC scaler counts as a heat map. Controls below the map:
+
+* '''Scalers ON/OFF''': toggle the heat map overlay
+* '''Auto''': auto-range the colour scale, excluding the top 5 hot channels
+* '''Min/Max + Apply''': manual range
+* '''Log''': log scale for the colour mapping
+* '''Palette button''': click to cycle through 5 colour palettes
+
+== Position Check Panel ==
+
+* '''Target''': planned ptrans position and module name
+* '''Actual''': current motor RBV position
+* '''Diff''': distance from target, plus ETA in seconds (motor velocity based)
+* '''Drift''': encoder vs RBV drift, colour coded:
+** green < 0.5 mm
+** yellow 0.5 – 1.5 mm
+** red > 1.5 mm
+
+== Logging ==
+
+Events are logged to <code>calibration/logs/snake_scan_YYYYMMDD.log</code>
+(one file per day, appended to across sessions).
+'''Upload log files when the scan or shift ends.'''
+
+== Coordinate System ==
+
+{| class="wikitable"
+! Beam at HyCal (0,0) !! ptrans_x = -126.75 !! ptrans_y = 10.11
+|}
+
+<pre>
+ptrans_x = -126.75 + module_x       (x same direction)
+ptrans_y =   10.11 - module_y       (y inverted)
+</pre>
+
+Travel limits: ptrans_x '''-582.65''' to '''329.15''' mm,
+ptrans_y '''-672.50''' to '''692.72''' mm.
+
+== Safety ==
+
+'''Expert mode''' writes to four motor PVs only:
+<code>ptrans_{x,y}.VAL</code> and <code>ptrans_{x,y}.SPMG</code>.
+All other PVs are read-only. '''Observer''' and '''simulation''' modes block
+all writes.
+
+== Troubleshooting ==
+
+If a problem occurs, '''try again first'''. If it persists, contact the
+Run Coordinator.
+
+{| class="wikitable"
+! Symptom !! Likely cause
+|-
+| PVs not connecting    || IOC down, network / firewall
+|-
+| Motors don't move     || Interlocks, motor enable, SPMG not Go
+|-
+| Move blocked          || Target outside travel limits (see log)
+|-
+| Position errors       || Motor speed, backlash, encoder
+|-
+| Move timeout (>300 s) || Motor stall, limit switch, IOC
+|-
+| Beam trip pause       || Beam current < threshold; dwell auto-resumes when beam recovers
+|-
+| Encoder drift warning || Mechanical slip — '''contact RC if drift > 1.5 mm'''
+|}
+
+== Contact ==
+
+Run Coordinator first. For software issues, contact the calibration software
+maintainer.

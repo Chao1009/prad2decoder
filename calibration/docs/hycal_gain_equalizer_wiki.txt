@@ -1,0 +1,186 @@
+= HyCal Gain Equalizer — Operator Manual =
+
+== Purpose ==
+
+Automatically equalize the gain of all HyCal crystal modules by tuning each
+module's HV until the right edge of the Bremsstrahlung peak height spectrum
+aligns with a target ADC value (default 3200).
+
+For each module the tool:
+# Moves the transporter so the beam is centred on the module.
+# Clears the prad2_server histograms and waits for enough events to accumulate.
+# Reads the peak height histogram and finds the right edge of the spectrum.
+# Reads the current HV from prad2hvd, computes the voltage adjustment, and writes the new HV.
+# Repeats until the edge converges to within ±50 ADC of the target, or until the iteration limit is reached.
+
+== Quick Start ==
+
+On a counting house machine, logged in as '''clasrun''':
+
+<pre>
+cd /home/clasrun/prad2_daq/prad2evviewer
+python calibration/hycal_gain_equalizer.py --expert
+</pre>
+
+The default settings (server address, HV address, password, target ADC, min counts,
+edge fraction, etc.) should work out of the box.
+'''Discuss with the Run Coordinator (RC) before changing any setting.'''
+
+== Default Settings ==
+
+{| class="wikitable"
+! Setting !! Default !! Notes
+|-
+| Server || http://clondaq6:5051 || prad2_server (DAQ histograms)
+|-
+| HV     || http://clonpc19:8765 || prad2hvd (HV control)
+|-
+| HV Password || prad2_admin || Required for expert HV writes
+|-
+| Target ADC || 3200 || Spectrum right-edge target
+|-
+| Min counts || 5000  || Histogram counts before analysis
+|-
+| Max iter   || 8     || Iterations per module
+|-
+| Tolerance  || 50    || ADC range considered converged
+|-
+| Edge frac  || 5.0%  || Cumulative fraction threshold
+|-
+| LogY       || ON    || Log y-scale + log cumulative for edge finding
+|}
+
+== Running a Gain Scan ==
+
+# Select '''Path''': use <code>snake-all-pwo-r</code> unless told otherwise by RC.
+# Set '''Start''' module: ask the RC for the starting point. The plan is to finish the bottom part first, then return to the top.
+# Click '''Start'''.
+
+When the scan starts, the '''Scan Path''' and '''Gain Equalization''' panels
+collapse and the '''Peak Height Histogram''' panel appears, giving you a clear
+view of the live spectrum.
+
+== Control Buttons ==
+
+{| class="wikitable"
+! Button !! Action
+|-
+| '''Start''' || Begin scan, or resume from the failed/stopped module after an interruption
+|-
+| '''Pause''' || Suspend the scan; click again ('''Resume''') to continue from the exact pause point
+|-
+| '''Stop'''  || Stop the scan; the failed/current module is remembered for the next Start
+|-
+| '''Redo'''  || Discard current iterations on this module and restart its iteration loop
+|-
+| '''Skip'''  || Skip the current module and move to the next
+|}
+
+== During the Scan ==
+
+Pay attention to:
+
+* '''Red marker''' (expected beam position) vs. '''hot region''' on the scaler map — they should be at the same location.
+* '''Histogram''' in the right panel — it should show a clear spectrum building up. The red dashed line is the target ADC; the green line is the detected spectrum edge.
+* '''Event log''' — watch for <code>WARN</code> and <code>ERROR</code> messages.
+
+== On ERROR (Scan Stops) ==
+
+An <code>ERROR</code> stops the scan automatically.
+
+# Note the module name and error message from the event log.
+# The '''Start''' combo automatically updates to show the failed module — verify it is correct.
+# Click '''Start''' to retry from that module.
+# If the same error repeats, '''contact the RC'''.
+
+Common ERROR causes:
+* HV read/set failed (network or auth)
+* No spectrum edge found (low statistics or spectrum out of range)
+* Position error after move (motor or interlock)
+* Voltage would exceed channel limit
+
+== Histogram & Y-Scale ==
+
+The '''LogY: ON''' button (highlighted blue when on) controls all three:
+
+* '''Edge finding''': uses log-scaled cumulative ('''recommended''')
+* '''Live histogram preview''': log y axis with decade grid
+* '''Snapshot report''': log y axis bars
+
+Switch to OFF only if instructed by the RC.
+
+== After Each Row ==
+
+# Find the screenshot files in <code>/home/clasrun/prad2_daq/prad2evviewer/calibration/logs/</code>:
+#: <code>GE_20260406_143025_W100_success.png</code>
+#: <code>GE_20260406_143530_W101_failure.png</code>
+#: Files are named <code>GE_{timestamp}_{module}_{status}.png</code> and sort by time.
+# Post a log entry to '''PRADLOG''' with all screenshots from the completed row.
+# Failed modules need a redo or manual gain equalization — discuss with the RC if you are not sure how to proceed.
+
+Each screenshot shows all iterations stacked top-to-bottom, with header:
+<pre>
+W100  iter 2  N=5234  (3115:5%-LOG)         14:32:10  VMon=1534.8  VSet=1535.0
+</pre>
+
+* <code>N</code>: total counts in the histogram
+* <code>(edge:fraction%-mode)</code>: detected edge ADC, edge fraction setting, LOG/LIN mode
+* <code>VMon/VSet</code>: monitored / set voltage at this iteration
+
+== Event Log Files ==
+
+Full event logs are saved to <code>calibration/logs/gain_eq_YYYYMMDD.log</code>
+(one file per day, appended to across sessions).
+'''Upload these with the PRADLOG entry.'''
+
+== Map Interaction ==
+
+* '''Left-click''' a module: select and show its info popup
+* '''Left-click + drag''': pan the view (also right-click + drag)
+* '''Mouse wheel''': zoom in/out at cursor
+* '''Middle-click''': reset view
+* '''Reset button''' (bottom-right of map): reset zoom/pan
+
+== Scaler Overlay ==
+
+The HyCal map shows live FADC scaler counts as a heat map. The hot region
+(brightest colour) is where the beam is currently hitting.
+
+Controls below the map:
+* '''Scalers ON/OFF''': toggle the heat map overlay
+* '''Auto''': auto-range the colour scale, excluding the top 5 hot channels
+* '''Min/Max + Apply''': manual range
+* '''Log''': log scale for the colour mapping
+* '''Palette button''': click to cycle through 5 colour palettes
+
+== Safety ==
+
+* '''Expert mode''' writes to four motor PVs only: <code>ptrans_{x,y}.VAL</code> and <code>ptrans_{x,y}.SPMG</code>.
+* The gain equalizer additionally sends HTTP commands to <code>prad2hvd</code> (HV set) and <code>prad2_server</code> (histogram clear). HV limits are enforced server-side by prad2hvd.
+* '''Observer mode''' uses real EPICS reads but blocks all writes.
+* '''Simulation mode''' uses a fake motor and blocks all HV/server writes.
+
+== Troubleshooting ==
+
+{| class="wikitable"
+! Symptom !! Likely cause / action
+|-
+| "Server error" on Start || Check prad2_server is running on clondaq6:5051
+|-
+| "HV connection failed" || Check prad2hvd is running on clonpc19:8765, verify password
+|-
+| "HV authentication failed" || Wrong password — should be <code>prad2_admin</code> by default
+|-
+| Red marker not at hot spot || Motor position issue or wrong path — '''STOP and contact RC'''
+|-
+| Persistent "no edge found" || Beam off, low statistics, or wrong spectrum — '''STOP and contact RC'''
+|-
+| Persistent low rate warning || Beam unstable, scaler reset is auto-triggered after 10 polls; '''contact RC if it persists'''
+|-
+| Module fails repeatedly with same edge || Voltage at HV limit, or non-typical spectrum shape — '''contact RC for manual equalization'''
+|}
+
+== Contact ==
+
+Run Coordinator first. For software issues, contact the calibration software
+maintainer.
