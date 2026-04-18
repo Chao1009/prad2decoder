@@ -16,6 +16,7 @@
 #include "DaqConfig.h"
 #include "WaveAnalyzer.h"
 #include "EventData.h"
+#include "InstallPaths.h"
 
 #include <TFile.h>
 #include <TTree.h>
@@ -61,8 +62,10 @@ static std::vector<std::string> collectRootFiles(const std::string &path);
 int main(int argc, char *argv[])
 {
     std::string output_calib_file, output_root_file, config_file, daq_config_file;
-    std::string db_dir = DATABASE_DIR;
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
+    std::string db_dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
     int max_events = -1;
 
     //hardcoded beam energy for yield histograms, can be made configurable if needed

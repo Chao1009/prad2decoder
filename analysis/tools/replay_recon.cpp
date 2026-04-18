@@ -9,6 +9,7 @@
 //=============================================================================
 
 #include "Replay.h"
+#include "InstallPaths.h"
 #include <iostream>
 #include <string>
 #include <cstdlib>
@@ -24,8 +25,10 @@ int main(int argc, char *argv[])
     float zerosup_override = 0.f;
     bool prad1 = false;
 
-    std::string db_dir = DATABASE_DIR;
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
+    std::string db_dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
     daq_config = db_dir + "/daq_config.json"; // default DAQ config for PRad2
 
     int opt;

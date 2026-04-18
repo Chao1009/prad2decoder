@@ -26,11 +26,16 @@
 // against.  To detect "a new SYNC just arrived", diff `sync_counter` against
 // your last-seen value: it's monotonic for 0xE112 and stays 0 for control
 // events (distinguish those via `event_tag`).
+//
+// Note on the namespace name: `psync` (not `sync`) to avoid a collision with
+// POSIX `int sync(void)` declared in <unistd.h> — any translation unit that
+// includes both <unistd.h> and this header would otherwise have an ambiguous
+// name lookup for `sync`.
 //=============================================================================
 
 #include <cstdint>
 
-namespace sync
+namespace psync
 {
 
 struct SyncInfo {
@@ -48,4 +53,4 @@ struct SyncInfo {
     bool valid() const { return unix_time != 0; }
 };
 
-} // namespace sync
+} // namespace psync

@@ -114,6 +114,7 @@ set(PRAD2DEC_SOURCES
     src/VtpDecoder.cpp
     src/TdcDecoder.cpp
     src/WaveAnalyzer.cpp
+    src/InstallPaths.cpp
 )
 if(WITH_ET)
     list(APPEND PRAD2DEC_SOURCES src/EtChannel.cpp)
@@ -135,6 +136,13 @@ target_include_directories(prad2dec
 )
 
 target_link_libraries(prad2dec PUBLIC evio)
+
+# dladdr is used by InstallPaths.cpp for runtime module-path discovery.
+# CMAKE_DL_LIBS is the portable "dl" link name — empty on Windows,
+# "-ldl" on old glibc (silently no-op on glibc ≥ 2.34).
+if(NOT WIN32)
+    target_link_libraries(prad2dec PUBLIC ${CMAKE_DL_LIBS})
+endif()
 
 if(WITH_ET)
     target_include_directories(prad2dec PUBLIC $<BUILD_INTERFACE:${ET_INCLUDE_DIR}>)

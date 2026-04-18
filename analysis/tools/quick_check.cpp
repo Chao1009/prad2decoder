@@ -15,6 +15,7 @@
 #include "HyCalSystem.h"
 #include "MatchingTools.h"
 #include "EventData.h"
+#include "InstallPaths.h"
 
 #include <TFile.h>
 #include <TTree.h>
@@ -118,7 +119,10 @@ int main(int argc, char *argv[])
     }
 
     // --- database path ---
-    std::string dbDir = DATABASE_DIR;
+    std::string dbDir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;

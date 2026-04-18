@@ -118,7 +118,7 @@ public:
     // compare `Sync().sync_counter` to your last-seen value — it's a
     // monotonic counter for 0xE112 banks and stays 0 for control events
     // (distinguish those via `event_tag`).
-    const sync::SyncInfo &Sync() const;
+    const psync::SyncInfo &Sync() const;
 
     // --- legacy API (compat, writes directly to caller-owned structs) -------
     //
@@ -180,7 +180,7 @@ protected:
     // `sync_decoded_this_event_` flag guards against re-decoding 0xE112 /
     // control payload more than once per event when Sync() is called
     // repeatedly, without clobbering the snapshot on physics events.
-    mutable sync::SyncInfo last_sync_info_;
+    mutable psync::SyncInfo last_sync_info_;
     mutable bool           sync_decoded_this_event_ = false;
 
     // --- per-bank decoders (shared by legacy and lazy paths) ----------------
@@ -200,7 +200,7 @@ protected:
     // a control event (PRESTART/GO/END) and merges into `out`, leaving prior
     // fields untouched when the current event contributes nothing.  Returns
     // true if `out` was updated.
-    bool decodeSyncInto(sync::SyncInfo &out) const;
+    bool decodeSyncInto(psync::SyncInfo &out) const;
 
     // Invalidate all product cache flags.
     void clearCache() const;

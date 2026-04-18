@@ -9,6 +9,7 @@
 #include "HyCalCluster.h"
 #include "GemCluster.h"
 #include "MatchingTools.h"
+#include "InstallPaths.h"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -427,8 +428,10 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     // - We also run the GemSystem reconstruction to get GEM hits.
     // - We fill a different TTree with reconstructed quantities instead of raw data.
 
-    std::string db_dir = DATABASE_DIR;
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
+    std::string db_dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
 
     // build ROC tag → crate index mapping from DAQ config JSON
     std::unordered_map<int, int> roc_to_crate;

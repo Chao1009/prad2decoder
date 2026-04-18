@@ -34,6 +34,8 @@
 #include <memory>
 #include <string>
 
+#include "InstallPaths.h"
+
 namespace py = pybind11;
 
 #ifndef DATABASE_DIR
@@ -44,8 +46,13 @@ namespace {
 
 std::string default_daq_config_path()
 {
-    const char *env = std::getenv("PRAD2_DATABASE_DIR");
-    std::string dir = env ? env : DATABASE_DIR;
+    // Same lookup policy as prad2py.cpp's copy (these two TUs each have
+    // a `load_daq_config("")` overload that needs the default path).
+    std::string dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../../share/prad2evviewer/database",
+         "../share/prad2evviewer/database"},
+        DATABASE_DIR);
     return dir + "/daq_config.json";
 }
 
@@ -137,18 +144,18 @@ void bind_fadc(py::module_ &m)
             return std::string(buf);
         });
 
-    py::class_<sync::SyncInfo>(m, "SyncInfo",
+    py::class_<psync::SyncInfo>(m, "SyncInfo",
         "Absolute-time / run-state snapshot populated from SYNC/EPICS 0xE112 "
         "HEAD banks and from PRESTART/GO/END control-event payloads.  Persists "
         "across events in EvChannel — see EvChannel.sync().")
-        .def_readwrite("run_number",   &sync::SyncInfo::run_number)
-        .def_readwrite("sync_counter", &sync::SyncInfo::sync_counter)
-        .def_readwrite("unix_time",    &sync::SyncInfo::unix_time)
-        .def_readwrite("event_tag",    &sync::SyncInfo::event_tag)
-        .def_readwrite("run_type",     &sync::SyncInfo::run_type)
-        .def("valid", &sync::SyncInfo::valid,
+        .def_readwrite("run_number",   &psync::SyncInfo::run_number)
+        .def_readwrite("sync_counter", &psync::SyncInfo::sync_counter)
+        .def_readwrite("unix_time",    &psync::SyncInfo::unix_time)
+        .def_readwrite("event_tag",    &psync::SyncInfo::event_tag)
+        .def_readwrite("run_type",     &psync::SyncInfo::run_type)
+        .def("valid", &psync::SyncInfo::valid,
              "True if unix_time has been populated (any SYNC/control event seen).")
-        .def("__repr__", [](const sync::SyncInfo &s) {
+        .def("__repr__", [](const psync::SyncInfo &s) {
             char buf[160];
             std::snprintf(buf, sizeof(buf),
                 "<SyncInfo run=%u counter=%u unix=%u tag=0x%x type=%u>",
@@ -588,7 +595,7 @@ void bind_channel(py::module_ &m)
             "'ssp': SspEventData|None, 'vtp': ..., 'tdc': ...}.")
         .def("sync",
             [](const evc::EvChannel &self) {
-                sync::SyncInfo out;
+                psync::SyncInfo out;
                 {
                     py::gil_scoped_release rel;
                     out = self.Sync();

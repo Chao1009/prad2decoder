@@ -12,6 +12,11 @@
 #include "load_daq_config.h"
 #include "WaveAnalyzer.h"
 #include "Fadc250Data.h"
+#include "InstallPaths.h"
+
+#ifndef DATABASE_DIR
+#define DATABASE_DIR "."
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -94,8 +99,10 @@ int main(int argc, char *argv[])
     }
     if (endFileNum < startFileNum) endFileNum = startFileNum;
     
-    TString dbDir = gSystem->Getenv("PRAD2_DATABASE_DIR");
-    if (dbDir.IsNull()) dbDir = "database";
+    TString dbDir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR).c_str();
 
     TString cfgFile = Form("%s/daq_config.json", dbDir.Data());
     TString mapFile = Form("%s/daq_map.json", dbDir.Data());

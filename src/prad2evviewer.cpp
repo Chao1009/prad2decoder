@@ -13,6 +13,7 @@
 // =========================================================================
 
 #include "viewer_server.h"
+#include "InstallPaths.h"
 
 #include <QApplication>
 #include <QMainWindow>
@@ -190,11 +191,18 @@ int main(int argc, char *argv[])
     app.setApplicationVersion("1.0.0");
 
     ViewerServer::Config cfg;
-    cfg.database_dir = DATABASE_DIR;
-    cfg.resource_dir = RESOURCE_DIR;
+    // Runtime resolution: env var → <exe_dir>/../share/… → compile-time
+    // fallback.  Makes installed binaries relocatable without requiring a
+    // sourced setup.sh.
+    cfg.database_dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
+    cfg.resource_dir = prad2::resolve_data_dir(
+        "PRAD2_RESOURCE_DIR",
+        {"../share/prad2evviewer/resources"},
+        RESOURCE_DIR);
     cfg.port = 0; // auto-select port
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  cfg.database_dir = env;
-    if (const char *env = std::getenv("PRAD2_RESOURCE_DIR"))  cfg.resource_dir = env;
 
     static struct option long_opts[] = {
         {"hist",       no_argument,       nullptr, 'H'},

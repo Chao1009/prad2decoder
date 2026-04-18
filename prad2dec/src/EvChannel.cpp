@@ -297,7 +297,7 @@ const vtp::VtpEventData &EvChannel::Vtp() const
     return *cache_vtp;
 }
 
-const sync::SyncInfo &EvChannel::Sync() const
+const psync::SyncInfo &EvChannel::Sync() const
 {
     // Sync snapshot persists across events; only re-attempt decode once per
     // Scan().  On a SYNC/EPICS or control event the snapshot refreshes;
@@ -630,7 +630,7 @@ void EvChannel::decodeVtpInto(vtp::VtpEventData &vtp_evt) const
 // UINT32 child of a control event (PRESTART/GO/END).  `out` is updated in
 // place only when a source bank is found — physics events leave the prior
 // snapshot intact, which is how Sync() provides persistent run-level state.
-bool EvChannel::decodeSyncInto(sync::SyncInfo &out) const
+bool EvChannel::decodeSyncInto(psync::SyncInfo &out) const
 {
     if (nodes.empty()) return false;
 

@@ -3,6 +3,7 @@
 //=============================================================================
 
 #include "PhysicsTools.h"
+#include "InstallPaths.h"
 #include <TF1.h>
 #include <TMath.h>
 #include <cmath>
@@ -193,8 +194,10 @@ std::array<float, 2> PhysicsTools::FitPeakResolution(int module_index) const
 
 void PhysicsTools::Resolution2Database(int run_id)
 {
-    std::string db_dir = DATABASE_DIR;
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
+    std::string db_dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
     std::string filename = db_dir + Form("/recon/run_%d.dat", run_id);
 
     std::ofstream out(filename);

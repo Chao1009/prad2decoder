@@ -5,6 +5,7 @@
 #include "DaqConfig.h"
 #include "WaveAnalyzer.h"
 #include "EventData.h"
+#include "InstallPaths.h"
 
 #include <TFile.h>
 #include <TTree.h>
@@ -85,8 +86,10 @@ int main(int argc, char *argv[])
     //setup for reconstruction
     fdec::HyCalSystem hycal;
     evc::DaqConfig daq_cfg;
-    std::string db_dir = DATABASE_DIR;
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
+    std::string db_dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
     std::string daq_config_file = db_dir + "/daq_config.json"; // default DAQ config for PRad2
     if (!daq_config_file.empty()) evc::load_daq_config(daq_config_file, daq_cfg);
     hycal.Init(db_dir + "/hycal_modules.json", db_dir + "/daq_map.json");

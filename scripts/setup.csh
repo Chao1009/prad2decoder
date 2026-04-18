@@ -37,6 +37,11 @@ if ( $?PRAD2_DIR ) then
     else
         setenv LD_LIBRARY_PATH "${PRAD2_DIR}/lib"
     endif
+    if ( $?PYTHONPATH ) then
+        setenv PYTHONPATH "${PRAD2_DIR}/lib/prad2py:${PYTHONPATH}"
+    else
+        setenv PYTHONPATH "${PRAD2_DIR}/lib/prad2py"
+    endif
     setenv PRAD2_DATABASE_DIR "${PRAD2_DIR}/share/prad2evviewer/database"
     setenv PRAD2_RESOURCE_DIR "${PRAD2_DIR}/share/prad2evviewer/resources"
 endif

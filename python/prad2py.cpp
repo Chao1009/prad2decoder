@@ -15,6 +15,8 @@
 
 #include <pybind11/pybind11.h>
 
+#include "InstallPaths.h"
+
 #include <cstdlib>
 #include <string>
 
@@ -26,11 +28,22 @@ namespace py = pybind11;
 
 namespace {
 
+std::string resolved_database_dir()
+{
+    // From <prefix>/lib/prad2py/prad2py.so the database is at
+    // <prefix>/share/prad2evviewer/database.  Also accept the
+    // "from <prefix>/bin/" layout so this code is usable if anyone ever
+    // wires prad2py as a system-site-packages module instead.
+    return prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../../share/prad2evviewer/database",
+         "../share/prad2evviewer/database"},
+        DATABASE_DIR);
+}
+
 std::string default_daq_config_path()
 {
-    const char *env = std::getenv("PRAD2_DATABASE_DIR");
-    std::string dir = env ? env : DATABASE_DIR;
-    return dir + "/daq_config.json";
+    return resolved_database_dir() + "/daq_config.json";
 }
 
 } // anonymous namespace
@@ -44,7 +57,11 @@ PYBIND11_MODULE(prad2py, m)
     m.doc() = "PRad-II (prad2dec + prad2det) Python bindings.";
 
     m.attr("__version__")    = "0.4.0";
-    m.attr("DATABASE_DIR")   = DATABASE_DIR;
+
+    // Resolved at module-load time: env → module-relative → compile-time.
+    // Exposes the same path `default_daq_config()` will use so analyses
+    // can point their own lookups at the right place.
+    m.attr("DATABASE_DIR")   = resolved_database_dir();
 
     m.def("default_daq_config", &default_daq_config_path,
           "Return the default daq_config.json path used by analyses.");

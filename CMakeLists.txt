@@ -211,6 +211,57 @@ install(FILES scripts/setup.sh scripts/setup.csh
     DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # ---------------------------------------------------------------------------
+# Install the scripts/ tree (Python utilities + auxiliary data files) under
+# share/prad2evviewer/scripts/.  Sibling imports still work because each
+# tool runs from inside its own directory, which Python puts on sys.path.
+# ---------------------------------------------------------------------------
+install(DIRECTORY scripts/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/prad2evviewer/scripts
+    FILES_MATCHING
+        PATTERN "*.py"
+        PATTERN "*.json"
+        PATTERN "*.csv"
+        PATTERN "*.txt"
+        PATTERN "README.md"
+        PATTERN "__pycache__" EXCLUDE
+        PATTERN "setup.sh"    EXCLUDE   # already in <prefix>/bin/
+        PATTERN "setup.csh"   EXCLUDE
+)
+
+# ---------------------------------------------------------------------------
+# Generate + install thin bin/ wrappers for each user-facing Python tool so
+# they can be launched without needing a sourced setup.sh (the wrappers set
+# PRAD2_DATABASE_DIR / PRAD2_RESOURCE_DIR / PYTHONPATH on their own).
+# ---------------------------------------------------------------------------
+if(BUILD_PYTHON)
+    set(_PRAD2_PY_WRAPPERS
+        # "wrapper_name:relative_script_path"
+        "gem_event_viewer:gem/gem_event_viewer.py"
+        "gem_cluster_view:gem/gem_cluster_view.py"
+        "gem_layout:gem/gem_layout.py"
+        "tagger_viewer:tagger_viewer.py"
+        "hycal_scaler_map:hycal_scaler_map.py"
+        "hycal_pedestal_monitor:hycal_pedestal_monitor.py"
+        "hycal_gain_monitor:hycal_gain_monitor.py"
+        "trigger_mask_editor:trigger_mask_editor.py"
+    )
+    foreach(_entry ${_PRAD2_PY_WRAPPERS})
+        string(REPLACE ":" ";" _parts "${_entry}")
+        list(GET _parts 0 _name)
+        list(GET _parts 1 PRAD2_WRAPPER_SCRIPT_REL)
+        configure_file(
+            ${CMAKE_SOURCE_DIR}/cmake/prad2_py_wrapper.sh.in
+            ${CMAKE_BINARY_DIR}/bin/${_name}
+            @ONLY
+        )
+        install(PROGRAMS ${CMAKE_BINARY_DIR}/bin/${_name}
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endforeach()
+    unset(PRAD2_WRAPPER_SCRIPT_REL)
+endif()
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 message(STATUS "----------------------------------------------------")
