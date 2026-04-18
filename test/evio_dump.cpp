@@ -145,7 +145,7 @@ struct TrieNode {
 };
 
 // Informative names for bank tags known by JLab ROLs but not held in
-// DaqConfig. Kept in sync with known_bank_tags[] in EvChannel.cpp.
+// DaqConfig (e.g. no decoder yet).  Reference: docs/rols/clonbanks_20260406.xml.
 static const char *known_bank_name(uint32_t tag)
 {
     switch (tag) {

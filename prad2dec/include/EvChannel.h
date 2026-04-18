@@ -1,29 +1,24 @@
 #pragma once
 //=============================================================================
-// EvChannel.h — read evio events, scan bank tree, decode FADC data
+// EvChannel.h — read evio events, scan bank tree, lazily decode per product
 //
-// Usage:
-//   DaqConfig cfg;                           // default tags, or load from JSON
+// New (lazy) API:
 //   EvChannel ch;
-//   ch.SetConfig(cfg);
+//   ch.SetConfig(cfg);             // builds per-product tag lists
 //   ch.Open("file.evio");
 //   while (ch.Read() == status::success) {
 //       if (!ch.Scan()) continue;
-//       auto etype = ch.GetEventType();
-//
-//       if (etype == EventType::Physics) {
-//           int nevt = ch.GetNEvents();
-//           for (int i = 0; i < nevt; ++i) {
-//               ch.DecodeEvent(i, event);
-//               // event.info has timestamp, trigger number, event type
-//               // event.rocs[r].slots[s].channels[c].samples[]
-//           }
-//       }
-//       else if (etype == EventType::Epics) {
-//           std::string text = ch.ExtractEpicsText();
-//           // parse "value  channel_name" lines
+//       if (ch.GetEventType() != EventType::Physics) continue;
+//       for (int i = 0; i < ch.GetNEvents(); ++i) {
+//           ch.SelectEvent(i);
+//           const auto &info = ch.Info();   // always cheap
+//           const auto &fadc = ch.Fadc();   // decoded on first call
+//           // multiple requests for the same product reuse the cached result
 //       }
 //   }
+//
+// Legacy API (DecodeEvent/DecodeEventInfo/DecodeEventTdc) is preserved as a
+// thin wrapper — existing callers compile and behave unchanged.
 //=============================================================================
 
 #include "EvStruct.h"
@@ -34,6 +29,7 @@
 #include "DaqConfig.h"
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace evc {
 
@@ -48,7 +44,11 @@ public:
     EvChannel &operator=(const EvChannel &) = delete;
 
     // --- configuration ------------------------------------------------------
-    void SetConfig(const DaqConfig &cfg) { config = cfg; }
+    // Stores the config and precomputes per-product tag lists used by the
+    // lazy accessors.  If the config's data_banks map is empty (legacy JSON
+    // without a bank_structure section), default entries are synthesised
+    // from the legacy bank-tag fields so older configs keep working.
+    void SetConfig(const DaqConfig &cfg);
     const DaqConfig &GetConfig() const   { return config; }
 
     virtual status Open(const std::string &path);
@@ -56,6 +56,7 @@ public:
     virtual status Read();
 
     // --- scan the current event into a flat tree ----------------------------
+    // Rebuilds nodes[] and the tag index; invalidates the per-product cache.
     bool Scan();
 
     // --- event type (valid after Scan) --------------------------------------
@@ -70,6 +71,10 @@ public:
     // Find first node with given tag (no allocation). Returns nullptr if not found.
     const EvNode *FindFirstByTag(uint32_t tag) const;
 
+    // O(1) lookup of every node index carrying a given tag in the current
+    // event (populated by Scan).  Empty span if the tag is not present.
+    const std::vector<int> &NodesForTag(uint32_t tag) const;
+
     const uint32_t *GetData(const EvNode &n) const { return &buffer[n.data_begin]; }
     const uint8_t  *GetBytes(const EvNode &n) const
     { return reinterpret_cast<const uint8_t*>(&buffer[n.data_begin]); }
@@ -79,49 +84,37 @@ public:
     uint32_t       *GetRawBuffer()       { return buffer.data(); }
     const uint32_t *GetRawBuffer() const { return buffer.data(); }
 
-    // --- event-by-event access (after Scan) ---------------------------------
-
     // Number of events in this block (from the physics event header num field).
     // For single-event mode this is 1. For multi-event blocks this is M.
     int GetNEvents() const { return nevents; }
 
-    // Decode the i-th event (0-based) into the pre-allocated EventData.
-    // Populates EventInfo (type, trigger, timestamp) and FADC ROC data.
-    // If ssp_evt is non-null, also decodes SSP/MPD banks for GEM readout.
-    // If vtp_evt is non-null, also decodes 0xE122 VTP Hardware Data banks
-    // (ECAL peaks/clusters, block metadata).
-    // If tdc_evt is non-null, also decodes 0xE107 V1190 TDC Data banks
-    // (tagger timing hits under ROC 0x008E).
-    // Returns true on success (at least one ROC or SSP bank decoded).
+    // --- lazy data-product accessors (new API) ------------------------------
+    //
+    // Choose the sub-event index subsequent Get*() calls refer to.  Clears
+    // the product cache if the index changed; for PRad-II single-event data,
+    // pass 0 (the default after Scan()).  Safe to call repeatedly.
+    void SelectEvent(int i) const;
+
+    // Each accessor decodes on first call after SelectEvent(), then returns
+    // a cached reference.  References are invalidated by the next Read(),
+    // Scan(), or SelectEvent() call.
+    const fdec::EventInfo    &Info() const;  // always cheap
+    const fdec::EventData    &Fadc() const;  // FADC250 + ADC1881M waveforms
+    const ssp::SspEventData  &Gem()  const;  // SSP/MPD GEM strips
+    const tdc::TdcEventData  &Tdc()  const;  // V1190 timing hits
+    const vtp::VtpEventData  &Vtp()  const;  // VTP ECAL peaks/clusters
+
+    // --- legacy API (compat, writes directly to caller-owned structs) -------
+    //
+    // These preserve the old semantics: populate the caller's structs without
+    // touching the lazy cache.  Existing consumers keep working; migrate to
+    // Info()/Fadc()/Gem()/Tdc()/Vtp() at your own pace.
     bool DecodeEvent(int i, fdec::EventData &evt,
                      ssp::SspEventData *ssp_evt = nullptr,
                      vtp::VtpEventData *vtp_evt = nullptr,
                      tdc::TdcEventData *tdc_evt = nullptr) const;
-
-    // Fast path: extract only the event-level info (event_tag, trigger_type,
-    // event_number, trigger_number, trigger_bits, timestamp, run_number,
-    // unix_time) without decoding FADC/SSP/VTP/TDC payloads.
-    //
-    // Use this when you need the TI/trigger metadata but don't care about
-    // per-channel waveforms — e.g. trigger-bit histograms, event filtering,
-    // timestamp extraction across a full run.  Typically 5-10× faster than
-    // DecodeEvent() on physics events with full FADC waveforms.
-    //
-    // Returns true on success.  Requires Scan() to have been called.
     bool DecodeEventInfo(int i, fdec::EventInfo &info) const;
-
-    // Fast path: decode ONLY the 0xE107 V1190 TDC banks plus the event
-    // metadata that DecodeEventInfo() returns.  Skips FADC250, SSP, and VTP
-    // dispatch entirely — the typical 5-10× speedup over DecodeEvent() when
-    // only tagger timing is needed.
-    //
-    // On return, ``tdc_evt`` holds the flattened hit list for this event;
-    // callers iterate `tdc_evt.hits[0 .. tdc_evt.n_hits)`.
-    //
-    // Returns true on success.  Requires Scan() to have been called and
-    // DaqConfig::tdc_bank_tag to be non-zero.
-    bool DecodeEventTdc(int i,
-                        fdec::EventInfo &info,
+    bool DecodeEventTdc(int i, fdec::EventInfo &info,
                         tdc::TdcEventData &tdc_evt) const;
 
     // --- Control event extraction (Prestart/Go/End) -------------------------
@@ -149,10 +142,46 @@ protected:
     int nevents = 0;
     EventType evtype = EventType::Unknown;
 
-    // --- depth-2 data bank decoders (called per-ROC) --------------------------
+    // tag → every node index in the current event that carries it.
+    // Rebuilt by Scan(); consulted by the lazy accessors to avoid re-scanning.
+    std::unordered_map<uint32_t, std::vector<int>> tag_index;
+
+    // Per-product tag lists derived from config.data_banks at SetConfig().
+    std::vector<uint32_t> fadc_tags;
+    std::vector<uint32_t> gem_tags;
+    std::vector<uint32_t> tdc_tags;
+    std::vector<uint32_t> vtp_tags;
+
+    // --- product cache (populated by Info/Fadc/Gem/Tdc/Vtp) -----------------
+    // Cleared on Read/Scan/SelectEvent(i != current).  Marked mutable so the
+    // accessors stay const-callable — the cache is an implementation detail.
+    mutable int               cached_event_idx = -1;
+    mutable bool              info_ready = false;
+    mutable bool              fadc_ready = false;
+    mutable bool              gem_ready  = false;
+    mutable bool              tdc_ready  = false;
+    mutable bool              vtp_ready  = false;
+    mutable fdec::EventData   cache_fadc;    // .info also serves Info()
+    mutable ssp::SspEventData cache_gem;
+    mutable tdc::TdcEventData cache_tdc;
+    mutable vtp::VtpEventData cache_vtp;
+
+    // --- per-bank decoders (shared by legacy and lazy paths) ----------------
     void decodeTriggerInfo(const EvNode &node, fdec::EventInfo &info) const;
     void decodeTIBank(const EvNode &node, fdec::EventInfo &info, bool is_master) const;
     void decodeRunInfo(const EvNode &node, fdec::EventInfo &info) const;
+
+    // --- per-product dispatchers (write into caller-supplied structs) -------
+    void decodeInfoInto(fdec::EventInfo &info) const;
+    void decodeFadcInto(fdec::EventData &evt) const;    // fills evt.info too
+    // Returns the total APV count across every SSP/MPD bank decoded — used by
+    // the legacy DecodeEvent compat wrapper to preserve "true iff data found".
+    int  decodeGemInto (ssp::SspEventData &ssp) const;
+    void decodeTdcInto (tdc::TdcEventData &tdc) const;
+    void decodeVtpInto (vtp::VtpEventData &vtp) const;
+
+    // Invalidate all product cache flags.
+    void clearCache() const;
 
     size_t scanBank      (size_t off, int depth, int parent);
     size_t scanSegment   (size_t off, int depth, int parent);

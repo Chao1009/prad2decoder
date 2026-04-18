@@ -40,10 +40,46 @@ status EvChannel::Open(const std::string &path)
 void EvChannel::Close() { evClose(fHandle); fHandle = -1; }
 status EvChannel::Read() { return evio_status(evRead(fHandle, buffer.data(), buffer.size())); }
 
+// === SetConfig ==============================================================
+// Back-fill data_banks from legacy tag fields for anything the JSON didn't
+// declare, then precompute per-product tag lists consulted by the lazy
+// accessors.  Keeps existing configs (no bank_structure section) working.
+void EvChannel::SetConfig(const DaqConfig &cfg_in)
+{
+    config = cfg_in;
+
+    auto ensure = [&](uint32_t tag, const char *mod, const char *prod) {
+        if (tag != 0 && config.data_banks.find(tag) == config.data_banks.end())
+            config.data_banks[tag] = DaqConfig::DataBankInfo{mod, prod, ""};
+    };
+    ensure(config.fadc_composite_tag, "fadc250_composite", DaqConfig::product_fadc);
+    ensure(config.fadc_raw_tag,       "fadc250_raw",       DaqConfig::product_fadc);
+    ensure(config.adc1881m_bank_tag,  "adc1881m",          DaqConfig::product_fadc);
+    ensure(config.ti_bank_tag,        "ti",                DaqConfig::product_event_info);
+    ensure(config.trigger_bank_tag,   "trigger_bank",      DaqConfig::product_event_info);
+    ensure(config.run_info_tag,       "run_info",          DaqConfig::product_event_info);
+    ensure(config.daq_config_tag,     "daq_config_string", DaqConfig::product_daq_config);
+    ensure(config.tdc_bank_tag,       "v1190_tdc",         DaqConfig::product_tdc);
+    ensure(config.epics_bank_tag,     "epics_data",        DaqConfig::product_epics);
+    for (auto t : config.ssp_bank_tags)
+        ensure(t, "ssp_mpd", DaqConfig::product_gem);
+    // VTP ECAL peaks/clusters — no DaqConfig field yet, tag hardcoded.
+    ensure(0xE122, "vtp_ecal", DaqConfig::product_vtp);
+
+    fadc_tags = config.banks_for_product(DaqConfig::product_fadc);
+    gem_tags  = config.banks_for_product(DaqConfig::product_gem);
+    tdc_tags  = config.banks_for_product(DaqConfig::product_tdc);
+    vtp_tags  = config.banks_for_product(DaqConfig::product_vtp);
+}
+
 // === Scan ===================================================================
 bool EvChannel::Scan()
 {
     nodes.clear();
+    tag_index.clear();
+    cached_event_idx = -1;
+    clearCache();
+
     BankHeader evh(&buffer[0]);
     if (evh.length + 1 > buffer.size()) return false;
 
@@ -67,7 +103,28 @@ bool EvChannel::Scan()
         nevents = (evtype == EventType::Epics || evtype == EventType::Sync) ? 1 : 0;
     }
 
+    // Build tag index consulted by the lazy accessors for O(1) dispatch.
+    for (size_t i = 0; i < nodes.size(); ++i)
+        tag_index[nodes[i].tag].push_back(static_cast<int>(i));
+
+    // Default-select sub-event 0 so Info()/Fadc()/etc. work without an
+    // explicit SelectEvent() call in single-event mode (the common case).
+    cached_event_idx = 0;
+
     return true;
+}
+
+void EvChannel::clearCache() const
+{
+    info_ready = fadc_ready = gem_ready = tdc_ready = vtp_ready = false;
+}
+
+void EvChannel::SelectEvent(int i) const
+{
+    if (cached_event_idx != i) {
+        cached_event_idx = i;
+        clearCache();
+    }
 }
 
 // --- scan a BANK (2-word header) --------------------------------------------
@@ -172,6 +229,64 @@ const EvNode *EvChannel::FindFirstByTag(uint32_t tag) const
     return nullptr;
 }
 
+const std::vector<int> &EvChannel::NodesForTag(uint32_t tag) const
+{
+    static const std::vector<int> empty;
+    auto it = tag_index.find(tag);
+    return it != tag_index.end() ? it->second : empty;
+}
+
+// === Lazy data-product accessors ============================================
+// Each one decodes on first call (for the currently-selected sub-event) and
+// returns a cached reference thereafter.  clearCache() invalidates the flags
+// on Read()/Scan()/SelectEvent() transitions.
+
+const fdec::EventInfo &EvChannel::Info() const
+{
+    if (!info_ready) {
+        decodeInfoInto(cache_fadc.info);
+        info_ready = true;
+    }
+    return cache_fadc.info;
+}
+
+const fdec::EventData &EvChannel::Fadc() const
+{
+    if (!fadc_ready) {
+        decodeFadcInto(cache_fadc);   // also refills cache_fadc.info
+        fadc_ready = true;
+        info_ready = true;
+    }
+    return cache_fadc;
+}
+
+const ssp::SspEventData &EvChannel::Gem() const
+{
+    if (!gem_ready) {
+        decodeGemInto(cache_gem);
+        gem_ready = true;
+    }
+    return cache_gem;
+}
+
+const tdc::TdcEventData &EvChannel::Tdc() const
+{
+    if (!tdc_ready) {
+        decodeTdcInto(cache_tdc);
+        tdc_ready = true;
+    }
+    return cache_tdc;
+}
+
+const vtp::VtpEventData &EvChannel::Vtp() const
+{
+    if (!vtp_ready) {
+        decodeVtpInto(cache_vtp);
+        vtp_ready = true;
+    }
+    return cache_vtp;
+}
+
 const uint8_t *EvChannel::GetCompositePayload(const EvNode &n, size_t &nbytes) const
 {
     nbytes = 0;
@@ -262,7 +377,10 @@ void EvChannel::decodeRunInfo(const EvNode &node, fdec::EventInfo &info) const
 }
 
 // =============================================================================
-// DecodeEvent — hierarchical dispatch by depth and bank tag
+// Per-product dispatchers — shared by the lazy cache accessors and the legacy
+// DecodeEvent/DecodeEventInfo/DecodeEventTdc wrappers.  Each walks tag_index
+// for the tags belonging to its product, then invokes the registered decoder
+// (looked up by module name from DaqConfig::data_banks).
 //
 // CODA2 single-event structure (see docs/rols/banktags.md):
 //
@@ -276,57 +394,221 @@ void EvChannel::decodeRunInfo(const EvNode &node, fdec::EventInfo &info) const
 //    +-- [0x0080 BANK]         HyCal FADC crate (even tags)
 //    |    +-- [0xE10A UINT32]  TI data (4 words)
 //    |    +-- [0xE101 COMPOSITE] FADC250 waveforms (physics triggers only)
-//    +-- [0x0081 BANK]         TI slave (odd tags, TI only)
+//    +-- [0x008E BANK]         Tagger crate
 //    |    +-- [0xE10A UINT32]  TI data
+//    |    +-- [0xE107 UINT32]  V1190 TDC hits
 //    +-- [0x0031 BANK]         GEM VTP/MPD crate (when present)
 //    |    +-- [0xE10A UINT32]  TI data
 //    |    +-- [0x0DEA UINT32]  MPD strip data (SSP bitfield format)
 //    +-- ...
 // =============================================================================
 
-// --- Known bank tags from JLab ROLs (rol1.c, rol2.c, vtp1mpd.c) ------------
-// Used to provide informative warnings for banks we recognize but don't decode.
-struct KnownBankTag {
-    uint32_t    tag;
-    const char *hardware;
-    bool        has_decoder;   // true if prad2dec implements a decoder
-};
-
-// Names follow docs/rols/clonbanks_20260406.xml (official dictionary).
-static const KnownBankTag known_bank_tags[] = {
-    // Tags with decoders
-    { 0xE10A, "TI/TS Hardware Data",          true  },
-    { 0xE101, "FADC250 Window Raw Data (mode 1)", true },
-    { 0xE109, "FADC250 Hardware Data (raw)",  true  },
-    { 0xE120, "FASTBUS Raw Data (ADC1881M)",  true  },
-    { 0xE10C, "SSP Hardware Data",            true  },
-    { 0x0DEA, "MPD raw format (PRad-II GEM)", true  },
-    { 0xE10F, "HEAD bank",                    true  },
-    { 0xE10E, "Run Config File",              true  },
-    { 0xC000, "CODA trigger bank",            true  },
-    { 0xE107, "V1190 TDC Data",               true  },
-    { 0xE122, "VTP Hardware Data",            true  },
-    // Tags listed in the dictionary but without a prad2dec decoder
-    { 0xE10B, "V1190/V1290 Hardware Data",    false },
-    { 0xE141, "FAV3 Hardware Data",           false },
-    { 0xE104, "VSCM Hardware Data",           false },
-    { 0xE105, "DCRB Hardware Data",           false },
-    { 0xE115, "DSC2 Scalers raw format",      false },
-    { 0xE112, "HEAD bank raw format",         false },
-    { 0xE123, "SSP-RICH Hardware Data",       false },
-    { 0xE125, "SIS3801 Scalers raw format",   false },
-    { 0xE131, "VFTDC Hardware Data",          false },
-    { 0xE133, "Helicity Decoder Hardware Data", false },
-    { 0xE140, "MPD raw format (reserved)",    false },
-};
-static const int N_KNOWN_TAGS = sizeof(known_bank_tags) / sizeof(known_bank_tags[0]);
-
-static const KnownBankTag *lookupKnownTag(uint32_t tag)
+void EvChannel::decodeInfoInto(fdec::EventInfo &info) const
 {
-    for (int i = 0; i < N_KNOWN_TAGS; ++i)
-        if (known_bank_tags[i].tag == tag) return &known_bank_tags[i];
-    return nullptr;
+    info = fdec::EventInfo{};
+    info.clear();
+    if (nodes.empty()) return;
+
+    BankHeader evh(&buffer[0]);
+    info.event_tag = evh.tag;
+    info.type = static_cast<uint8_t>(evtype);
+
+    // event_tag = physics_base + trigger_type (see docs/rols/banktags.md).
+    if (config.is_physics(evh.tag) && evh.tag >= config.physics_base)
+        info.trigger_type = static_cast<uint8_t>(evh.tag - config.physics_base);
+
+    // 0xC000 trigger bank → event number.
+    {
+        auto tb = tag_index.find(config.trigger_bank_tag);
+        if (tb != tag_index.end() && !tb->second.empty())
+            decodeTriggerInfo(nodes[tb->second[0]], info);
+    }
+
+    // 0xE10A TI banks — the first supplies trigger#/timestamp; any bank with
+    // enough words also yields FP trigger_bits (TI master's 7-word variant).
+    {
+        auto ti = tag_index.find(config.ti_bank_tag);
+        if (ti != tag_index.end()) {
+            bool have_info = false;
+            for (int ni : ti->second) {
+                auto &n = nodes[ni];
+                if (n.type != DATA_UINT32) continue;
+                if (!have_info) { decodeTIBank(n, info, false); have_info = true; }
+                if (info.trigger_bits == 0 && config.ti_trigger_type_word >= 0 &&
+                    static_cast<size_t>(config.ti_trigger_type_word) < n.data_words)
+                {
+                    const uint32_t *d = GetData(n);
+                    info.trigger_bits = (d[config.ti_trigger_type_word]
+                                         >> config.ti_trigger_type_shift)
+                                        & config.ti_trigger_type_mask;
+                }
+            }
+        }
+    }
+
+    // 0xE10F run info lives inside the TI master crate (0x27).
+    {
+        auto tm = tag_index.find(config.ti_master_tag);
+        if (tm != tag_index.end()) {
+            for (int ni : tm->second) {
+                auto &n = nodes[ni];
+                if (n.depth != 1) continue;
+                for (size_t ci = 0; ci < n.child_count; ++ci) {
+                    auto &child = nodes[n.child_first + ci];
+                    if (child.tag == config.run_info_tag && child.type == DATA_UINT32)
+                        decodeRunInfo(child, info);
+                }
+                break;
+            }
+        }
+    }
 }
+
+void EvChannel::decodeFadcInto(fdec::EventData &evt) const
+{
+    evt.clear();
+    decodeInfoInto(evt.info);
+
+    int roc_idx = 0;
+    for (uint32_t tag : fadc_tags) {
+        auto it = tag_index.find(tag);
+        if (it == tag_index.end()) continue;
+        auto *bank_info = config.find_data_bank(tag);
+        if (!bank_info) continue;
+        const std::string &mod = bank_info->module;
+
+        for (int ni : it->second) {
+            if (roc_idx >= fdec::MAX_ROCS) break;
+            auto &n = nodes[ni];
+            if (n.data_words == 0) continue;
+            if (n.parent >= 0 && nodes[n.parent].type == DATA_COMPOSITE) continue;
+            uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+
+            if (mod == "fadc250_composite" && n.type == DATA_COMPOSITE) {
+                size_t nbytes;
+                auto *payload = GetCompositePayload(n, nbytes);
+                if (!payload) continue;
+                fdec::RocData &rd = evt.rocs[roc_idx];
+                rd.present = true;
+                rd.tag = roc_tag;
+                fdec::Fadc250Decoder::DecodeRoc(payload, nbytes, rd);
+                evt.roc_index[roc_idx] = roc_idx;
+                roc_idx++;
+            }
+            else if (mod == "fadc250_raw" && n.type == DATA_UINT32) {
+                fdec::RocData &rd = evt.rocs[roc_idx];
+                rd.present = true;
+                rd.tag = roc_tag;
+                fdec::Fadc250RawDecoder::DecodeRoc(GetData(n), n.data_words, rd);
+                evt.roc_index[roc_idx] = roc_idx;
+                roc_idx++;
+            }
+            else if (mod == "adc1881m" && config.adc_format == "adc1881m"
+                     && n.type == DATA_UINT32)
+            {
+                int crate_id = -1;
+                for (auto &re : config.roc_tags)
+                    if (re.tag == roc_tag) { crate_id = re.crate; break; }
+                fdec::RocData &rd = evt.rocs[roc_idx];
+                rd.present = true;
+                rd.tag = roc_tag;
+                fdec::Adc1881mDecoder::DecodeRoc(GetData(n), n.data_words, rd);
+
+                if (!config.pedestals.empty() && crate_id >= 0) {
+                    for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
+                        auto &slot = rd.slots[s];
+                        if (!slot.present) continue;
+                        for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
+                            if (!(slot.channel_mask & (1ull << c))) continue;
+                            auto &cd = slot.channels[c];
+                            if (cd.nsamples != 1) continue;
+                            auto *ped = config.get_pedestal(crate_id, s, c);
+                            if (!ped) continue;
+                            float raw = static_cast<float>(cd.samples[0]);
+                            float threshold = ped->mean + config.sparsify_sigma * ped->rms;
+                            if (config.sparsify_sigma > 0.f && raw < threshold) {
+                                cd.nsamples = 0;
+                                slot.channel_mask &= ~(1ull << c);
+                                slot.nchannels--;
+                            } else {
+                                int sub = static_cast<int>(raw) - static_cast<int>(ped->mean + 0.5f);
+                                cd.samples[0] = (sub > 0) ? static_cast<uint16_t>(sub) : 0;
+                            }
+                        }
+                    }
+                }
+                evt.roc_index[roc_idx] = roc_idx;
+                roc_idx++;
+            }
+        }
+    }
+    evt.nrocs = roc_idx;
+}
+
+int EvChannel::decodeGemInto(ssp::SspEventData &ssp_evt) const
+{
+    ssp_evt.clear();
+    int total_apvs = 0;
+    for (uint32_t tag : gem_tags) {
+        auto it = tag_index.find(tag);
+        if (it == tag_index.end()) continue;
+        for (int ni : it->second) {
+            auto &n = nodes[ni];
+            if (n.type != DATA_UINT32 || n.data_words == 0) continue;
+            if (n.parent >= 0 && nodes[n.parent].type == DATA_COMPOSITE) continue;
+            uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+            int crate_id = -1;
+            for (auto &re : config.roc_tags)
+                if (re.tag == roc_tag) { crate_id = re.crate; break; }
+            // SspDecoder::DecodeRoc is safe for short banks (returns 0 APVs),
+            // so the 3-word stub 0xE10C in the TI master crate is a no-op.
+            int napvs = ssp::SspDecoder::DecodeRoc(GetData(n), n.data_words,
+                                                    crate_id, ssp_evt);
+            if (napvs > 0) total_apvs += napvs;
+        }
+    }
+    return total_apvs;
+}
+
+void EvChannel::decodeTdcInto(tdc::TdcEventData &tdc_evt) const
+{
+    tdc_evt.clear();
+    for (uint32_t tag : tdc_tags) {
+        if (tag == 0) continue;
+        auto it = tag_index.find(tag);
+        if (it == tag_index.end()) continue;
+        for (int ni : it->second) {
+            auto &n = nodes[ni];
+            if (n.type != DATA_UINT32 || n.data_words == 0) continue;
+            if (n.parent >= 0 && nodes[n.parent].type == DATA_COMPOSITE) continue;
+            uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+            tdc::TdcDecoder::DecodeRoc(GetData(n), n.data_words, roc_tag, tdc_evt);
+        }
+    }
+}
+
+void EvChannel::decodeVtpInto(vtp::VtpEventData &vtp_evt) const
+{
+    vtp_evt.clear();
+    for (uint32_t tag : vtp_tags) {
+        auto it = tag_index.find(tag);
+        if (it == tag_index.end()) continue;
+        for (int ni : it->second) {
+            auto &n = nodes[ni];
+            if (n.type != DATA_UINT32 || n.data_words == 0) continue;
+            if (n.parent >= 0 && nodes[n.parent].type == DATA_COMPOSITE) continue;
+            uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
+            // VtpDecoder::DecodeRoc is tolerant of short stub banks.
+            vtp::VtpDecoder::DecodeRoc(GetData(n), n.data_words, roc_tag, vtp_evt);
+        }
+    }
+}
+
+// =============================================================================
+// Legacy compat wrappers — write directly into caller-owned structs, bypassing
+// the lazy cache.  Semantics identical to the pre-refactor versions so every
+// existing consumer compiles and behaves unchanged.
+// =============================================================================
 
 bool EvChannel::DecodeEvent(int i, fdec::EventData &evt,
                             ssp::SspEventData *ssp_evt,
@@ -340,289 +622,40 @@ bool EvChannel::DecodeEvent(int i, fdec::EventData &evt,
     if (i < 0 || i >= nevents) return false;
     if (nodes.empty()) return false;
 
-    BankHeader evh(&buffer[0]);
-    evt.info.event_tag = evh.tag;
-    evt.info.type = static_cast<uint8_t>(evtype);
+    SelectEvent(i);
+    decodeFadcInto(evt);                          // also fills evt.info
 
-    // Main trigger type: derived from event tag (see docs/rols/banktags.md).
-    // event_tag = physics_base + trigger_type (physics_base from daq_config.json).
-    // trigger_type identifies WHICH trigger caused this event (single per event).
-    // Maps to trigger name via database/trigger_bits.json "trigger_type" section.
-    if (config.is_physics(evh.tag) && evh.tag >= config.physics_base)
-        evt.info.trigger_type = static_cast<uint8_t>(evh.tag - config.physics_base);
-
-    // --- extract event info: scan all nodes for trigger/TI banks ------------
-    // Works for both built (3-level), flat (2-level), and mixed structures.
-
-    // 0xC000: trigger bank → event number
-    if (auto *tb = FindFirstByTag(config.trigger_bank_tag))
-        decodeTriggerInfo(*tb, evt.info);
-
-    // Scan all TI banks (0xE10A) for event info.
-    // The first TI bank found provides trigger_number and timestamp.
-    // The longest TI bank (TI master, 7 words) provides FP trigger_bits from d[5].
-    // Run info (0xE10F) is extracted from the TI master crate (0x0027).
-    bool have_info = false;
-    for (auto &n : nodes) {
-        if (n.tag != config.ti_bank_tag || n.type != DATA_UINT32) continue;
-
-        // first TI bank: extract trigger_number + timestamp
-        if (!have_info) {
-            decodeTIBank(n, evt.info, false);
-            have_info = true;
-        }
-
-        // any TI bank with enough words: extract FP trigger bits from d[5]
-        if (evt.info.trigger_bits == 0 && config.ti_trigger_type_word >= 0 &&
-            static_cast<size_t>(config.ti_trigger_type_word) < n.data_words)
-        {
-            const uint32_t *d = GetData(n);
-            evt.info.trigger_bits = (d[config.ti_trigger_type_word]
-                                     >> config.ti_trigger_type_shift)
-                                    & config.ti_trigger_type_mask;
-        }
-    }
-
-    // TI master crate (0x27): extract run info
-    for (auto &n : nodes) {
-        if (n.depth == 1 && n.tag == config.ti_master_tag) {
-            for (size_t ci = 0; ci < n.child_count; ++ci) {
-                auto &child = nodes[n.child_first + ci];
-                if (child.tag == config.run_info_tag && child.type == DATA_UINT32)
-                    decodeRunInfo(child, evt.info);
-            }
-            break;
-        }
-    }
-
-    // --- decode detector data: flat scan all nodes by tag -------------------
-    // Works for built (3-level), flat (2-level), and mixed event structures.
-    int roc_idx = 0;
     bool ssp_decoded = false;
-    static std::set<uint64_t> warned_tags;
+    if (ssp_evt)
+        ssp_decoded = (decodeGemInto(*ssp_evt) > 0);
+    if (vtp_evt) decodeVtpInto(*vtp_evt);
+    if (tdc_evt) decodeTdcInto(*tdc_evt);
 
-    for (size_t ni = 0; ni < nodes.size(); ++ni) {
-        auto &n = nodes[ni];
-
-        // === phase 1: skip nodes that are not dispatchable data banks ===
-        if (IsContainer(n.type))    continue;  // ROC wrappers, event bank
-        if (n.data_words == 0)      continue;  // empty banks
-        if (n.parent >= 0 &&                   // composite internals (0x000D, 0x0000)
-            nodes[n.parent].type == DATA_COMPOSITE) continue;
-        if (n.tag == config.ti_bank_tag)        continue;  // handled above
-        if (n.tag == config.trigger_bank_tag)   continue;  // handled above
-        if (n.tag == config.run_info_tag)       continue;  // handled above
-        if (n.tag == config.daq_config_tag)     continue;  // config string, not data
-        if (n.type == DATA_CHARSTAR8 || n.type == DATA_CHAR8) continue;
-
-        // parent ROC tag (for crate_id lookup; 0 if flat/top-level)
-        uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
-
-        // === phase 2: dispatch by tag to the appropriate decoder ===
-
-        // FADC250 composite waveforms (0xE101)
-        if (n.tag == config.fadc_composite_tag && n.type == DATA_COMPOSITE
-            && roc_idx < fdec::MAX_ROCS)
-        {
-            size_t nbytes;
-            auto *payload = GetCompositePayload(n, nbytes);
-            if (!payload) continue;
-            fdec::RocData &rd = evt.rocs[roc_idx];
-            rd.present = true;
-            rd.tag = roc_tag;
-            fdec::Fadc250Decoder::DecodeRoc(payload, nbytes, rd);
-            evt.roc_index[roc_idx] = roc_idx;
-            roc_idx++;
-            continue;
-        }
-
-        // FADC250 raw hardware format (0xE109, fallback)
-        if (n.tag == config.fadc_raw_tag && n.type == DATA_UINT32
-            && roc_idx < fdec::MAX_ROCS)
-        {
-            fdec::RocData &rd = evt.rocs[roc_idx];
-            rd.present = true;
-            rd.tag = roc_tag;
-            fdec::Fadc250RawDecoder::DecodeRoc(GetData(n), n.data_words, rd);
-            evt.roc_index[roc_idx] = roc_idx;
-            roc_idx++;
-            continue;
-        }
-
-        // SSP/MPD data — GEM (0xE10C, 0x0DEA)
-        if (ssp_evt && config.is_ssp_bank(n.tag) && n.type == DATA_UINT32)
-        {
-            int crate_id = -1;
-            for (auto &re : config.roc_tags)
-                if (re.tag == roc_tag) { crate_id = re.crate; break; }
-            int napvs = ssp::SspDecoder::DecodeRoc(GetData(n), n.data_words,
-                                                    crate_id, *ssp_evt);
-            if (napvs > 0) ssp_decoded = true;  // only count if actual APV data found
-            continue;
-        }
-
-        // VTP Hardware Data (0xE122) — ECAL peaks/clusters when present.
-        // Swallows the 3-word stub case found in TI slave crates.
-        if (n.tag == 0xE122 && n.type == DATA_UINT32) {
-            if (vtp_evt)
-                vtp::VtpDecoder::DecodeRoc(GetData(n), n.data_words,
-                                            roc_tag, *vtp_evt);
-            continue;
-        }
-
-        // V1190 TDC Data (0xE107) — tagger timing hits.
-        // Each word is a single hit; payload can be empty between triggers.
-        if (n.tag == config.tdc_bank_tag && config.tdc_bank_tag != 0
-            && n.type == DATA_UINT32)
-        {
-            if (tdc_evt)
-                tdc::TdcDecoder::DecodeRoc(GetData(n), n.data_words,
-                                            roc_tag, *tdc_evt);
-            continue;
-        }
-
-        // ADC1881M raw data — PRad legacy
-        if (config.adc_format == "adc1881m"
-            && n.tag == config.adc1881m_bank_tag
-            && roc_idx < fdec::MAX_ROCS)
-        {
-            int crate_id = -1;
-            for (auto &re : config.roc_tags)
-                if (re.tag == roc_tag) { crate_id = re.crate; break; }
-            fdec::RocData &rd = evt.rocs[roc_idx];
-            rd.present = true;
-            rd.tag = roc_tag;
-            fdec::Adc1881mDecoder::DecodeRoc(GetData(n), n.data_words, rd);
-
-            if (!config.pedestals.empty() && crate_id >= 0) {
-                for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
-                    auto &slot = rd.slots[s];
-                    if (!slot.present) continue;
-                    for (int c = 0; c < fdec::MAX_CHANNELS; ++c) {
-                        if (!(slot.channel_mask & (1ull << c))) continue;
-                        auto &cd = slot.channels[c];
-                        if (cd.nsamples != 1) continue;
-                        auto *ped = config.get_pedestal(crate_id, s, c);
-                        if (!ped) continue;
-                        float raw = static_cast<float>(cd.samples[0]);
-                        float threshold = ped->mean + config.sparsify_sigma * ped->rms;
-                        if (config.sparsify_sigma > 0.f && raw < threshold) {
-                            cd.nsamples = 0;
-                            slot.channel_mask &= ~(1ull << c);
-                            slot.nchannels--;
-                        } else {
-                            int sub = static_cast<int>(raw) - static_cast<int>(ped->mean + 0.5f);
-                            cd.samples[0] = (sub > 0) ? static_cast<uint16_t>(sub) : 0;
-                        }
-                    }
-                }
-            }
-            evt.roc_index[roc_idx] = roc_idx;
-            roc_idx++;
-            continue;
-        }
-
-        // === phase 3: warn about unhandled data banks (once per tag) ===
-        uint64_t key = (uint64_t(roc_tag) << 32) | n.tag;
-        if (warned_tags.insert(key).second) {
-            auto *known = lookupKnownTag(n.tag);
-            if (known && !known->has_decoder)
-                std::cerr << "DecodeEvent: skipping " << known->hardware
-                          << " bank (0x" << std::hex << n.tag << std::dec
-                          << ", " << n.data_words << "w)"
-                          << " in ROC 0x" << std::hex << roc_tag << std::dec
-                          << " — no decoder implemented\n";
-            else if (!known)
-                std::cerr << "DecodeEvent: unknown bank"
-                          << " tag=0x" << std::hex << n.tag
-                          << " type=" << TypeName(n.type)
-                          << std::dec << " (" << n.data_words << "w)"
-                          << " in ROC 0x" << std::hex << roc_tag << std::dec
-                          << " — not in known tags, check ROL source\n";
-        }
-    }
-
-    evt.nrocs = roc_idx;
-    // Return true only when actual detector data was decoded (FADC waveforms
-    // or GEM strips).  Event info (event#, timestamp, trigger_type/bits) is
-    // always populated in evt.info regardless — callers can use it even when
-    // this returns false (e.g. monitoring events with TI data but no waveforms).
-    return roc_idx > 0 || ssp_decoded;
+    // Same return convention as the original DecodeEvent: true iff any
+    // detector data was decoded (FADC waveforms or GEM strips).  evt.info
+    // is always populated regardless.
+    return evt.nrocs > 0 || ssp_decoded;
 }
 
-// === Info-only fast path ====================================================
-// Mirrors the event-info extraction inside DecodeEvent without touching any
-// FADC/SSP/VTP/TDC bank.  Useful for trigger-bit scans over a whole run, where
-// DecodeEvent would waste time running Fadc250Decoder on every waveform.
 bool EvChannel::DecodeEventInfo(int i, fdec::EventInfo &info) const
 {
     info = fdec::EventInfo{};
     info.clear();
     if (i < 0 || i >= nevents) return false;
     if (nodes.empty()) return false;
-
-    BankHeader evh(&buffer[0]);
-    info.event_tag = evh.tag;
-    info.type = static_cast<uint8_t>(evtype);
-
-    if (config.is_physics(evh.tag) && evh.tag >= config.physics_base)
-        info.trigger_type = static_cast<uint8_t>(evh.tag - config.physics_base);
-
-    if (auto *tb = FindFirstByTag(config.trigger_bank_tag))
-        decodeTriggerInfo(*tb, info);
-
-    bool have_info = false;
-    for (auto &n : nodes) {
-        if (n.tag != config.ti_bank_tag || n.type != DATA_UINT32) continue;
-
-        if (!have_info) {
-            decodeTIBank(n, info, false);
-            have_info = true;
-        }
-
-        if (info.trigger_bits == 0 && config.ti_trigger_type_word >= 0 &&
-            static_cast<size_t>(config.ti_trigger_type_word) < n.data_words)
-        {
-            const uint32_t *d = GetData(n);
-            info.trigger_bits = (d[config.ti_trigger_type_word]
-                                 >> config.ti_trigger_type_shift)
-                                & config.ti_trigger_type_mask;
-        }
-    }
-
-    for (auto &n : nodes) {
-        if (n.depth == 1 && n.tag == config.ti_master_tag) {
-            for (size_t ci = 0; ci < n.child_count; ++ci) {
-                auto &child = nodes[n.child_first + ci];
-                if (child.tag == config.run_info_tag && child.type == DATA_UINT32)
-                    decodeRunInfo(child, info);
-            }
-            break;
-        }
-    }
+    SelectEvent(i);
+    decodeInfoInto(info);
     return true;
 }
 
-// === TDC-only fast path =====================================================
-// Decodes only the 0xE107 banks, leaving FADC/SSP/VTP untouched.  Used by
-// tagger timing analyses (scripts/tdc_viewer.py, ROOT macros) where the
-// full DecodeEvent() is ~5–10× more expensive than we need.
 bool EvChannel::DecodeEventTdc(int i,
                                fdec::EventInfo &info,
                                tdc::TdcEventData &tdc_evt) const
 {
     tdc_evt.clear();
     if (!DecodeEventInfo(i, info)) return false;
-
-    if (config.tdc_bank_tag == 0) return true;  // no TDC configured — info only
-
-    for (const auto &n : nodes) {
-        if (n.tag != config.tdc_bank_tag) continue;
-        if (n.type != DATA_UINT32)        continue;
-        if (n.data_words == 0)            continue;
-        uint32_t roc_tag = (n.parent >= 0) ? nodes[n.parent].tag : 0;
-        tdc::TdcDecoder::DecodeRoc(GetData(n), n.data_words, roc_tag, tdc_evt);
-    }
+    if (config.tdc_bank_tag == 0) return true;    // no TDC configured — info only
+    decodeTdcInto(tdc_evt);
     return true;
 }
 

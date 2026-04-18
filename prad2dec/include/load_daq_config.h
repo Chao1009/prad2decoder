@@ -136,6 +136,31 @@ inline bool load_daq_config(const std::string &path, DaqConfig &cfg)
     if (j.contains("ti_master_tag"))
         cfg.ti_master_tag = parse_hex(j["ti_master_tag"]);
 
+    // bank structure: tag → { module, product, type }
+    // This is the new authoritative source used by EvChannel's lazy accessors
+    // to dispatch decoders by data product.  Absent entries fall back to the
+    // legacy hard-coded dispatch in DecodeEvent — see EvChannel.cpp.
+    if (j.contains("bank_structure")) {
+        auto &bs = j["bank_structure"];
+        if (bs.contains("data_banks")) {
+            cfg.data_banks.clear();
+            for (auto it = bs["data_banks"].begin(); it != bs["data_banks"].end(); ++it) {
+                uint32_t tag;
+                try { tag = static_cast<uint32_t>(std::stoul(it.key(), nullptr, 0)); }
+                catch (...) {
+                    std::cerr << "load_daq_config: bank_structure.data_banks key '"
+                              << it.key() << "' is not a valid integer; skipping\n";
+                    continue;
+                }
+                DaqConfig::DataBankInfo info;
+                info.module  = it.value().value("module",  "");
+                info.product = it.value().value("product", "");
+                info.type    = it.value().value("type",    "");
+                cfg.data_banks[tag] = std::move(info);
+            }
+        }
+    }
+
     // pedestal file (loaded separately if specified)
     // Handled by the caller via load_pedestals()
 

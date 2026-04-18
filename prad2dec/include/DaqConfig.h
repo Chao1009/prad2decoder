@@ -130,6 +130,48 @@ struct DaqConfig
     // TI master crate tag (contains run info bank)
     uint32_t ti_master_tag;
 
+    // --- bank structure: data-bank → decoder module / data product ----------
+    // Populated from the "bank_structure.data_banks" JSON section.  EvChannel
+    // uses this to dispatch lazy data-product accessors (Fadc/Gem/Tdc/Vtp/...):
+    // each accessor iterates the tag-index for every bank whose `product`
+    // matches and invokes the registered decoder for that `module`.
+    //
+    // `module` names are resolved in C++ to the built-in decoder functions —
+    // adding a new module requires matching code in EvChannel.  `product` is
+    // a free-form string whose values must agree with the C++ accessor names
+    // (see `product_*` constants below and EvChannel::Get*).
+    struct DataBankInfo {
+        std::string module;   // decoder-module key (e.g. "fadc250_composite")
+        std::string product;  // data-product name  (e.g. "fadc")
+        std::string type;     // expected evio type for validation (optional)
+    };
+    std::unordered_map<uint32_t, DataBankInfo> data_banks;
+
+    // Canonical product names — keep in sync with JSON and EvChannel accessors.
+    static constexpr const char *product_event_info = "event_info";
+    static constexpr const char *product_fadc       = "fadc";
+    static constexpr const char *product_tdc        = "tdc";
+    static constexpr const char *product_gem        = "gem";
+    static constexpr const char *product_vtp        = "vtp";
+    static constexpr const char *product_epics      = "epics";
+    static constexpr const char *product_daq_config = "daq_config";
+
+    // Lookup helpers.
+    const DataBankInfo *find_data_bank(uint32_t tag) const {
+        auto it = data_banks.find(tag);
+        return it != data_banks.end() ? &it->second : nullptr;
+    }
+
+    // Collect every bank tag whose product matches.  Small cost, called once
+    // at EvChannel init to cache per-product tag lists.
+    std::vector<uint32_t> banks_for_product(const std::string &product) const {
+        std::vector<uint32_t> out;
+        out.reserve(data_banks.size());
+        for (auto &kv : data_banks)
+            if (kv.second.product == product) out.push_back(kv.first);
+        return out;
+    }
+
     // --- diagnostics -----------------------------------------------------------
     bool verbose_decode = false;   // log unmatched bank tags in DecodeEvent
 

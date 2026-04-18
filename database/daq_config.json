@@ -75,5 +75,30 @@
         {"tag": "0x34", "name": "gemroc2",   "crate": 52, "type": "gem"}
     ],
 
-    "ti_master_tag": "0x27"
+    "ti_master_tag": "0x27",
+
+    "bank_structure": {
+        "_comment": "Three-level physics event hierarchy: event_bank (depth 0) → ROC_crate (depth 1) → data_bank (depth 2). Composite bank 0xE101 adds a 4th internal level (0x000D metadata + 0x0000 data words) consumed directly by its decoder. Each data bank maps to a decoder 'module' and a 'product'; EvChannel::Get<product>() lazily dispatches the registered module on first access and caches the result per event.",
+
+        "data_banks": {
+            "0xE10A": { "module": "ti",                "product": "event_info", "type": "UINT32"    },
+            "0xC000": { "module": "trigger_bank",      "product": "event_info", "type": "UINT32"    },
+            "0xE10F": { "module": "run_info",          "product": "event_info", "type": "UINT32"    },
+            "0xE10E": { "module": "daq_config_string", "product": "daq_config", "type": "STRING"    },
+
+            "0xE101": { "module": "fadc250_composite", "product": "fadc",       "type": "COMPOSITE" },
+            "0xE109": { "module": "fadc250_raw",       "product": "fadc",       "type": "UINT32"    },
+            "0xE120": { "module": "adc1881m",          "product": "fadc",       "type": "UINT32"    },
+
+            "0xE107": { "module": "v1190_tdc",         "product": "tdc",        "type": "UINT32"    },
+
+            "0xE10C": { "module": "ssp_mpd",           "product": "gem",        "type": "UINT32"    },
+            "0x0DEA": { "module": "mpd_raw",           "product": "gem",        "type": "UINT32"    },
+
+            "0xE122": { "module": "vtp_ecal",          "product": "vtp",        "type": "UINT32"    },
+
+            "0xE114": { "module": "epics_data",        "product": "epics",      "type": "STRING"    },
+            "0xE112": { "module": "epics_header",      "product": "epics",      "type": "UINT32"    }
+        }
+    }
 }
