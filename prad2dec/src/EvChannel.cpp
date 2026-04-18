@@ -421,7 +421,7 @@ void EvChannel::decodeRunInfo(const EvNode &node, fdec::EventInfo &info) const
 //    |    +-- [0xE107 UINT32]  V1190 TDC hits
 //    +-- [0x0031 BANK]         GEM VTP/MPD crate (when present)
 //    |    +-- [0xE10A UINT32]  TI data
-//    |    +-- [0x0DEA UINT32]  MPD strip data (SSP bitfield format)
+//    |    +-- [0x0DE9 UINT32]  MPD strip data (SSP bitfield format)
 //    +-- ...
 // =============================================================================
 

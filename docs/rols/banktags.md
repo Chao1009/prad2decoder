@@ -257,7 +257,7 @@ tags can be looked up quickly.
 | 0xE109 | UINT32    | FADC250 Hardware Data (raw)                   | **observed in some configs** — pre-rol2.c reformatting; rol2.c converts → 0xE101 |
 | 0xE10A | UINT32    | TI/TS Hardware Data                           | **observed** — TI master/slave timing, FP trigger pattern in d[5]  |
 | 0xE10B | UINT32    | V1190/V1290 Hardware Data                     | reserved in rol1.c, not used                                       |
-| 0xE10C | UINT32    | **SSP Hardware Data**                         | **observed** — official format is HPS-style (HPS_CLUSTER, HPS_TRIGGER, TRIGGER pattern). For PRad-II this is the **trigger processor data** in the TI master crate (0x0027). ⚠️ NOT the MPD/APV strip format we use for GEMs — that's a separate `0x0DEA`-style bank. |
+| 0xE10C | UINT32    | **SSP Hardware Data**                         | **observed** — official format is HPS-style (HPS_CLUSTER, HPS_TRIGGER, TRIGGER pattern). For PRad-II this is the **trigger processor data** in the TI master crate (0x0027). ⚠️ NOT the MPD/APV strip format we use for GEMs — that's a separate `0x0DE9`-style bank. |
 | 0xE10D | UINT32    | GTP Hardware Data                             | not used                                                           |
 | 0xE10E | CHAR      | Run Config File                               | **observed** — DAQ config readback string (first events only)      |
 | 0xE10F | UINT32    | **HEAD bank**                                 | **observed** — version, run#, event#, unix_time, event_type, roc_pattern, classification, trigger_bits. (We previously called this "Run info" in code; the data fields we extract — run number, event count, unix time — are correct, just under the wrong name.) |
@@ -296,8 +296,7 @@ tags can be looked up quickly.
 | 0xE139 | COMPOSITE | PETIROC Composite Data                        | not used                                                           |
 | 0xE140 | UINT32    | (reserved for MPD raw format)                 | XML notes "use Hall A tag 0x0DE9, but reserve 0xE140". (Previously misnamed "Special data bank" — corrected.) |
 | 0xE141 | UINT32    | FAV3 Hardware Data                            | reserved, not used                                                 |
-| 0x0DE9 | UINT32    | MPD raw format (Hall A tag)                   | format used for MPD GEM strip data; PRad-II GEM readout used `0x0DEA` (variant) — needs verification against current data |
-| 0x0DEA | UINT32    | (PRad-II GEM strip data)                      | **observed in some configs** — variant of MPD format used by `vtpRocEbInit(VTPMPD_BANK,6,7)` in vtp1mpd.c |
+| 0x0DE9 | UINT32    | **MPD raw format (Hall A tag)**               | **observed** — confirmed in run 001137 (gemroc1/gemroc2, 28066 words/event). PRad-II GEM readout uses this standard Hall-A tag. |
 
 ---
 
@@ -421,7 +420,7 @@ hits for this event. PRad-II tagger observed range: 0-22 words per event.
 when the caller passes a `TdcEventData*` as the 4th optional argument to
 `EvChannel::DecodeEvent`.
 
-### SSP/MPD Bitfield Format (0xE10C, 0x0DEA)
+### SSP/MPD Bitfield Format (0xE10C, 0x0DE9)
 
 Self-describing 32-bit words. Bit 31 = type-defining flag, bits 30:27 = type tag.
 

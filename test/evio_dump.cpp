@@ -922,7 +922,7 @@ static const BankTagInfo bank_tag_info[] = {
     { 0xE109, "FADC250 raw",          "decoded" },
     { 0xE120, "ADC1881M (Fastbus)",   "decoded" },
     { 0xE10C, "SSP",                  "decoded" },
-    { 0x0DEA, "VTP/MPD (GEM)",        "decoded" },
+    { 0x0DE9, "VTP/MPD (GEM)",        "decoded" },
     { 0xE10F, "Run info",             "decoded" },
     { 0xE10E, "DAQ config string",    "info"    },
     { 0xE10B, "V1190/V1290 TDC",      "no decoder" },

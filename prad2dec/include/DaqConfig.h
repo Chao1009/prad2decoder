@@ -79,7 +79,8 @@ struct DaqConfig
     uint32_t epics_bank_tag;
 
     // SSP/MPD raw data bank tags (GEM readout)
-    // Multiple tags: 0xE10C (SSP trigger in TI master), 0x0DEA (VTP/MPD GEM data)
+    // Multiple tags: 0xE10C (SSP trigger in TI master), 0x0DE9 (VTP/MPD GEM data —
+    // Hall-A standard tag, confirmed in PRad-II run 001137)
     std::vector<uint32_t> ssp_bank_tags;
 
     // FADC250 hardware-format raw data bank tag (0xE109, used when rol2 is skipped)

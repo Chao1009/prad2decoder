@@ -25,7 +25,7 @@
         "run_info":        "0xE10F",
         "daq_config":      "0xE10E",
         "epics_data":      "0xE114",
-        "ssp_raw":         ["0xE10C", "0x0DEA"],
+        "ssp_raw":         ["0xE10C", "0x0DE9"],
         "fadc_raw":        "0xE109",
         "tdc":             "0xE107"
     },
@@ -109,7 +109,7 @@
             "0xE107": { "module": "v1190_tdc",         "product": "tdc",        "type": "UINT32"    },
 
             "0xE10C": { "module": "ssp_mpd",           "product": "gem",        "type": "UINT32"    },
-            "0x0DEA": { "module": "mpd_raw",           "product": "gem",        "type": "UINT32"    },
+            "0x0DE9": { "module": "mpd_raw",           "product": "gem",        "type": "UINT32"    },
 
             "0xE122": { "module": "vtp_ecal",          "product": "vtp",        "type": "UINT32"    },
 
