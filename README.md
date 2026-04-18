@@ -19,6 +19,8 @@ CMake >= 3.14, C++17. Dependencies (`evio`, `et`) are resolved from the Hall-B C
 Optional flags:
 - `-DBUILD_ANALYSIS=ON` — ROOT-based replay and analysis tools (requires ROOT 6.0+)
 - `-DBUILD_GUI=ON` — Qt standalone viewer and remote client (requires Qt6 or Qt5 WebEngine)
+- `-DBUILD_PYTHON=ON` — pybind11 bindings `prad2py` (enables the Python GEM tools)
+- `-DPython_EXECUTABLE=<path>` — force a specific Python interpreter (needed on systems with multiple `python3` versions in PATH — CMake otherwise may pick the wrong one)
 - `-DWITH_ET=OFF` — disable ET (live monitoring); required on Windows
 - `-DEVIO_SOURCE=fetch` — force fetching evio from GitHub (no CODA needed)
 
@@ -124,9 +126,10 @@ prad2_client -H clonpc19 -p 8080       # connect to remote server
 
 ## Tools
 
-See [test/README.md](test/README.md) (diagnostic: `evio_dump`, `gem_dump`, `ped_calc`, `livetime`, `ts_dump`) and [analysis/README.md](analysis/README.md) (ROOT replay and physics analysis).
-
-Python utilities: [scripts/README.md](scripts/README.md) (HyCal scaler map, pedestal monitor, trigger mask editor, GEM visualization).
+- [test/README.md](test/README.md) — generic EVIO diagnostics (`evio_dump`, `ped_calc`, plus dev tools in `test/dev/`).
+- [gem/README.md](gem/README.md) — GEM tracker tools (`gem_dump`, `gem_event_viewer`, `gem_cluster_view`, `gem_layout`, …) plus detector reference notes.
+- [analysis/README.md](analysis/README.md) — ROOT-based replay and physics analysis.
+- [scripts/README.md](scripts/README.md) — HyCal scaler map, pedestal monitor, trigger-mask editor, tagger viewer.
 
 ## Installation
 
@@ -136,12 +139,28 @@ cmake --build build -j$(nproc)
 cmake --install build
 ```
 
-Set up the environment (sets `PATH`, `LD_LIBRARY_PATH`, `PRAD2_DATABASE_DIR`, `PRAD2_RESOURCE_DIR`):
+Set up the environment (sets `PATH`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `PRAD2_DATABASE_DIR`, `PRAD2_RESOURCE_DIR`):
 
 ```bash
 source /opt/prad2/bin/setup.sh    # bash/zsh
 source /opt/prad2/bin/setup.csh   # csh/tcsh
 ```
+
+`setup.csh` bakes the install prefix in at configure time, so sourcing it from inside another script (e.g. a JLab farm wrapper that also `module load`s ROOT) works correctly. If you later move the install tree, `setenv PRAD2_DIR <new-prefix>` before sourcing to override.
+
+### Python tools (optional)
+
+The GEM Python tools (`gem_event_viewer`, `gem_cluster_view`, …) need `matplotlib`, `numpy`, and `PyQt6`. On shared systems where you can't `pip install` into site-packages, create a venv next to the install and point the wrapper at it:
+
+```bash
+python3 -m venv /opt/prad2/venv
+source /opt/prad2/venv/bin/activate     # or activate.csh for tcsh
+pip install -r /path/to/prad2evviewer/scripts/requirements.txt
+```
+
+Then source the venv's `activate` *before* sourcing `setup.csh` in your personal wrapper script.
+
+**Watch out on RHEL 9** — CMake's `find_package(Python)` may pick up `/usr/bin/python3.12` over the venv's 3.9. Pass `-DPython_EXECUTABLE=$(which python3)` at configure time to pin the interpreter explicitly, otherwise `prad2py.cpython-312-*.so` won't be importable from your 3.9 venv.
 
 ## Configuration
 
@@ -154,13 +173,15 @@ PRad support: use `-D database/prad1/prad_daq_config.json` with the server.
 ```
 prad2dec/           libprad2dec — EVIO/ET reader, FADC250/SSP/ADC1881M decoders
 prad2det/           libprad2det — HyCal/GEM clustering and reconstruction
+python/             pybind11 bindings (prad2py)
 src/                Server, Qt GUI, data source layer
 resources/          Web frontend (HTML/CSS/JS)
 database/           DAQ config, channel maps, calibration constants
-test/               Diagnostic CLI tools
+test/               Generic EVIO diagnostic CLI tools (test/dev/ = not installed)
+gem/                GEM tracker: gem_dump binary + Python tools + README
 analysis/           ROOT-based replay and physics analysis (optional)
 calibration/        HyCal calibration scan tools
-scripts/            Python monitoring and visualization utilities
+scripts/            HyCal / tagger / trigger Python utilities
 docs/               ROL references, API documentation
 ```
 

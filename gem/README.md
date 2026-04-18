@@ -15,6 +15,23 @@ All GEM-specific code lives here:
 | `check_strip_map.py` | Dev: cross-validate pipeline vs PRadAnalyzer and mpd_gem_view_ssp |
 | `CMakeLists.txt` | Builds `gem_dump`, installs binary + Python scripts |
 
+## Common CLI conventions
+
+Every tool in this directory takes the same short + long flag pair for
+the config files:
+
+| Short | Long | Meaning |
+|---|---|---|
+| `-D` | `--daq-config` | `daq_config.json` (gem_dump) |
+| `-G` | `--gem-map` | `gem_map.json` (all tools) |
+| `-P` | `--gem-ped` | `gem_ped.json` (gem_dump, gem_event_viewer) |
+| `-o` | `--output` | output file (gem_dump, gem_cluster_view) |
+
+If a flag is omitted, the Python tools look in `$PRAD2_DATABASE_DIR`
+first (set by `setup.sh` / `setup.csh`), then next to the script, then
+CWD-relative fallbacks.  `gem_dump`'s C++ resolver has the same policy
+via `prad2::resolve_data_dir()`.
+
 ## Detector facts (as of 2026-04-18)
 
 ### Geometry
@@ -81,18 +98,29 @@ with Prev/Next/Goto. Threshold sliders re-run reconstruction on cached SSP
 data — no disk I/O per slider change. Advanced tuning dock exposes every
 `GemSystem` / `GemCluster` knob.
 
-### Dump + visualize single events
+### Dump + visualize interesting events
 
 ```bash
-# Pick events of interest (default: first 1 event with 2-D hits)
-gem_dump -m evdump run.evio.00000 -n 10 -f clusters=2:3 -o /tmp/evt.json
+# Pick up to 10 matching events — each one written to <stem>_<evnum>.json.
+gem_dump -m evdump run.evio.00000 -P gem_ped.json \
+         -n 10 -f clusters=2:3 -o /tmp/evt.json
+# produces /tmp/evt_3.json, /tmp/evt_6.json, /tmp/evt_15.json ...
 
-# Render them to PNG
-gem_cluster_view /tmp/evt_1.json
+# Render every dumped event → one PNG per JSON input.
+gem_cluster_view /tmp/evt_*.json             # shell-expanded (bash/zsh)
+gem_cluster_view "/tmp/evt_*.json"            # tcsh: quote so we expand
 ```
 
 `-f` is a boolean filter — `clusters=2:3` = "≥2 clusters in ≥3 detectors".
-See `gem_dump --help` for the full grammar.
+See `gem_dump --help` for the full grammar.  `-n` rules:
+
+| `-n K` | Behaviour |
+|---|---|
+| omitted | dump 1 event (default, single `<stem>.json` with no suffix) |
+| `-n 1` | same as omitted |
+| `-n K` (K ≥ 2) | dump up to K matching events → suffixed files |
+| `-n 0` | dump every matching event |
+| `-e N` | dump only event N, ignoring `-n` and `-f` |
 
 ### Pedestal calibration (only needed for full-readout test data)
 
@@ -135,8 +163,8 @@ matching is succeeding).
 ### Visualize strip layout
 
 ```bash
-gem_layout                    # uses database/gem_map.json
-gem_layout path/to/alt_map.json
+gem_layout                          # auto-find gem_map.json via $PRAD2_DATABASE_DIR
+gem_layout -G path/to/alt_map.json  # override
 ```
 
 Draws every strip of one detector (all 4 are identical), overlays APV
@@ -145,7 +173,8 @@ boundaries and the beam hole, writes `gem_layout.png`.
 ### Dev sanity check
 
 ```bash
-python gem/check_strip_map.py
+python gem/check_strip_map.py               # from source tree
+python $PRAD2_DIR/share/prad2evviewer/gem/check_strip_map.py   # from install
 ```
 
 For every APV in `gem_map.json`, maps all 128 channels through both
