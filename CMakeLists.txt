@@ -44,6 +44,13 @@ endif()
 get_filename_component(RESOURCE_DIR "${RESOURCE_DIR}" ABSOLUTE)
 
 # ---------------------------------------------------------------------------
+# Install-dir conventions — pulled up here so every add_subdirectory()
+# below can use CMAKE_INSTALL_BINDIR / CMAKE_INSTALL_DATADIR / _LIBDIR in
+# its own install() calls.
+# ---------------------------------------------------------------------------
+include(GNUInstallDirs)
+
+# ---------------------------------------------------------------------------
 # Core libraries (always built)
 # ---------------------------------------------------------------------------
 add_subdirectory(prad2dec)                    # libprad2dec.a + WITH_ET option
@@ -193,8 +200,6 @@ endif()
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
-include(GNUInstallDirs)
-
 install(TARGETS prad2_server evio_dump ped_calc
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(BUILD_GUI)
