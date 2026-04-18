@@ -214,7 +214,7 @@ std::array<float, 3> PhysicsTools::FitPeakResolution(int module_id) const
         return {0.f, 0.f, 0.f};
 
     TH1F *h = module_hists_[module_index].get();
-    if (!h) return {0.f, 0.f, 0.f};
+    if (!h || h->GetEntries() < 100) return {0.f, 0.f, 100.f};
 
     // find peak bin, fit Gaussian around it
     double peak0 = h->GetBinCenter(h->GetMaximumBin());

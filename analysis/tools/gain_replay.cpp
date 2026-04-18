@@ -259,8 +259,8 @@ done:
         if (lms_ref[i] > 0) n_lms++;
     }
     out << std::left;
-    out << std::setw(6) << "Name" << std::setw(12) << "lms_peak" << std::setw(12) << "lms_sigma" << std::setw(12) << "lms_chi2" 
-        << std::setw(16) << "alpha_peak (g1)" << std::setw(16) << "alpha_sigma (g2)" << std::setw(16) << "alpha_chi2 (g3)\n";
+    out << std::setw(6) << "Name" << std::setw(12) << "lms_peak" << std::setw(12) << "lms_sigma" << std::setw(12) << "lms_chi2/ndf" 
+        << std::setw(16) << "alpha_peak (g1)" << std::setw(16) << "alpha_sigma (g2)" << std::setw(16) << "alpha_chi2/ndf (g3)" << "\n";
     for(int i = 1; i <= 3; i++){
         out << std::setw(6) << ("LMS" + std::to_string(i))
             << std::setw(12) << std::fixed << std::setprecision(3) << lms_ref[i]
