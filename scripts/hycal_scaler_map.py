@@ -21,6 +21,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+#local path for testing on farm
+#sys.path.append('/home/wrightso/.local/bin/*')
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QSizePolicy,
@@ -40,7 +43,7 @@ DB_DIR = SCRIPT_DIR / ".." / "database"
 MODULES_JSON = DB_DIR / "hycal_modules.json"
 
 SCALER_PV = "B_DET_HYCAL_FADC_{label}:c"
-POLL_INTERVAL_MS = 10_000   # 10 seconds
+POLL_INTERVAL_MS = 2_500   # 1 seconds
 
 
 # ===========================================================================
@@ -493,11 +496,36 @@ class ScalerMapWindow(QMainWindow):
     # -- actions --
 
     def _refresh(self):
+        W_totalSum = 0
+        topSum = 0
+        botSum = 0
+        leftSum = 0
+        rightSum = 0
         for m in self._scalable:
             v = self._ep.get(m.name)
             if v is not None:
                 self._values[m.name] = float(v)
+                if "W" in m.name and int(m.name.strip("W")!=1125):
+                    W_totalSum += v
+                    if(int(m.name.strip("W"))<578):
+                        topSum += v
+                    else:
+                        botSum += v
+                    if(int(((float(m.name.strip("W"))/34.0)%1)*100)<=50):
+                        leftSum += v
+                    else:
+                        rightSum += v
+
+
         self._map.set_values(self._values)
+
+        #Convert Sums of rates to kHz
+        W_totalSum = W_totalSum/1000.0
+        y_asym = (topSum-botSum)/1000.0
+        x_asym = (rightSum-leftSum)/1000.0
+        #Get Center of the Rate Relative to the center of the beam hole
+        #x_COM = x_asym/(20.5*17)
+        #y_COM = y_asym/(20.5*17)
 
         if self._auto_range_on and self._values:
             self._do_auto_range()
@@ -509,11 +537,15 @@ class ScalerMapWindow(QMainWindow):
         self._conn_lbl.setStyleSheet(f"color:{fg};font:10px Monospace;")
 
         if self._values:
-            lo = min(self._values.values())
-            hi = max(self._values.values())
+            lo = min(self._values.values())/1000.0
+            hi = max(self._values.values())/1000.0
             self.statusBar().showMessage(
-                f"Data: {lo:.0f} .. {hi:.0f}    "
-                f"Channels: {len(self._values)}")
+                f"Data: {lo:.0f}kHz .. {hi:.0f}kHz  "
+                f"Channels: {len(self._values)}  "
+                f"PbWO4 Total: {W_totalSum:.2f}kHz  "
+                f"Ave: {W_totalSum/1152:3f}kHz  "
+                f"Asym (kHz): [{x_asym:.3f}, {y_asym:.3f}]")
+                #f"CoR (mm): [{x_COM:.3f},{y_COM:.3f}]")
 
     def _toggle_polling(self):
         self._polling = not self._polling
