@@ -83,9 +83,8 @@ double fitAndDraw(TH1F* hist, const std::string& out_path, const double fit_rang
 int main(int argc, char *argv[])
 {
     std::string output;
-    float Ebeam = 1100.f;
+    float Ebeam = 3500.f;
     float hycal_z = 6225.f; //mm, the default position of HyCal surface, TO DO: read from database
-    int run_id = 12345;
     
     int max_events = -1;
     int opt;
@@ -103,8 +102,20 @@ int main(int argc, char *argv[])
     }
     if (root_files.empty()) {
         std::cerr << "No input files specified.\n";
-        std::cerr << "Usage: quick_check <input_recon.root|dir> [more files...] [-o out.root] [-n max_events]\n";
+        std::cerr << "Usage: det_calib <input_recon.root|dir> [more files...] [-o out.root] [-n max_events]\n";
         return 1;
+    }
+    // extract run number from first input file name (e.g. prad_023626.00000_recon.root -> 23626)
+    std::string run_str = "unknown";
+    {
+        std::string fname = fs::path(root_files[0]).filename().string();
+        auto ppos = fname.find("prad_");
+        if (ppos != std::string::npos) {
+            size_t s = ppos + 5;
+            size_t e = s;
+            while (e < fname.size() && std::isdigit((unsigned char)fname[e])) e++;
+            if (e > s) run_str = std::to_string(std::stoul(fname.substr(s, e - s)));
+        }
     }
 
     // --- database path ---
@@ -145,7 +156,7 @@ int main(int argc, char *argv[])
     TH1F *center_gem_x[4];
     TH1F *center_gem_y[4];
     for (int d = 0; d < 4; d++) {
-        vertex_gem[d] = new TH1F(Form("vertex_gem%d", d), Form("Moller vertex z distance GEM%d;Z (mm);Counts", d), 2000, 5500, 7500);
+        vertex_gem[d] = new TH1F(Form("vertex_gem%d", d), Form("Moller vertex z distance GEM%d;Z (mm);Counts", d), 2000, 4500, 6500);
         center_gem[d] = new TH2F(Form("center_gem%d", d), Form("Moller center distribution GEM%d;X (mm);Y (mm)", d), 200, -100, 100, 200, -100, 100);
         center_gem_x[d] = new TH1F(Form("center_gem_x%d", d), Form("Moller center X distribution GEM%d;X (mm);Counts", d), 200, -50, 50);
         center_gem_y[d] = new TH1F(Form("center_gem_y%d", d), Form("Moller center Y distribution GEM%d;Y (mm);Counts", d), 200, -50, 50);
@@ -174,7 +185,7 @@ int main(int argc, char *argv[])
         bool good_moller = false;
         if(ev.match_num == 2){
             float Epair = ev.matchHC_energy[0] + ev.matchHC_energy[1];
-            if (std::abs(Epair - Ebeam) < 5.f * Ebeam * 0.025f / std::sqrt(Ebeam / 1000.f)) {
+            if (std::abs(Epair - Ebeam) < 4.f * Ebeam * 0.025f / std::sqrt(Ebeam / 1000.f)) {
                 good_moller = true;
             }
         }
@@ -219,7 +230,7 @@ int main(int argc, char *argv[])
     }
 
     //hycal Moller events
-    projectToHyCalSurface(hycal_mollers, hycal_z); //project to HyCal surface
+    //projectToHyCalSurface(hycal_mollers, hycal_z); //project to HyCal surface
     for (int i = 0; i < hycal_mollers.size(); i++) {
         vertex_hycal->Fill(physics.GetMollerZdistance(hycal_mollers[i], Ebeam));
         if (i >= 1) {
