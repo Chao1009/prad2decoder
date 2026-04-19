@@ -46,7 +46,7 @@ double beamE = 3500.0; // MeV, can be made configurable
 using EventVars_Recon = prad2::ReconEventData;
 void setupReconBranches(TTree *tree, EventVars_Recon &ev)
 {
-    tree->Branch("event_num",    &ev.event_num,    "event_num/i");
+    tree->Branch("event_num",    &ev.event_num,    "event_num/I");
     tree->Branch("trigger_type", &ev.trigger_type, "trigger_type/b");
     tree->Branch("trigger_bits", &ev.trigger_bits, "trigger_bits/i");
     tree->Branch("timestamp",    &ev.timestamp,    "timestamp/L");
@@ -279,7 +279,7 @@ int main (int argc, char *argv[])
             if(sim->VD_E[j] < 1. / 300.f * beamE) continue; // add some energy threshold to reduce noise
             ev->cl_x[ev->n_clusters] = float(sim->VD_x[j] + gRandom->Gaus(0, 2.6/sqrt(sim->VD_E[j] / 1000.f)));
             ev->cl_y[ev->n_clusters] = float(sim->VD_y[j] + gRandom->Gaus(0, 2.6/sqrt(sim->VD_E[j] / 1000.f)));
-            ev->cl_z[ev->n_clusters] = float(hycal_z + physics.GetShowerDepth(1500, sim->VD_E[j]));
+            ev->cl_z[ev->n_clusters] = float(hycal_z);
             ev->cl_energy[ev->n_clusters] = float(sim->VD_E[j]);
             ev->cl_nblocks[ev->n_clusters] = 1;
             ev->cl_center[ev->n_clusters] = findModuleID(hycal, sim->VD_x[j], sim->VD_y[j]);
@@ -310,7 +310,7 @@ int main (int argc, char *argv[])
         for (int i = 0; i < ev->n_gem_hits; ++i)
             gem_hits[ev->det_id[i]].push_back(GEMHit{ev->gem_x[i], ev->gem_y[i], gem_z[ev->det_id[i]], ev->det_id[i]});
 
-        GetProjection(hc_hits, 6225.f);
+        //GetProjection(hc_hits, 6225.f);
 
         matching.SetMatchRange(10.f); // matching radius in mm, 15mm default
         //matching.SetSquareSelection(true); // use square cut instead of circular cut
