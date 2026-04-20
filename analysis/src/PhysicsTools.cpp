@@ -273,10 +273,10 @@ float PhysicsTools::ExpectedEnergy(float theta_deg, float Ebeam, const std::stri
         return expectE - eloss;
     }
     if (type == "ee") {
-        // Moller scattering: E' = E * cos^2(theta) / (1 + (E/m)(sin^2(theta)))
-        // simplified from CM frame kinematics
+        // Moller scattering: exact lab-frame formula from 4-momentum conservation
+        // E' = m * [(gamma+1) + (gamma-1)*cos^2(theta)] / [(gamma+1) - (gamma-1)*cos^2(theta)]
         float gamma = Ebeam / M_ELECTRON;
-        float num = (gamma + 1.f) * cos_t * cos_t;
+        float num = (gamma + 1.f) + (gamma - 1.f) * cos_t * cos_t;
         float den = (gamma + 1.f) - (gamma - 1.f) * cos_t * cos_t;
         if (den <= 0) return 0.f;
         float expectE = M_ELECTRON * num / den;
