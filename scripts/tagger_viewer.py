@@ -1206,9 +1206,12 @@ class TdcViewer(QMainWindow):
         worker.moveToThread(thread)
 
         # Live progress → dialog value + label text.
+        # Grow the max proactively at 80 % so the bar doesn't visibly snap
+        # from 100 % back to ~50 % when it catches up on the next tick.
         def _on_progress(events: int, hits: int):
-            if dlg.maximum() > 0 and events > dlg.maximum():
-                dlg.setMaximum(events * 2)
+            m = dlg.maximum()
+            if m > 0 and events * 5 >= m * 4:
+                dlg.setMaximum(max(events * 2, m * 2))
             dlg.setValue(events)
             dlg.setLabelText(
                 f"Decoding {os.path.basename(path)}\n"
@@ -1764,7 +1767,9 @@ class TdcViewer(QMainWindow):
             )
             return
 
-        nbins = self.bins_spin.value()
+        # 2-D gets coarser binning than the 1-D plots — each cell needs a
+        # reasonable event count or the map looks like shot noise.
+        nbins = max(10, self.bins_spin.value() // 4)
         amin, amax = int(t_a.min()), int(t_a.max())
         bmin, bmax = int(t_b.min()), int(t_b.max())
         if amax <= amin: amax = amin + 1
@@ -1829,8 +1834,9 @@ def _cli_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "-n", "--max-events",
         type=int,
-        default=0,
-        help="When reading an .evio file, stop after N physics events (0 = all).",
+        default=1_000_000,
+        help="When reading an .evio file, stop after N physics events "
+             "(default 1,000,000; pass 0 for unlimited).",
     )
     p.add_argument(
         "-D", "--daq-config",
