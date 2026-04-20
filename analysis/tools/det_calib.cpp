@@ -146,20 +146,20 @@ int main(int argc, char *argv[])
     setupReconBranches(tree, ev);
 
     //output histograms for calibration results
-    TH1F *vertex_hycal = new TH1F("vertex_hycal", "Moller vertex z distance HyCal;Z (mm);Counts", 2000, 5500, 7500);
+    TH1F *vertex_hycal = new TH1F("vertex_hycal", "Moller vertex z distance HyCal;Z (mm);Counts", 600, 5600, 6800);
     TH2F *center_hycal = new TH2F("center_hycal", "Moller center distribution HyCal;X (mm);Y (mm)", 200, -100, 100, 200, -100, 100);
-    TH1F *center_hycal_x = new TH1F("center_hycal_x", "Moller center X distribution HyCal;X (mm);Counts", 200, -50, 50);
-    TH1F *center_hycal_y = new TH1F("center_hycal_y", "Moller center Y distribution HyCal;Y (mm);Counts", 200, -50, 50);
+    TH1F *center_hycal_x = new TH1F("center_hycal_x", "Moller center X distribution HyCal;X (mm);Counts", 80*4, -20, 20);
+    TH1F *center_hycal_y = new TH1F("center_hycal_y", "Moller center Y distribution HyCal;Y (mm);Counts", 80*4, -20, 20);
 
     TH1F *vertex_gem[4];
     TH2F *center_gem[4];
     TH1F *center_gem_x[4];
     TH1F *center_gem_y[4];
     for (int d = 0; d < 4; d++) {
-        vertex_gem[d] = new TH1F(Form("vertex_gem%d", d), Form("Moller vertex z distance GEM%d;Z (mm);Counts", d), 2000, 4500, 6500);
+        vertex_gem[d] = new TH1F(Form("vertex_gem%d", d), Form("Moller vertex z distance GEM%d;Z (mm);Counts", d), 1000, 5200, 6200);
         center_gem[d] = new TH2F(Form("center_gem%d", d), Form("Moller center distribution GEM%d;X (mm);Y (mm)", d), 200, -100, 100, 200, -100, 100);
-        center_gem_x[d] = new TH1F(Form("center_gem_x%d", d), Form("Moller center X distribution GEM%d;X (mm);Counts", d), 200, -50, 50);
-        center_gem_y[d] = new TH1F(Form("center_gem_y%d", d), Form("Moller center Y distribution GEM%d;Y (mm);Counts", d), 200, -50, 50);
+        center_gem_x[d] = new TH1F(Form("center_gem_x%d", d), Form("Moller center X distribution GEM%d;X (mm);Counts", d), 80*5, -20, 20);
+        center_gem_y[d] = new TH1F(Form("center_gem_y%d", d), Form("Moller center Y distribution GEM%d;Y (mm);Counts", d), 80*4, -20, 20);
     }
 
     // --- output file ---
@@ -262,9 +262,9 @@ int main(int argc, char *argv[])
     double gem_center_x[4];
     double gem_center_y[4];
     for (int d = 0; d < 4; d++) {
-        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], Form("calib_result/gem%d_vertex_z", d), 50.);
-        gem_center_x[d] = fitAndDraw(center_gem_x[d], Form("calib_result/gem%d_center_x", d), 1.);
-        gem_center_y[d] = fitAndDraw(center_gem_y[d], Form("calib_result/gem%d_center_y", d), 4.);
+        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], Form("calib_result/gem%d_vertex_z", d), 25.);
+        gem_center_x[d] = fitAndDraw(center_gem_x[d], Form("calib_result/gem%d_center_x", d), 0.3);
+        gem_center_y[d] = fitAndDraw(center_gem_y[d], Form("calib_result/gem%d_center_y", d), 1.);
     }
     //print summary of calibration results
     std::cerr << "HyCal vertex z distance: " << hycal_vertex_z << " mm (pre-entered number " << hycal_z << " mm)" << "\n";
