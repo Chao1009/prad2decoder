@@ -76,7 +76,7 @@ void setupReconBranches(TTree *tree, EventVars_Recon &ev)
 
 static std::vector<std::string> collectRootFiles(const std::string &path);
 void projectToHyCalSurface(PhysicsTools::MollerData &m_data, float hycal_z);
-double fitAndDraw(TH1F* hist, const std::string& out_path, const double fit_range = 4.);
+float fitAndDraw(TH1F* hist, const std::string& out_path, const float survey_position, const float fit_range = 4.);
 
 // ── Main ─────────────────────────────────────────────────────────────────
 
@@ -84,8 +84,13 @@ int main(int argc, char *argv[])
 {
     std::string output;
     float Ebeam = 3500.f;
-    float hycal_z = 6225.f; //mm, the default position of HyCal surface, TO DO: read from database
-    
+    float hycal_z = 6222.5f; //mm, the default position of HyCal surface, TO DO: read from database
+    float hycal_x = 0.f; //mm, the default center x of HyCal, TO DO: read from database
+    float hycal_y = 0.f; //mm, the default center y of HyCal, TO DO: read from database
+    float gem_z[4] = {5423.71, 5384.00, 5823.71, 5784.00}; //mm, the default position of each GEM plane, TO DO: read from database
+    float gem_x[4] = {0., 0., 0., 0.}; //mm, the default center x of each GEM plane, TO DO: read from database
+    float gem_y[4] = {0., 0., 0., 0.}; //mm, the default center y of each GEM plane, TO DO: read from database
+
     int max_events = -1;
     int opt;
     while ((opt = getopt(argc, argv, "o:n:")) != -1) {
@@ -255,25 +260,26 @@ int main(int argc, char *argv[])
     }
 
     //fit histograms, and get the beam position and vertex distance for each detector plane
-    double hycal_vertex_z = fitAndDraw(vertex_hycal, "Poscalib_result/" + run_str +"/hycal_vertex_z", 100.);
-    double hycal_center_x = fitAndDraw(center_hycal_x, "Poscalib_result/" + run_str +"/hycal_center_x", 2.);
-    double hycal_center_y = fitAndDraw(center_hycal_y, "Poscalib_result/" + run_str +"/hycal_center_y", 2.);
-    double gem_vertex_z[4];
-    double gem_center_x[4];
-    double gem_center_y[4];
+    float hycal_vertex_z = fitAndDraw(vertex_hycal, "Poscalib_result/" + run_str +"/hycal_vertex_z", hycal_z,  100.);
+    float hycal_center_x = fitAndDraw(center_hycal_x, "Poscalib_result/" + run_str +"/hycal_center_x", hycal_x, 2.);
+    float hycal_center_y = fitAndDraw(center_hycal_y, "Poscalib_result/" + run_str +"/hycal_center_y", hycal_y, 2.);
+    float gem_vertex_z[4];
+    float gem_center_x[4];
+    float gem_center_y[4];
     for (int d = 0; d < 4; d++) {
-        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_vertex_z", 25.);
-        gem_center_x[d] = fitAndDraw(center_gem_x[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_x", 0.3);
-        gem_center_y[d] = fitAndDraw(center_gem_y[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_y", 1.);
+        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_vertex_z", gem_z[d], 25.);
+        gem_center_x[d] = fitAndDraw(center_gem_x[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_x", gem_x[d], 0.3);
+        gem_center_y[d] = fitAndDraw(center_gem_y[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_y", gem_y[d], 1.);
     }
     //print summary of calibration results
-    std::cerr << "HyCal vertex z distance: " << hycal_vertex_z << " mm (pre-entered number " << hycal_z << " mm)" << "\n";
-    std::cerr << "HyCal center x: " << hycal_center_x << " mm\n";
-    std::cerr << "HyCal center y: " << hycal_center_y << " mm\n";
+    std::cerr << "HyCal vertex z distance: " << hycal_vertex_z << " mm (survey position " << hycal_z << " mm)" << "\n";
+    std::cerr << "HyCal center x: " << hycal_center_x << " mm (survey position " << hycal_x << " mm)\n";
+    std::cerr << "HyCal center y: " << hycal_center_y << " mm (survey position " << hycal_y << " mm)\n";
+    
     for (int d = 0; d < 4; d++) {
-        std::cerr << "GEM " << d << " vertex z distance: " << gem_vertex_z[d] << " mm\n";
-        std::cerr << "GEM " << d << " center x: " << gem_center_x[d] << " mm\n";
-        std::cerr << "GEM " << d << " center y: " << gem_center_y[d] << " mm\n";
+        std::cerr << "GEM " << d << " vertex z distance: " << gem_vertex_z[d] << " mm (survey position " << gem_z[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center x: " << gem_center_x[d] << " mm (survey position " << gem_x[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center y: " << gem_center_y[d] << " mm (survey position " << gem_y[d] << " mm)\n";
     }
 
     //save histograms
@@ -323,15 +329,16 @@ void projectToHyCalSurface(PhysicsTools::MollerData &m_data, float hycal_z)
     }
 }
 
-double fitAndDraw(TH1F* hist, const std::string& out_path, const double fit_range){
+float fitAndDraw(TH1F* hist, const std::string& out_path, const float survey_position, const float fit_range){
     TCanvas *c = new TCanvas("", "", 800, 600);
-    double mean = hist->GetBinCenter(hist->GetMaximumBin());
+    float mean = hist->GetBinCenter(hist->GetMaximumBin());
     hist->Fit("gaus", "rq", "", mean-fit_range, mean+fit_range);
     hist->Draw();
     TLatex *latex = new TLatex();
     latex->SetNDC();
     latex->SetTextSize(0.04);
     latex->DrawLatex(0.15, 0.85, Form("%.2f mm +- %.2f mm", hist->GetFunction("gaus")->GetParameter(1), hist->GetFunction("gaus")->GetParError(1)));
+    latex->DrawLatex(0.15, 0.80, Form("Survey position: %.2f mm", survey_position));
     fs::create_directories(fs::path(out_path).parent_path());
     c->SaveAs((out_path + ".png").c_str());
     delete c;
