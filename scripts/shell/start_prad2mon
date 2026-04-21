@@ -14,18 +14,23 @@
 
 # ── Site-specific config — edit these for your setup ───────────────────
 set HOST_MACHINE = "clondaq6"
+set REMOTE_ENV   = "/home/clasrun/prad2_daq/prad2_env.csh"
 set SESSION      = "prad2mon"
 set LOG_DIR      = "/home/clasrun/prad2_daq/monitor"
 set LOG          = "$LOG_DIR/console.log"
 set SERVER_ARGS  = "--et -d /data/stage6"
 
 # ── Remote dispatch: bounce to $HOST_MACHINE if we're elsewhere ────────
-# Assumes the script path ($0) resolves on the target host too — true
-# on JLab hall setups where /home is NFS-mounted across the cluster.
-set THIS_HOST = `hostname -s`
-if ( "$THIS_HOST" != "$HOST_MACHINE" ) then
+# ssh doesn't source interactive-shell startup files, so we explicitly
+# source $REMOTE_ENV (the user's wrapper that activates the venv and
+# sources prad2_setup.csh) before re-invoking ourselves on the remote.
+# Assumes $0 resolves on the target host too — true on JLab hall setups
+# where /home is NFS-mounted. Uses a prefix glob so both "clondaq6"
+# and "clondaq6.jlab.org" match.
+set THIS_HOST = `hostname`
+if ( "$THIS_HOST" !~ "${HOST_MACHINE}"* ) then
     echo "Not on ${HOST_MACHINE} (this is ${THIS_HOST}) — forwarding via ssh…"
-    exec ssh -t $HOST_MACHINE "$0" $argv:q
+    exec ssh -t $HOST_MACHINE "source ${REMOTE_ENV} && ${0} ${argv:q}"
 endif
 
 # ── Pre-flight checks ──────────────────────────────────────────────────
