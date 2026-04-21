@@ -51,8 +51,10 @@ status EvChannel::OpenRandomAccess(const std::string &path)
     if (st != S_SUCCESS) return evio_status(st);
 
     // Retrieve the event count from the random-access table.  The table
-    // itself is owned by evio — we only want the size.
-    uint32_t **table = nullptr;
+    // itself is owned by evio — we only want the size.  The const qualifier
+    // on the inner pointer matches evio-4/6's public header:
+    //   int evGetRandomAccessTable(int, const uint32_t ***, uint32_t *)
+    const uint32_t **table = nullptr;
     uint32_t n = 0;
     int r = evGetRandomAccessTable(fHandle, &table, &n);
     if (r != S_SUCCESS) {
