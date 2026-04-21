@@ -9,13 +9,17 @@ set(ANA_SOURCES src/Replay.cpp src/PhysicsTools.cpp src/MatchingTools.cpp)
 set(ANA_DEPS prad2dec prad2det nlohmann_json::nlohmann_json
     ROOT::Core ROOT::Tree ROOT::RIO ROOT::Hist ROOT::Graf ROOT::Gpad)
 
-# helper: add an analysis tool executable
+# helper: add an analysis tool executable.  The CMake target name stays
+# clean for internal referencing; the built/installed binary gets a
+# `prad2ana_` prefix so multiple projects can coexist in the same bindir.
 function(add_analysis_tool name)
     add_executable(${name} ${ARGN} ${ANA_SOURCES})
     target_include_directories(${name} PRIVATE include)
     target_compile_definitions(${name} PRIVATE DATABASE_DIR="${DATABASE_DIR}")
     target_link_libraries(${name} PRIVATE ${ANA_DEPS})
-    set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    set_target_properties(${name} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+        OUTPUT_NAME "prad2ana_${name}")
 endfunction()
 
 add_analysis_tool(replay_rawdata tools/replay_rawdata.cpp)

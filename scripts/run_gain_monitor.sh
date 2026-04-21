@@ -69,7 +69,7 @@ for (( i=0; i<NCPU; i++ )); do
     PARTFILES+=("${PARTFILE}")
 
     echo "Job ${i}: file numbers ${START_NUM} to ${END_NUM} (${COUNT} files)"
-    ./bin/gain_monitor -r "${RUN}" -s "${START_NUM}" -e "${END_NUM}" \
+    prad2ana_gain_monitor -r "${RUN}" -s "${START_NUM}" -e "${END_NUM}" \
         -i "${INPUTDIR}" -o "${OUTPUTDIR}" &
     PIDS+=($!)
 done
@@ -89,6 +89,6 @@ rm -f "${PARTFILES[@]}"
 
 # Fit the merged file
 echo "Fitting ${FINALFILE}"
-./bin/gain_fitter -r "${RUN}" -d "${OUTPUTDIR}"
+prad2ana_gain_fitter -r "${RUN}" -d "${OUTPUTDIR}"
 
 echo "Done."

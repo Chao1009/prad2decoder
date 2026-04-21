@@ -11,24 +11,28 @@ cmake --build build -j$(nproc)
 
 ### Replay
 
+> All analysis executables are installed with a `prad2ana_` prefix to avoid
+> name collisions in a shared bindir.  The tool names below refer to the
+> built binary — e.g. `prad2ana_replay_rawdata`.
+
 **replay_rawdata** — Single EVIO file to ROOT tree with per-channel waveform data.
 ```bash
-replay_rawdata <input.evio> [-o output.root] [-n max_events] [-p]
+prad2ana_replay_rawdata <input.evio> [-o output.root] [-n max_events] [-p]
 ```
 
 **replay_rawdata_m** — Multi-file, multi-threaded version of `replay_rawdata`. Processes all EVIO segments in a directory.
 ```bash
-replay_rawdata_m <evio_dir> [-f max_files] [-n max_events] [-p] [-j num_threads] [-D daq_config.json] [-o merged.root]
+prad2ana_replay_rawdata_m <evio_dir> [-f max_files] [-n max_events] [-p] [-j num_threads] [-D daq_config.json] [-o merged.root]
 ```
 
 **replay_recon** — HyCal reconstruction replay with clustering and per-module energy histograms.
 ```bash
-replay_recon <input.evio> [-o output.root] [-c config.json] [-D daq_config.json] [-n N]
+prad2ana_replay_recon <input.evio> [-o output.root] [-c config.json] [-D daq_config.json] [-n N]
 ```
 
 **replay_recon_m** — Multi-file, multi-threaded version of `replay_recon`. Supports GEM pedestal and zero-suppression options.
 ```bash
-replay_recon_m <evio_dir> [-f max_files] [-n max_events] [-p] [-j num_threads] [-D daq_config.json] [-g gem_pedestal.json] [-z zerosup_threshold] [-o merged.root]
+prad2ana_replay_recon_m <evio_dir> [-f max_files] [-n max_events] [-p] [-j num_threads] [-D daq_config.json] [-g gem_pedestal.json] [-z zerosup_threshold] [-o merged.root]
 ```
 - `-p`  read PRad-I data format (no GEM)
 
@@ -36,19 +40,19 @@ replay_recon_m <evio_dir> [-f max_files] [-n max_events] [-p] [-j num_threads] [
 
 **epCalib** — Elastic e-p calibration. Fits the elastic peak per module from rawdata ROOT files (peak mode) and writes gain correction constants.
 ```bash
-epCalib <input.root> [-o output_calib_file] [-D daq_config.json] [-n max_events]
+prad2ana_epCalib <input.root> [-o output_calib_file] [-D daq_config.json] [-n max_events]
 ```
 
 ### Physics Analysis
 
 **analysis_example** — Example offline analysis reading reconstructed ROOT trees. Fills energy, hit-position, and Moller-event histograms with optional GEM matching.
 ```bash
-analysis_example <input_recon.root> [-o output.root] [-n max_events]
+prad2ana_analysis_example <input_recon.root> [-o output.root] [-n max_events]
 ```
 
 **cosmic_test** — Cosmic-ray analysis tool for commissioning. Reads raw waveform data and produces per-channel signal distributions.
 ```bash
-cosmic_test <input.root> [-o output.root] [-D daq_config.json] [-n max_events]
+prad2ana_cosmic_test <input.root> [-o output.root] [-D daq_config.json] [-n max_events]
 ```
 
 ### LMS / Alpha Normalization
