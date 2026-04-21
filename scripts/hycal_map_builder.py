@@ -53,7 +53,8 @@ from PyQt6.QtGui import QColor, QFont, QPen
 
 from hycal_geoview import (
     Module, load_modules, HyCalMapWidget, cmap_qcolor,
-    PALETTES, PALETTE_NAMES, apply_dark_palette,
+    PALETTES, PALETTE_NAMES, apply_theme_palette, set_theme,
+    available_themes, THEME,
 )
 
 
@@ -325,7 +326,7 @@ class MapBuilderWindow(QMainWindow):
     def _build_ui(self):
         self.setWindowTitle("HyCal Map Builder")
         self.resize(900, 960)
-        apply_dark_palette(self)
+        apply_theme_palette(self)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -337,17 +338,18 @@ class MapBuilderWindow(QMainWindow):
         top = QHBoxLayout()
         title = QLabel("HYCAL MAP BUILDER")
         title.setFont(QFont("Monospace", 14, QFont.Weight.Bold))
-        title.setStyleSheet("color:#58a6ff;")
+        title.setStyleSheet(f"color:{THEME.ACCENT};")
         top.addWidget(title)
 
         top.addStretch()
 
         self._file_lbl = QLabel("(no file loaded)")
         self._file_lbl.setFont(QFont("Monospace", 10))
-        self._file_lbl.setStyleSheet("color:#8b949e;")
+        self._file_lbl.setStyleSheet(f"color:{THEME.TEXT_DIM};")
         top.addWidget(self._file_lbl)
 
-        top.addWidget(self._make_btn("Open File...", "#58a6ff", self._open_file))
+        top.addWidget(self._make_btn("Open File...", THEME.ACCENT,
+                                     self._open_file))
         root.addLayout(top)
 
         # -- map --
@@ -363,14 +365,16 @@ class MapBuilderWindow(QMainWindow):
         self._field_box.setMinimumWidth(160)
         self._field_box.setFont(QFont("Monospace", 11))
         self._field_box.setStyleSheet(
-            "QComboBox{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
-            "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;}")
+            f"QComboBox{{background:{THEME.PANEL};color:{THEME.TEXT};"
+            f"border:1px solid {THEME.BORDER};border-radius:8px;"
+            f"padding:2px 6px;}}"
+            f"QComboBox QAbstractItemView{{background:{THEME.PANEL};"
+            f"color:{THEME.TEXT};}}")
         self._field_box.currentTextChanged.connect(self._on_field_changed)
         ctrl.addWidget(self._field_box)
 
         ctrl.addSpacing(12)
-        ctrl.addWidget(self._make_btn("Palette \u25B6", "#c9d1d9",
+        ctrl.addWidget(self._make_btn("Palette \u25B6", THEME.TEXT,
                                       self._cycle_palette))
 
         ctrl.addSpacing(12)
@@ -380,18 +384,15 @@ class MapBuilderWindow(QMainWindow):
         ctrl.addWidget(self._min_edit)
         ctrl.addWidget(self._styled_label("-"))
         ctrl.addWidget(self._max_edit)
-        ctrl.addWidget(self._make_btn("Apply", "#c9d1d9", self._apply_range))
+        ctrl.addWidget(self._make_btn("Apply", THEME.TEXT, self._apply_range))
 
-        self._auto_btn = self._make_btn("Auto 2-98%", "#d29922",
+        self._auto_btn = self._make_btn("Auto 2-98%", THEME.WARN,
                                         self._toggle_auto_range)
         ctrl.addWidget(self._auto_btn)
         self._update_auto_btn()
 
-        self._log_btn = self._make_btn("Log: OFF", "#8b949e", self._toggle_log)
+        self._log_btn = self._make_btn("Log: OFF", THEME.TEXT_DIM, self._toggle_log)
         ctrl.addWidget(self._log_btn)
-
-        self._theme_btn = self._make_btn("☾ Night", "#c9d1d9", self._toggle_theme)
-        ctrl.addWidget(self._theme_btn)
 
         ctrl.addSpacing(12)
         ctrl.addWidget(self._styled_label("PbGlass \u03B1:"))
@@ -400,16 +401,16 @@ class MapBuilderWindow(QMainWindow):
         self._alpha_slider.setValue(100)
         self._alpha_slider.setFixedWidth(120)
         self._alpha_slider.setStyleSheet(
-            "QSlider::groove:horizontal{background:#30363d;height:4px;border-radius:2px;}"
-            "QSlider::sub-page:horizontal{background:#58a6ff;height:4px;border-radius:2px;}"
-            "QSlider::handle:horizontal{background:#58a6ff;width:12px;"
-            "margin:-5px 0;border-radius:6px;}"
-            "QSlider::handle:horizontal:hover{background:#79b8ff;}")
+            f"QSlider::groove:horizontal{{background:{THEME.BORDER};height:4px;border-radius:2px;}}"
+            f"QSlider::sub-page:horizontal{{background:{THEME.ACCENT};height:4px;border-radius:2px;}}"
+            f"QSlider::handle:horizontal{{background:{THEME.ACCENT};width:12px;"
+            f"margin:-5px 0;border-radius:6px;}}"
+            f"QSlider::handle:horizontal:hover{{background:{THEME.ACCENT_STRONG};}}")
         self._alpha_slider.valueChanged.connect(self._on_alpha_changed)
         ctrl.addWidget(self._alpha_slider)
         self._alpha_lbl = QLabel("100%")
         self._alpha_lbl.setFont(QFont("Monospace", 10))
-        self._alpha_lbl.setStyleSheet("color:#8b949e;")
+        self._alpha_lbl.setStyleSheet(f"color:{THEME.TEXT_DIM};")
         self._alpha_lbl.setFixedWidth(40)
         ctrl.addWidget(self._alpha_lbl)
 
@@ -422,16 +423,16 @@ class MapBuilderWindow(QMainWindow):
         self._info = QLabel("Hover over a module")
         self._info.setFont(QFont("Monospace", 11))
         self._info.setStyleSheet(
-            "QLabel{background:#161b22;color:#c9d1d9;padding:4px 8px;"
-            "border:1px solid #30363d;border-radius:4px;}")
+            f"QLabel{{background:{THEME.PANEL};color:{THEME.TEXT};padding:4px 8px;"
+            f"border:1px solid {THEME.BORDER};border-radius:8px;}}")
         self._info.setFixedHeight(28)
         info_row.addWidget(self._info, stretch=1)
 
         self._stats_lbl = QLabel("")
         self._stats_lbl.setFont(QFont("Monospace", 11))
         self._stats_lbl.setStyleSheet(
-            "QLabel{background:#161b22;color:#8b949e;padding:4px 8px;"
-            "border:1px solid #30363d;border-radius:4px;}")
+            f"QLabel{{background:{THEME.PANEL};color:{THEME.TEXT_DIM};padding:4px 8px;"
+            f"border:1px solid {THEME.BORDER};border-radius:8px;}}")
         self._stats_lbl.setFixedHeight(28)
         info_row.addWidget(self._stats_lbl)
         root.addLayout(info_row)
@@ -441,17 +442,17 @@ class MapBuilderWindow(QMainWindow):
         f = QFont("Monospace", 11); f.setBold(True)
         btn.setFont(f)
         btn.setStyleSheet(
-            f"QPushButton{{background:#21262d;color:{fg};"
-            f"border:1px solid #30363d;padding:5px 14px;"
-            f"border-radius:4px;}}"
-            f"QPushButton:hover{{background:#30363d;}}")
+            f"QPushButton{{background:{THEME.BUTTON};color:{fg};"
+            f"border:1px solid {THEME.BORDER};padding:5px 14px;"
+            f"border-radius:8px;}}"
+            f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}")
         btn.clicked.connect(slot)
         return btn
 
     def _styled_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setFont(QFont("Monospace", 11))
-        lbl.setStyleSheet("color:#c9d1d9;")
+        lbl.setStyleSheet(f"color:{THEME.TEXT};")
         return lbl
 
     def _styled_edit(self, text: str) -> QLineEdit:
@@ -459,8 +460,8 @@ class MapBuilderWindow(QMainWindow):
         e.setFixedWidth(90)
         e.setFont(QFont("Monospace", 11))
         e.setStyleSheet(
-            "QLineEdit{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}")
+            f"QLineEdit{{background:{THEME.PANEL};color:{THEME.TEXT};"
+            f"border:1px solid {THEME.BORDER};border-radius:8px;padding:2px 6px;}}")
         e.returnPressed.connect(self._apply_range)
         return e
 
@@ -579,16 +580,16 @@ class MapBuilderWindow(QMainWindow):
     def _update_auto_btn(self):
         if self._auto_scale_on:
             self._auto_btn.setStyleSheet(
-                "QPushButton{background:#d29922;color:#0d1117;"
-                "border:1px solid #d29922;padding:5px 14px;"
-                "border-radius:4px;}"
-                "QPushButton:hover{background:#e0a82b;}")
+                f"QPushButton{{background:{THEME.WARN};color:{THEME.BG};"
+                f"border:1px solid {THEME.WARN};padding:5px 14px;"
+                f"border-radius:8px;}}"
+                f"QPushButton:hover{{background:{THEME.WARN};}}")
         else:
             self._auto_btn.setStyleSheet(
-                "QPushButton{background:#21262d;color:#d29922;"
-                "border:1px solid #30363d;padding:5px 14px;"
-                "border-radius:4px;}"
-                "QPushButton:hover{background:#30363d;}")
+                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.WARN};"
+                f"border:1px solid {THEME.BORDER};padding:5px 14px;"
+                f"border-radius:8px;}}"
+                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}")
 
     def _cycle_palette(self):
         self._map.set_palette(self._map.palette_idx() + 1)
@@ -603,16 +604,11 @@ class MapBuilderWindow(QMainWindow):
         if on:
             self._log_btn.setText("Log: ON")
             self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace("#8b949e", "#58a6ff"))
+                self._log_btn.styleSheet().replace(THEME.TEXT_DIM, THEME.ACCENT))
         else:
             self._log_btn.setText("Log: OFF")
             self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace("#58a6ff", "#8b949e"))
-
-    def _toggle_theme(self):
-        on = not self._map.is_light_theme()
-        self._map.set_light_theme(on)
-        self._theme_btn.setText("☀ Day" if on else "☾ Night")
+                self._log_btn.styleSheet().replace(THEME.ACCENT, THEME.TEXT_DIM))
 
     def _on_hover(self, name: str):
         parts = [name]
@@ -639,7 +635,11 @@ def main():
                     help="Initial field to display (default: first field)")
     ap.add_argument("--modules", type=Path, default=MODULES_JSON,
                     help=f"Path to hycal_modules.json (default: {MODULES_JSON})")
+    ap.add_argument("--theme", choices=available_themes(), default="dark",
+                    help="Colour theme (default: dark)")
     args = ap.parse_args()
+
+    set_theme(args.theme)
 
     if not args.modules.is_file():
         print(f"ERROR: hycal modules file not found: {args.modules}",

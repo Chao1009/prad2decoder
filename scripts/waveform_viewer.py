@@ -45,7 +45,8 @@ from PyQt6.QtGui import (
 
 from hycal_geoview import (
     Module as GeoModule, load_modules as load_geo_modules,
-    HyCalMapWidget, apply_dark_palette,
+    HyCalMapWidget, apply_theme_palette, set_theme, available_themes,
+    THEME, themed,
 )
 
 
@@ -596,7 +597,7 @@ def _find_channel_samples(fadc_evt, roc_tag: int, slot: int, channel: int):
 # ===========================================================================
 
 class Hist1DWidget(QWidget):
-    PAD_L, PAD_R, PAD_T, PAD_B = 58, 14, 26, 34
+    PAD_L, PAD_R, PAD_T, PAD_B = 58, 14, 20, 20
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -611,13 +612,13 @@ class Hist1DWidget(QWidget):
         self._over: int = 0
         self._title: str = ""
         self._xlabel: str = ""
-        self._color: QColor = QColor("#58a6ff")
+        self._color: QColor = QColor(THEME.ACCENT)
         self._log_y: bool = False
         self._hover_idx: int = -1
 
         self._logy_cb = QCheckBox("log Y", self)
         self._logy_cb.setFont(QFont("Monospace", 9, QFont.Weight.Bold))
-        self._logy_cb.setStyleSheet(
+        self._logy_cb.setStyleSheet(themed(
             "QCheckBox{color:#c9d1d9;background:rgba(22,27,34,180);"
             "padding:2px 6px;border:1px solid #30363d;border-radius:3px;}"
             "QCheckBox:hover{color:#ffffff;border:1px solid #58a6ff;}"
@@ -626,7 +627,7 @@ class Hist1DWidget(QWidget):
             "background:#0d1117;}"
             "QCheckBox::indicator:hover{border:1px solid #58a6ff;}"
             "QCheckBox::indicator:checked{background:#58a6ff;"
-            "border:1px solid #58a6ff;}")
+            "border:1px solid #58a6ff;}"))
         self._logy_cb.toggled.connect(self.set_log_y)
         self._logy_cb.adjustSize()
         self._logy_cb.raise_()
@@ -674,22 +675,22 @@ class Hist1DWidget(QWidget):
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        p.fillRect(self.rect(), QColor("#0d1117"))
+        p.fillRect(self.rect(), QColor(THEME.BG))
 
         r = self._plot_rect()
-        p.setPen(QColor("#30363d"))
+        p.setPen(QColor(THEME.BORDER))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(r)
 
         if self._title:
             f = QFont("Monospace", 10); f.setBold(True)
             p.setFont(f)
-            p.setPen(QColor("#c9d1d9"))
+            p.setPen(QColor(THEME.TEXT))
             p.drawText(int(r.left()), int(r.top() - 8), self._title)
 
         n = self._bins.size
         if n == 0 or self._bins.sum() == 0:
-            p.setPen(QColor("#6e7681"))
+            p.setPen(QColor(THEME.TEXT_DIM))
             p.setFont(QFont("Monospace", 10))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, "(no data)")
             return
@@ -720,11 +721,11 @@ class Hist1DWidget(QWidget):
 
         if 0 <= self._hover_idx < n:
             x0 = r.left() + self._hover_idx * bar_w
-            p.setPen(QPen(QColor("#ffffff"), 1.2))
+            p.setPen(QPen(QColor(THEME.SELECT_BORDER), 1.2))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(QRectF(x0, r.top(), max(bar_w, 1.0), r.height()))
 
-        p.setPen(QColor("#6e7681"))
+        p.setPen(QColor(THEME.TEXT_DIM))
         p.setFont(QFont("Monospace", 8))
         for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
             y = r.bottom() - frac * r.height()
@@ -741,11 +742,6 @@ class Hist1DWidget(QWidget):
             val = self._bmin + frac * n * self._bstep
             p.drawText(int(x - 24), int(r.bottom() + 14), f"{val:g}")
 
-        if self._xlabel:
-            p.setFont(QFont("Monospace", 9))
-            p.drawText(int(r.left() + r.width() / 2 - 50),
-                       int(r.bottom() + 28), self._xlabel)
-
         entries = int(self._bins.sum())
         info = f"N={entries:,}"
         if self._under:
@@ -753,7 +749,7 @@ class Hist1DWidget(QWidget):
         if self._over:
             info += f"  over={self._over:,}"
         p.setFont(QFont("Monospace", 9))
-        p.setPen(QColor("#8b949e"))
+        p.setPen(QColor(THEME.TEXT_DIM))
         info_rect = QRectF(r.left(), r.top() - 20,
                            max(1.0, self.width() - self._logy_cb.width()
                                - 20 - r.left()),
@@ -847,22 +843,22 @@ class WaveformPlotWidget(QWidget):
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.fillRect(self.rect(), QColor("#0d1117"))
+        p.fillRect(self.rect(), QColor(THEME.BG))
 
         r = self._plot_rect()
-        p.setPen(QColor("#30363d"))
+        p.setPen(QColor(THEME.BORDER))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(r)
 
         if self._title:
             f = QFont("Monospace", 10); f.setBold(True)
             p.setFont(f)
-            p.setPen(QColor("#c9d1d9"))
+            p.setPen(QColor(THEME.TEXT))
             p.drawText(int(r.left()), int(r.top() - 6), self._title)
 
         n = self._samples.size
         if n < 2:
-            p.setPen(QColor("#6e7681"))
+            p.setPen(QColor(THEME.TEXT_DIM))
             p.setFont(QFont("Monospace", 10))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter,
                        "(no waveform — click Next to load an event)")
@@ -884,7 +880,7 @@ class WaveformPlotWidget(QWidget):
         # pedestal line
         if self._ped_mean != 0:
             y_ped = to_sy(self._ped_mean)
-            p.setPen(QPen(QColor("#6e7681"), 1, Qt.PenStyle.DashLine))
+            p.setPen(QPen(QColor(THEME.TEXT_DIM), 1, Qt.PenStyle.DashLine))
             p.drawLine(int(r.left()), int(y_ped), int(r.right()), int(y_ped))
 
         # peak integration window shading
@@ -897,22 +893,22 @@ class WaveformPlotWidget(QWidget):
                 p.drawRect(QRectF(x0, r.top(), max(1.0, x1 - x0), r.height()))
 
         # waveform line
-        p.setPen(QPen(QColor("#58a6ff"), 1.4))
+        p.setPen(QPen(QColor(THEME.ACCENT), 1.4))
         for i in range(n - 1):
             p.drawLine(int(to_sx(i)),     int(to_sy(float(self._samples[i]))),
                        int(to_sx(i + 1)), int(to_sy(float(self._samples[i + 1]))))
 
         # peak markers
         if self._peaks:
-            p.setPen(QPen(QColor("#f85149"), 1.2))
-            p.setBrush(QColor("#f85149"))
+            p.setPen(QPen(QColor(THEME.DANGER), 1.2))
+            p.setBrush(QColor(THEME.DANGER))
             for pk in self._peaks:
                 cx = to_sx(pk.pos)
                 cy = to_sy(float(self._samples[pk.pos]))
                 p.drawEllipse(QRectF(cx - 3, cy - 3, 6, 6))
 
         # axes
-        p.setPen(QColor("#6e7681"))
+        p.setPen(QColor(THEME.TEXT_DIM))
         p.setFont(QFont("Monospace", 8))
         for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
             y = r.bottom() - frac * r.height()
@@ -932,7 +928,7 @@ class WaveformPlotWidget(QWidget):
 
         info = (f"ped={self._ped_mean:.1f}  rms={self._ped_rms:.2f}  "
                 f"peaks={len(self._peaks)}")
-        p.setPen(QColor("#8b949e"))
+        p.setPen(QColor(THEME.TEXT_DIM))
         p.drawText(QRectF(r.left(), r.top() - 20,
                           max(1.0, r.width() - 8), 14),
                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
@@ -951,9 +947,18 @@ class WaveformGeoView(HyCalMapWidget):
     active module emits moduleClicked with its name.
     """
 
-    AVAIL_COLOR   = QColor("#1f6feb")
-    UNAVAIL_COLOR = QColor("#2a2f36")
-    SELECT_COLOR  = QColor("#ffffff")
+    # Resolved at paint time so the active theme wins; see :class:`THEME`.
+    @property
+    def AVAIL_COLOR(self) -> QColor:
+        return QColor(THEME.ACCENT_STRONG)
+
+    @property
+    def UNAVAIL_COLOR(self) -> QColor:
+        return QColor(THEME.BORDER)
+
+    @property
+    def SELECT_COLOR(self) -> QColor:
+        return QColor(THEME.SELECT_BORDER)
 
     def __init__(self, parent=None):
         super().__init__(parent, show_colorbar=False, include_lms=True,
@@ -1055,7 +1060,7 @@ class WaveformViewerWindow(QMainWindow):
         self._batch_worker: Optional[BatchWorker] = None
         self._batch_thread: Optional[QThread] = None
 
-        apply_dark_palette(self)
+        apply_theme_palette(self)
         self._build_ui()
         self._make_menu()
 
@@ -1073,25 +1078,25 @@ class WaveformViewerWindow(QMainWindow):
 
         self._file_lbl = QLabel("(no file loaded)")
         self._file_lbl.setFont(QFont("Monospace", 10))
-        self._file_lbl.setStyleSheet("color:#8b949e;")
+        self._file_lbl.setStyleSheet(themed("color:#8b949e;"))
         root.addWidget(self._file_lbl)
 
         # module picker row
         picker = QHBoxLayout()
         lbl = QLabel("Module:")
         lbl.setFont(QFont("Monospace", 11, QFont.Weight.Bold))
-        lbl.setStyleSheet("color:#c9d1d9;")
+        lbl.setStyleSheet(themed("color:#c9d1d9;"))
         picker.addWidget(lbl)
         self._combo = QComboBox()
         self._combo.setEditable(True)
         self._combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self._combo.setFont(QFont("Monospace", 11))
         self._combo.setMinimumContentsLength(40)
-        self._combo.setStyleSheet(
+        self._combo.setStyleSheet(themed(
             "QComboBox{background:#161b22;color:#c9d1d9;"
             "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
             "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;"
-            "selection-background-color:#1f6feb;}")
+            "selection-background-color:#1f6feb;}"))
         comp = self._combo.completer()
         if comp is not None:
             comp.setFilterMode(Qt.MatchFlag.MatchContains)
@@ -1106,7 +1111,7 @@ class WaveformViewerWindow(QMainWindow):
 
         self._info = QLabel("")
         self._info.setFont(QFont("Monospace", 10))
-        self._info.setStyleSheet("color:#8b949e;")
+        self._info.setStyleSheet(themed("color:#8b949e;"))
         root.addWidget(self._info)
 
         # -- main split: geo+waveform on the left, 2x2 hists on the right --
@@ -1134,7 +1139,7 @@ class WaveformViewerWindow(QMainWindow):
         right = QWidget()
         right_lay = QVBoxLayout(right)
         right_lay.setContentsMargins(0, 0, 0, 0)
-        right_lay.setSpacing(4)
+        right_lay.setSpacing(0)
         self._h_height   = Hist1DWidget()
         self._h_integral = Hist1DWidget()
         self._h_position = Hist1DWidget()
@@ -1165,15 +1170,15 @@ class WaveformViewerWindow(QMainWindow):
         self._event_spin.setFont(QFont("Monospace", 10))
         self._event_spin.setMinimum(0)
         self._event_spin.setMaximum(0)
-        self._event_spin.setStyleSheet(
+        self._event_spin.setStyleSheet(themed(
             "QSpinBox{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}")
+            "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"))
         self._event_spin.editingFinished.connect(self._on_spin_jump)
         self._event_spin.setEnabled(False)
         nav.addWidget(self._event_spin)
         self._total_lbl = QLabel(" / 0")
         self._total_lbl.setFont(QFont("Monospace", 10))
-        self._total_lbl.setStyleSheet("color:#8b949e;")
+        self._total_lbl.setStyleSheet(themed("color:#8b949e;"))
         nav.addWidget(self._total_lbl)
 
         nav.addSpacing(18)
@@ -1189,7 +1194,7 @@ class WaveformViewerWindow(QMainWindow):
         nav.addStretch()
         self._batch_status = QLabel("")
         self._batch_status.setFont(QFont("Monospace", 10))
-        self._batch_status.setStyleSheet("color:#8b949e;")
+        self._batch_status.setStyleSheet(themed("color:#8b949e;"))
         nav.addWidget(self._batch_status)
         root.addLayout(nav)
 
@@ -1200,19 +1205,19 @@ class WaveformViewerWindow(QMainWindow):
         btn = QPushButton(text)
         bg = "#1f6feb" if primary else "#21262d"
         fg = "#ffffff" if primary else "#c9d1d9"
-        btn.setStyleSheet(
+        btn.setStyleSheet(themed(
             f"QPushButton{{background:{bg};color:{fg};"
             f"border:1px solid #30363d;padding:5px 14px;"
             f"font:bold 10pt Monospace;border-radius:3px;}}"
             f"QPushButton:hover{{background:#30363d;}}"
-            f"QPushButton:disabled{{background:#161b22;color:#484f58;}}")
+            f"QPushButton:disabled{{background:#161b22;color:#484f58;}}"))
         btn.clicked.connect(slot)
         return btn
 
     def _mk_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setFont(QFont("Monospace", 10))
-        lbl.setStyleSheet("color:#c9d1d9;")
+        lbl.setStyleSheet(themed("color:#c9d1d9;"))
         return lbl
 
     def _make_menu(self):
@@ -1558,23 +1563,23 @@ class WaveformViewerWindow(QMainWindow):
         self._h_height.set_data(hits.height.bins, hits.height.bmin,
                                 hits.height.bstep,
                                 under=hits.height.under, over=hits.height.over,
-                                title=f"{mod}  —  Peak Height",
-                                xlabel="ADC", color="#e599f7")
+                                title=f"{mod}  —  Peak Height [ADC]",
+                                color="#e599f7")
         self._h_integral.set_data(hits.integral.bins, hits.integral.bmin,
                                   hits.integral.bstep,
                                   under=hits.integral.under, over=hits.integral.over,
-                                  title=f"{mod}  —  Peak Integral",
-                                  xlabel="ADC·sample", color="#00b4d8")
+                                  title=f"{mod}  —  Peak Integral [ADC·sample]",
+                                  color="#00b4d8")
         self._h_position.set_data(hits.position.bins, hits.position.bmin,
                                   hits.position.bstep,
                                   under=hits.position.under, over=hits.position.over,
-                                  title=f"{mod}  —  Peak Time",
-                                  xlabel="ns", color="#51cf66")
+                                  title=f"{mod}  —  Peak Time [ns]",
+                                  color="#51cf66")
         self._h_npeaks.set_data(hits.npeaks.bins, hits.npeaks.bmin,
                                 hits.npeaks.bstep,
                                 under=hits.npeaks.under, over=hits.npeaks.over,
                                 title=f"{mod}  —  Peaks / Event",
-                                xlabel="count", color="#ffa657")
+                                color="#ffa657")
 
     def _display_waveform(self, fadc_evt):
         key = self._selected_key
@@ -1799,7 +1804,11 @@ def main():
                     metavar="NAME",
                     help="Drop events with any of these trigger bits (repeatable). "
                          "Default: uses config.json setting.")
+    ap.add_argument("--theme", choices=available_themes(), default="dark",
+                    help="Colour theme (default: dark)")
     args = ap.parse_args()
+
+    set_theme(args.theme)
 
     hist_cfg      = load_hist_config(args.config)      if args.config.is_file()      else {}
     roc_to_crate  = load_roc_tag_map(args.daq_config)  if args.daq_config.is_file()  else {}

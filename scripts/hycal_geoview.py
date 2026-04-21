@@ -33,22 +33,143 @@ from PyQt6.QtGui import (
 
 
 # ===========================================================================
-#  Shared dark theme
+#  Shared theme
 # ===========================================================================
+#
+# ``THEME`` is a class whose *class attributes* hold the currently active
+# colours. Stylesheets elsewhere in ``scripts/`` read them through f-strings,
+# so calling ``set_theme(name)`` before any widgets are constructed swaps
+# every colour in one shot. Add new theme names to ``_THEMES`` and new fields
+# to ``THEME`` together; every theme must define every field.
+#
+# Scripts typically wire this up via a ``--theme`` CLI flag:
+#     parser.add_argument("--theme", choices=available_themes(),
+#                         default="dark")
+#     ...
+#     set_theme(args.theme)           # before constructing any window
+#     apply_theme_palette(window)
+
 
 class THEME:
-    """Central dark-theme colour palette shared by every ``scripts/`` GUI."""
-    BG       = "#0d1117"   # window background
-    PANEL    = "#161b22"   # secondary surfaces (text edits, tables)
-    BUTTON   = "#21262d"   # raised controls
-    BORDER   = "#30363d"
-    TEXT     = "#c9d1d9"
-    TEXT_DIM = "#8b949e"
-    ACCENT   = "#58a6ff"
+    """Active palette — class attrs are overwritten by :func:`set_theme`.
+
+    Colour vocabulary follows the Apple-inspired design system in
+    ``DESIGN-apple.md``: binary dark / light surfaces with a single Apple Blue
+    accent reserved for interactive elements.
+    """
+
+    # --- surfaces ---
+    BG            = "#000000"   # window background (Pure Black)
+    CANVAS        = "#000000"   # chart / HyCal map canvas
+    PANEL         = "#1d1d1f"   # input surfaces (text edits, tables, combos)
+    BUTTON        = "#1d1d1f"   # raised controls (Primary Dark)
+    BUTTON_HOVER  = "#28282a"   # button :hover background (Dark Surface 3)
+    ALT_BASE      = "#242426"   # alternating table rows (Dark Surface 5)
+    TOOLTIP       = "#2a2a2d"   # hover/info tooltip background (Dark Surface 4)
+
+    # --- lines ---
+    BORDER        = "#424245"   # subtle border — Apple rarely uses borders
+    GRID          = "#1d1d1f"   # chart gridlines (very faint on dark)
+
+    # --- text ---
+    TEXT          = "#ffffff"
+    TEXT_STRONG   = "#ffffff"
+    TEXT_DIM      = "#86868b"   # Apple secondary grey
+    TEXT_MUTED    = "#6e6e73"   # tertiary / disabled
+
+    # --- semantic / state ---
+    ACCENT        = "#2997ff"   # Bright Blue — links/highlights on dark
+    ACCENT_STRONG = "#0071e3"   # Apple Blue — primary CTA
+    ACCENT_BORDER = "#0071e3"   # focus ring
+    SUCCESS       = "#30d158"   # iOS green (system green dark)
+    WARN          = "#ff9f0a"   # iOS orange
+    DANGER        = "#ff453a"   # iOS red
+    HIGHLIGHT     = "#ff9f0a"   # orange emphasis / drift
+    NO_DATA       = "#1d1d1f"   # map-fill when no value
+
+    # --- misc ---
+    SELECT_BORDER = "#ffffff"   # selected-module border (white on dark)
 
 
-def apply_dark_palette(widget) -> None:
-    """Install the shared dark colour palette on ``widget``.
+_THEMES: Dict[str, Dict[str, str]] = {
+    "dark": {
+        "BG":            "#000000",
+        "CANVAS":        "#000000",
+        "PANEL":         "#1d1d1f",
+        "BUTTON":        "#1d1d1f",
+        "BUTTON_HOVER":  "#28282a",
+        "ALT_BASE":      "#242426",
+        "TOOLTIP":       "#2a2a2d",
+        "BORDER":        "#424245",
+        "GRID":          "#1d1d1f",
+        "TEXT":          "#ffffff",
+        "TEXT_STRONG":   "#ffffff",
+        "TEXT_DIM":      "#86868b",
+        "TEXT_MUTED":    "#6e6e73",
+        "ACCENT":        "#2997ff",
+        "ACCENT_STRONG": "#0071e3",
+        "ACCENT_BORDER": "#0071e3",
+        "SUCCESS":       "#30d158",
+        "WARN":          "#ff9f0a",
+        "DANGER":        "#ff453a",
+        "HIGHLIGHT":     "#ff9f0a",
+        "NO_DATA":       "#1d1d1f",
+        "SELECT_BORDER": "#ffffff",
+    },
+    "light": {
+        # Apple light: #ffffff / #f5f5f7 section alternation, #1d1d1f text,
+        # #0066cc inline links, #0071e3 CTA blue.
+        "BG":            "#ffffff",
+        "CANVAS":        "#f5f5f7",
+        "PANEL":         "#ffffff",
+        "BUTTON":        "#fafafc",
+        "BUTTON_HOVER":  "#ededf2",
+        "ALT_BASE":      "#f5f5f7",
+        "TOOLTIP":       "#ffffff",
+        "BORDER":        "#d2d2d7",
+        "GRID":          "#e5e5ea",
+        "TEXT":          "#1d1d1f",
+        "TEXT_STRONG":   "#000000",
+        "TEXT_DIM":      "#6e6e73",
+        "TEXT_MUTED":    "#86868b",
+        "ACCENT":        "#0066cc",
+        "ACCENT_STRONG": "#0071e3",
+        "ACCENT_BORDER": "#0071e3",
+        "SUCCESS":       "#248a3d",
+        "WARN":          "#c93400",
+        "DANGER":        "#d70015",
+        "HIGHLIGHT":     "#bf5700",
+        "NO_DATA":       "#e5e5ea",
+        "SELECT_BORDER": "#000000",
+    },
+}
+
+
+def available_themes() -> List[str]:
+    """Theme names acceptable to :func:`set_theme`."""
+    return list(_THEMES.keys())
+
+
+def set_theme(name: str) -> None:
+    """Activate one of :data:`_THEMES` by mutating :class:`THEME` in place.
+
+    Call **before** any window is constructed; stylesheets in this project
+    are plain f-strings that read ``THEME.*`` once, at widget creation time.
+    Switching themes after the UI is built will not re-render existing
+    stylesheets.
+    """
+    try:
+        values = _THEMES[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown theme {name!r}. Available: {available_themes()}"
+        ) from exc
+    for key, value in values.items():
+        setattr(THEME, key, value)
+
+
+def apply_theme_palette(widget) -> None:
+    """Install the active theme's :class:`QPalette` on ``widget``.
 
     Sets QPalette roles used by top-level windows throughout the
     ``scripts/`` GUIs. Idempotent.
@@ -65,6 +186,66 @@ def apply_dark_palette(widget) -> None:
     ):
         pal.setColor(role, QColor(colour))
     widget.setPalette(pal)
+
+
+# Back-compat alias for the previous public name.
+apply_dark_palette = apply_theme_palette
+
+
+# ---------------------------------------------------------------------------
+#  themed(qss) — rewrite hard-coded dark hex codes to the active theme
+# ---------------------------------------------------------------------------
+#
+# Scripts can keep their existing Qt stylesheet strings unchanged and simply
+# wrap ``setStyleSheet(...)`` in ``themed(...)``. The helper rewrites the
+# historical dark-theme hex codes to whatever the active :class:`THEME`
+# resolves to. New stylesheets may also use this form so adding a new theme
+# only requires adding an entry to ``_THEMES``.
+#
+#   label.setStyleSheet(themed("QLabel{background:#161b22;color:#c9d1d9;}"))
+#
+# Codes outside ``_QSS_MAP`` are left untouched — useful for one-off accents.
+
+_QSS_MAP: Dict[str, str] = {
+    # base surfaces
+    "#0a0e14": "CANVAS",
+    "#0d1117": "BG",
+    "#161b22": "PANEL",
+    "#21262d": "BUTTON",
+    "#30363d": "BORDER",
+    "#131820": "ALT_BASE",
+    # text
+    "#c9d1d9": "TEXT",
+    "#e6edf3": "TEXT_STRONG",
+    "#8b949e": "TEXT_DIM",
+    "#555555": "TEXT_MUTED",
+    "#555":    "TEXT_MUTED",
+    # accents / state
+    "#58a6ff": "ACCENT",
+    "#1f6feb": "ACCENT_STRONG",
+    "#388bfd": "ACCENT_BORDER",
+    "#3fb950": "SUCCESS",
+    "#d29922": "WARN",
+    "#f85149": "DANGER",
+    "#f97316": "HIGHLIGHT",
+    "#ff2222": "DANGER",
+    # widget fills
+    "#1a1a2e": "NO_DATA",
+}
+
+
+def themed(qss: str) -> str:
+    """Rewrite well-known dark-theme hex codes to the active :class:`THEME`.
+
+    Intended for wrapping Qt stylesheets so a single pass of theme swapping
+    (``set_theme('light')``) re-colours every widget without per-call
+    f-strings. Unknown colour literals pass through unchanged.
+    """
+    out = qss
+    for hex_code, key in _QSS_MAP.items():
+        # plain lookup — THEME values are already strings.
+        out = out.replace(hex_code, getattr(THEME, key))
+    return out
 
 
 # ===========================================================================
@@ -190,32 +371,34 @@ class HyCalMapWidget(QWidget):
 
     _CLICK_THRESHOLD = 4
 
-    # Default (dark) theme.  set_light_theme(True) switches the instance to
-    # the light palette; subclasses can override any of these before/after
-    # super().__init__() to customise a single entry.
-    BG_COLOR       = QColor("#0a0e14")
-    NO_DATA_COLOR  = QColor("#1a1a2e")
-    HOVER_COLOR    = QColor("#58a6ff")
-    CB_BORDER      = QColor("#58a6ff")
-    CB_TEXT        = QColor("#8b949e")
-    EMPTY_TEXT     = QColor("#555555")
+    # Colour roles are resolved from the module-level :class:`THEME` at paint
+    # time. The property accessors below return the currently active colours
+    # so subclasses that used to override ``BG_COLOR`` etc. continue to work
+    # via plain attribute assignment.
 
-    _THEME_DARK = {
-        "BG_COLOR":      QColor("#0a0e14"),
-        "NO_DATA_COLOR": QColor("#1a1a2e"),
-        "HOVER_COLOR":   QColor("#58a6ff"),
-        "CB_BORDER":     QColor("#58a6ff"),
-        "CB_TEXT":       QColor("#8b949e"),
-        "EMPTY_TEXT":    QColor("#555555"),
-    }
-    _THEME_LIGHT = {
-        "BG_COLOR":      QColor("#f6f8fa"),
-        "NO_DATA_COLOR": QColor("#d0d7de"),
-        "HOVER_COLOR":   QColor("#0969da"),
-        "CB_BORDER":     QColor("#0969da"),
-        "CB_TEXT":       QColor("#57606a"),
-        "EMPTY_TEXT":    QColor("#8b949e"),
-    }
+    @property
+    def BG_COLOR(self) -> QColor:
+        return QColor(THEME.CANVAS)
+
+    @property
+    def NO_DATA_COLOR(self) -> QColor:
+        return QColor(THEME.NO_DATA)
+
+    @property
+    def HOVER_COLOR(self) -> QColor:
+        return QColor(THEME.ACCENT)
+
+    @property
+    def CB_BORDER(self) -> QColor:
+        return QColor(THEME.ACCENT)
+
+    @property
+    def CB_TEXT(self) -> QColor:
+        return QColor(THEME.TEXT_DIM)
+
+    @property
+    def EMPTY_TEXT(self) -> QColor:
+        return QColor(THEME.TEXT_MUTED)
 
     def __init__(self, parent=None, *,
                  shrink: float = 0.92,
@@ -252,7 +435,6 @@ class HyCalMapWidget(QWidget):
         self._geo_bounds: Tuple[float, float, float, float] = (0.0, 1.0, 0.0, 1.0)
         self._cb_rect: Optional[QRectF] = None
         self._layout_dirty = True
-        self._light_theme = False
 
         # zoom / pan state (only used when enable_zoom_pan is True)
         self._zoom = 1.0
@@ -269,9 +451,9 @@ class HyCalMapWidget(QWidget):
             f.setBold(True)
             self._reset_btn.setFont(f)
             self._reset_btn.setStyleSheet(
-                "QPushButton{background:rgba(22,27,34,200);color:#8b949e;"
-                "border:1px solid #30363d;border-radius:3px;}"
-                "QPushButton:hover{background:rgba(33,38,45,220);color:#c9d1d9;}")
+                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.TEXT_DIM};"
+                f"border:1px solid {THEME.BORDER};border-radius:8px;}}"
+                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};color:{THEME.TEXT};}}")
             self._reset_btn.clicked.connect(self.reset_view)
         else:
             self._reset_btn = None
@@ -323,22 +505,6 @@ class HyCalMapWidget(QWidget):
 
     def is_log_scale(self) -> bool:
         return self._log_scale
-
-    def set_light_theme(self, on: bool):
-        """Switch between dark (default) and light background schemes."""
-        self._light_theme = bool(on)
-        theme = self._THEME_LIGHT if on else self._THEME_DARK
-        for k, v in theme.items():
-            setattr(self, k, v)
-        self._on_theme_changed()
-        self.update()
-
-    def is_light_theme(self) -> bool:
-        return self._light_theme
-
-    def _on_theme_changed(self):
-        """Subclass hook — called after theme colors are swapped."""
-        pass
 
     def auto_range(self) -> Tuple[float, float]:
         """Set vmin/vmax from current values (min..max, or min..min+1 if flat)."""

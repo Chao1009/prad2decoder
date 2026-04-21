@@ -46,7 +46,7 @@ from PyQt6.QtGui import (
 
 from hycal_geoview import (
     Module, load_modules, HyCalMapWidget, PALETTES, PALETTE_NAMES,
-    apply_dark_palette,
+    apply_theme_palette, set_theme, available_themes, THEME, themed,
 )
 
 
@@ -444,14 +444,14 @@ class HyCalGainMapWidget(HyCalMapWidget):
 
     def _paint_empty(self, p, w, h):
         if not self._values:
-            p.setPen(QColor("#555555"))
+            p.setPen(QColor(THEME.TEXT_MUTED))
             p.setFont(QFont("Consolas", 12))
             p.drawText(QRectF(0, 0, w, h),
                        Qt.AlignmentFlag.AlignCenter, "No data loaded")
 
     def _paint_overlays(self, p, w, h):
         if self._selected and self._selected in self._rects:
-            p.setPen(QPen(QColor("#ffffff"), 2.5))
+            p.setPen(QPen(QColor(THEME.SELECT_BORDER), 2.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(self._rects[self._selected])
         super()._paint_overlays(p, w, h)
@@ -481,7 +481,7 @@ class HyCalGainMapWidget(HyCalMapWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(color)
             p.drawRect(QRectF(x, sy, swatch, swatch))
-            p.setPen(QColor("#c9d1d9"))
+            p.setPen(QColor(THEME.TEXT))
             p.drawText(QRectF(x + swatch + gap, ly + pad,
                               fm.horizontalAdvance(label), lh),
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -644,10 +644,10 @@ class LMSLineChartWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor("#0a0e14"))
+        p.fillRect(0, 0, w, h, QColor(THEME.CANVAS))
 
         # title
-        title_color = QColor("#f97316") if self._highlighted else QColor("#58a6ff")
+        title_color = QColor(THEME.HIGHLIGHT) if self._highlighted else QColor(THEME.ACCENT)
         title_text = (self._title + "  [reference]") if self._highlighted else self._title
         p.setPen(title_color)
         p.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
@@ -659,7 +659,7 @@ class LMSLineChartWidget(QWidget):
         ratios = self._ratios
         errors = self._errors
         if not runs or not ratios:
-            p.setPen(QColor("#555555"))
+            p.setPen(QColor(THEME.TEXT_MUTED))
             p.setFont(QFont("Consolas", 10))
             p.drawText(QRectF(0, 0, w, h),
                        Qt.AlignmentFlag.AlignCenter, "No data")
@@ -707,19 +707,19 @@ class LMSLineChartWidget(QWidget):
             return py + ph - (v - y_lo) / (y_hi - y_lo) * ph
 
         # grid + axes
-        p.setPen(QPen(QColor("#21262d"), 1, Qt.PenStyle.DotLine))
+        p.setPen(QPen(QColor(THEME.BUTTON), 1, Qt.PenStyle.DotLine))
         y_ticks = self._nice_ticks(y_lo, y_hi, 5)
         for yt in y_ticks:
             sy = to_sy(yt)
             p.drawLine(QPointF(px, sy), QPointF(px + pw, sy))
 
         # axes border
-        p.setPen(QPen(QColor("#30363d"), 1))
+        p.setPen(QPen(QColor(THEME.BORDER), 1))
         p.drawLine(QPointF(px, py), QPointF(px, py + ph))
         p.drawLine(QPointF(px, py + ph), QPointF(px + pw, py + ph))
 
         # y-axis labels
-        p.setPen(QColor("#8b949e"))
+        p.setPen(QColor(THEME.TEXT_DIM))
         p.setFont(QFont("Consolas", 8))
         for yt in y_ticks:
             sy = to_sy(yt)
@@ -736,7 +736,7 @@ class LMSLineChartWidget(QWidget):
                        Qt.AlignmentFlag.AlignCenter, str(runs[i]))
 
         # error bars
-        p.setPen(QPen(QColor("#8b949e"), 1))
+        p.setPen(QPen(QColor(THEME.TEXT_DIM), 1))
         cap = 3
         for i in range(len(runs)):
             if i >= len(ratios):
@@ -750,7 +750,7 @@ class LMSLineChartWidget(QWidget):
             p.drawLine(QPointF(sx - cap, sy_top), QPointF(sx + cap, sy_top))
             p.drawLine(QPointF(sx - cap, sy_bot), QPointF(sx + cap, sy_bot))
 
-        series_color = QColor("#f97316") if self._highlighted else QColor("#58a6ff")
+        series_color = QColor(THEME.HIGHLIGHT) if self._highlighted else QColor(THEME.ACCENT)
 
         # connecting line
         p.setPen(QPen(series_color, 1.5))
@@ -776,7 +776,7 @@ class LMSLineChartWidget(QWidget):
                 if rn == self._current_run_number and i < len(runs) and i < len(ratios):
                     cx = to_sx(runs[i])
                     cy = to_sy(ratios[i])
-                    p.setPen(QPen(QColor("#ff2222"), 2))
+                    p.setPen(QPen(QColor(THEME.DANGER), 2))
                     p.setBrush(Qt.BrushStyle.NoBrush)
                     p.drawEllipse(QPointF(cx, cy), 8, 8)
                     break
@@ -804,7 +804,7 @@ class LMSLineChartWidget(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(20, 30, 45, 220))
             p.drawRoundedRect(QRectF(tx - 4, ty - 2, tw + 8, th), 4, 4)
-            p.setPen(QColor("#e6edf3"))
+            p.setPen(QColor(THEME.TEXT_STRONG))
             for j, ln in enumerate(lines):
                 p.drawText(QRectF(tx, ty + j * fm.height(), tw, fm.height()),
                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -906,9 +906,9 @@ class RootHistWidget(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.setStyleSheet(
+        menu.setStyleSheet(themed(
             "QMenu{background:#161b22;color:#c9d1d9;border:1px solid #30363d;}"
-            "QMenu::item:selected{background:#1f6feb;}")
+            "QMenu::item:selected{background:#1f6feb;}"))
         menu.addAction("Unzoom").triggered.connect(self._unzoom)
         menu.exec(event.globalPos())
 
@@ -926,17 +926,17 @@ class RootHistWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor("#0a0e14"))
+        p.fillRect(0, 0, w, h, QColor(THEME.CANVAS))
 
         if self._title:
-            p.setPen(QColor("#58a6ff"))
+            p.setPen(QColor(THEME.ACCENT))
             p.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
             p.drawText(QRectF(self.PAD_L, 2, w - self.PAD_L - self.PAD_R, 20),
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                        self._title)
 
         if not self._values or not self._edges or len(self._edges) < 2:
-            p.setPen(QColor("#555555"))
+            p.setPen(QColor(THEME.TEXT_MUTED))
             p.setFont(QFont("Consolas", 10))
             p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "No histogram")
             p.end()
@@ -966,7 +966,7 @@ class RootHistWidget(QWidget):
             return py + ph * (1.0 - v / y_hi)
 
         # dotted grid
-        p.setPen(QPen(QColor("#21262d"), 1, Qt.PenStyle.DotLine))
+        p.setPen(QPen(QColor(THEME.BUTTON), 1, Qt.PenStyle.DotLine))
         n_yticks = 5
         for i in range(n_yticks + 1):
             sy = py + ph * i / n_yticks
@@ -985,7 +985,7 @@ class RootHistWidget(QWidget):
             bar_top = to_sy(v)
             bar_h = (py + ph) - bar_top
             if bar_h > 0 and sx2 > sx1:
-                p.fillRect(QRectF(sx1, bar_top, sx2 - sx1 - 1, bar_h), QColor("#f97316"))
+                p.fillRect(QRectF(sx1, bar_top, sx2 - sx1 - 1, bar_h), QColor(THEME.HIGHLIGHT))
 
         # Gaussian fit curve
         if self._gauss is not None:
@@ -1018,12 +1018,12 @@ class RootHistWidget(QWidget):
                 p.drawRect(QRectF(sx1, py, sx2 - sx1, ph))
 
         # axes
-        p.setPen(QPen(QColor("#30363d"), 1))
+        p.setPen(QPen(QColor(THEME.BORDER), 1))
         p.drawLine(QPointF(px, py), QPointF(px, py + ph))
         p.drawLine(QPointF(px, py + ph), QPointF(px + pw, py + ph))
 
         # y labels
-        p.setPen(QColor("#8b949e"))
+        p.setPen(QColor(THEME.TEXT_DIM))
         p.setFont(QFont("Consolas", 8))
         for i in range(n_yticks + 1):
             val = y_hi * (n_yticks - i) / n_yticks
@@ -1071,29 +1071,29 @@ class IrregularTableWidget(QWidget):
 
         lbl = QLabel("Search:")
         lbl.setFont(QFont("Consolas", 10))
-        lbl.setStyleSheet("color:#c9d1d9;")
+        lbl.setStyleSheet(themed("color:#c9d1d9;"))
         fbar.addWidget(lbl)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("module name...")
         self._search.setFixedWidth(120)
         self._search.setFont(QFont("Consolas", 10))
-        self._search.setStyleSheet(
+        self._search.setStyleSheet(themed(
             "QLineEdit{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;border-radius:3px;padding:2px 4px;}")
+            "border:1px solid #30363d;border-radius:3px;padding:2px 4px;}"))
         self._search.textChanged.connect(self._apply_filter)
         fbar.addWidget(self._search)
 
         lbl2 = QLabel("Type:")
         lbl2.setFont(QFont("Consolas", 10))
-        lbl2.setStyleSheet("color:#c9d1d9;")
+        lbl2.setStyleSheet(themed("color:#c9d1d9;"))
         fbar.addWidget(lbl2)
 
         self._type_filter = QComboBox()
         self._type_filter.addItems(["All", "PbWO4", "PbGlass"])
         self._type_filter.setFixedWidth(100)
         self._type_filter.setFont(QFont("Consolas", 10))
-        self._type_filter.setStyleSheet(
+        self._type_filter.setStyleSheet(themed(
             "QComboBox{background:#161b22;color:#c9d1d9;"
             "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
             "QComboBox::drop-down{border:none;width:18px;}"
@@ -1101,7 +1101,7 @@ class IrregularTableWidget(QWidget):
             "border-right:4px solid transparent;border-top:5px solid #8b949e;"
             "margin-right:4px;}"
             "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;selection-background-color:#1f6feb;}")
+            "border:1px solid #30363d;selection-background-color:#1f6feb;}"))
         self._type_filter.currentIndexChanged.connect(
             lambda _: self._apply_filter())
         fbar.addWidget(self._type_filter)
@@ -1110,7 +1110,7 @@ class IrregularTableWidget(QWidget):
 
         count_lbl = QLabel("")
         count_lbl.setFont(QFont("Consolas", 10))
-        count_lbl.setStyleSheet("color:#8b949e;")
+        count_lbl.setStyleSheet(themed("color:#8b949e;"))
         self._count_lbl = count_lbl
         fbar.addWidget(count_lbl)
 
@@ -1122,15 +1122,15 @@ class IrregularTableWidget(QWidget):
         self._table.setHorizontalHeaderLabels(
             ["Module", "Run", "Gain", "Mean", "Std Dev", "Dev (sigma)"])
         self._table.setFont(QFont("Consolas", 10))
-        self._table.setStyleSheet(
+        self._table.setStyleSheet(themed(
             "QTableWidget{background:#0d1117;color:#c9d1d9;"
             "gridline-color:#21262d;border:1px solid #30363d;}"
             "QTableWidget::item{padding:2px 6px;}"
             "QHeaderView::section{background:#161b22;color:#58a6ff;"
-            "border:1px solid #30363d;font:bold 10pt Consolas;padding:4px;}")
+            "border:1px solid #30363d;font:bold 10pt Consolas;padding:4px;}"))
         self._table.setAlternatingRowColors(True)
         pal = self._table.palette()
-        pal.setColor(QPalette.ColorRole.AlternateBase, QColor("#131820"))
+        pal.setColor(QPalette.ColorRole.AlternateBase, QColor(THEME.ALT_BASE))
         self._table.setPalette(pal)
         self._table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1217,7 +1217,7 @@ class IrregularTableWidget(QWidget):
         self._table.setRowCount(len(entries))
         for row, e in enumerate(entries):
             item = QTableWidgetItem(e.name)
-            item.setForeground(QColor("#d29922"))
+            item.setForeground(QColor(THEME.WARN))
             self._table.setItem(row, 0, item)
 
             item_run = QTableWidgetItem()
@@ -1235,7 +1235,7 @@ class IrregularTableWidget(QWidget):
         self._table.setRowCount(len(entries))
         for row, e in enumerate(entries):
             item = QTableWidgetItem(e.name)
-            color = QColor("#f85149") if e.rel_change < 0 else QColor("#3fb950")
+            color = QColor(THEME.DANGER) if e.rel_change < 0 else QColor(THEME.SUCCESS)
             item.setForeground(color)
             self._table.setItem(row, 0, item)
 
@@ -1261,7 +1261,7 @@ class IrregularTableWidget(QWidget):
         self._table.setRowCount(len(entries))
         for row, e in enumerate(entries):
             item = QTableWidgetItem(e.name)
-            item.setForeground(QColor("#f85149"))
+            item.setForeground(QColor(THEME.DANGER))
             self._table.setItem(row, 0, item)
 
             item_cnt = QTableWidgetItem()
@@ -1317,7 +1317,7 @@ class AnalyzeDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Analyze Data")
         self.resize(700, 500)
-        self.setStyleSheet(
+        self.setStyleSheet(themed(
             "QDialog{background:#0d1117;color:#c9d1d9;}"
             "QLabel{color:#c9d1d9;font-family:Consolas;font-size:10pt;}"
             "QLineEdit{background:#161b22;color:#c9d1d9;"
@@ -1329,7 +1329,7 @@ class AnalyzeDialog(QDialog):
             "border:1px solid #30363d;padding:4px 12px;"
             "font:bold 10pt Consolas;border-radius:3px;}"
             "QPushButton:hover{background:#30363d;}"
-            "QPushButton:disabled{color:#555;}")
+            "QPushButton:disabled{color:#555;}"))
 
         self._process = QProcess(self)
         self._process.readyReadStandardOutput.connect(self._on_stdout)
@@ -1372,11 +1372,11 @@ class AnalyzeDialog(QDialog):
         # buttons
         btn_row = QHBoxLayout()
         self._run_btn = QPushButton("Run")
-        self._run_btn.setStyleSheet(
+        self._run_btn.setStyleSheet(themed(
             "QPushButton{background:#1f6feb;color:white;border:1px solid #388bfd;"
             "padding:4px 16px;font:bold 10pt Consolas;border-radius:3px;}"
             "QPushButton:hover{background:#388bfd;}"
-            "QPushButton:disabled{background:#21262d;color:#555;border-color:#30363d;}")
+            "QPushButton:disabled{background:#21262d;color:#555;border-color:#30363d;}"))
         self._run_btn.clicked.connect(self._on_run)
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setEnabled(False)
@@ -1461,7 +1461,7 @@ class AnalyzeDialog(QDialog):
 
     def _append(self, html: str):
         self._console.moveCursor(self._console.textCursor().MoveOperation.End)
-        self._console.insertHtml(html)
+        self._console.insertHtml(themed(html))
         self._console.moveCursor(self._console.textCursor().MoveOperation.End)
 
     def closeEvent(self, event):
@@ -1538,7 +1538,7 @@ class GetDataDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Get Data")
         self.resize(700, 520)
-        self.setStyleSheet(
+        self.setStyleSheet(themed(
             "QDialog{background:#0d1117;color:#c9d1d9;}"
             "QLabel{color:#c9d1d9;font-family:Consolas;font-size:10pt;}"
             "QLineEdit{background:#161b22;color:#c9d1d9;"
@@ -1550,7 +1550,7 @@ class GetDataDialog(QDialog):
             "border:1px solid #30363d;padding:4px 12px;"
             "font:bold 10pt Consolas;border-radius:3px;}"
             "QPushButton:hover{background:#30363d;}"
-            "QPushButton:disabled{color:#555;}")
+            "QPushButton:disabled{color:#555;}"))
 
         self._process = QProcess(self)
         self._process.readyReadStandardOutput.connect(self._on_stdout)
@@ -1605,11 +1605,11 @@ class GetDataDialog(QDialog):
         # ---- buttons ----
         btn_row = QHBoxLayout()
         self._run_btn = QPushButton("Get Data")
-        self._run_btn.setStyleSheet(
+        self._run_btn.setStyleSheet(themed(
             "QPushButton{background:#1f6feb;color:white;border:1px solid #388bfd;"
             "padding:4px 16px;font:bold 10pt Consolas;border-radius:3px;}"
             "QPushButton:hover{background:#388bfd;}"
-            "QPushButton:disabled{background:#21262d;color:#555;border-color:#30363d;}")
+            "QPushButton:disabled{background:#21262d;color:#555;border-color:#30363d;}"))
         self._run_btn.clicked.connect(self._on_get)
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setEnabled(False)
@@ -1768,7 +1768,7 @@ class GetDataDialog(QDialog):
 
     def _append(self, html: str):
         self._console.moveCursor(self._console.textCursor().MoveOperation.End)
-        self._console.insertHtml(html)
+        self._console.insertHtml(themed(html))
         self._console.moveCursor(self._console.textCursor().MoveOperation.End)
 
     def closeEvent(self, event):
@@ -1789,7 +1789,7 @@ class DoItAllDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Do It All")
         self.resize(750, 600)
-        self.setStyleSheet(
+        self.setStyleSheet(themed(
             "QDialog{background:#0d1117;color:#c9d1d9;}"
             "QLabel{color:#c9d1d9;font-family:Consolas;font-size:10pt;}"
             "QLineEdit{background:#161b22;color:#c9d1d9;"
@@ -1801,7 +1801,7 @@ class DoItAllDialog(QDialog):
             "border:1px solid #30363d;padding:4px 12px;"
             "font:bold 10pt Consolas;border-radius:3px;}"
             "QPushButton:hover{background:#30363d;}"
-            "QPushButton:disabled{color:#555;}")
+            "QPushButton:disabled{color:#555;}"))
 
         self._process = QProcess(self)
         self._process.readyReadStandardOutput.connect(self._on_stdout)
@@ -1864,11 +1864,11 @@ class DoItAllDialog(QDialog):
         # ---- buttons ----
         btn_row = QHBoxLayout()
         self._run_btn = QPushButton("Run")
-        self._run_btn.setStyleSheet(
+        self._run_btn.setStyleSheet(themed(
             "QPushButton{background:#1f6feb;color:white;border:1px solid #388bfd;"
             "padding:4px 16px;font:bold 10pt Consolas;border-radius:3px;}"
             "QPushButton:hover{background:#388bfd;}"
-            "QPushButton:disabled{background:#21262d;color:#555;border-color:#30363d;}")
+            "QPushButton:disabled{background:#21262d;color:#555;border-color:#30363d;}"))
         self._run_btn.clicked.connect(self._on_run)
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setEnabled(False)
@@ -2044,7 +2044,7 @@ class DoItAllDialog(QDialog):
 
     def _append(self, html: str):
         self._console.moveCursor(self._console.textCursor().MoveOperation.End)
-        self._console.insertHtml(html)
+        self._console.insertHtml(themed(html))
         self._console.moveCursor(self._console.textCursor().MoveOperation.End)
 
     def closeEvent(self, event):
@@ -2110,7 +2110,7 @@ class GainMonitorWindow(QMainWindow):
     def _build_ui(self):
         self.setWindowTitle("HyCal Gain Monitor")
         self.resize(1600, 1000)
-        apply_dark_palette(self)
+        apply_theme_palette(self)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -2122,20 +2122,20 @@ class GainMonitorWindow(QMainWindow):
         top = QHBoxLayout()
         lbl = QLabel("HYCAL GAIN MONITOR")
         lbl.setFont(QFont("Consolas", 14, QFont.Weight.Bold))
-        lbl.setStyleSheet("color:#58a6ff;")
+        lbl.setStyleSheet(themed("color:#58a6ff;"))
         top.addWidget(lbl)
         top.addStretch()
 
         self._process_btn = self._make_btn(
-            "Process Folder...", "#58a6ff", self._on_process_folder)
+            "Process Folder...", THEME.ACCENT, self._on_process_folder)
         top.addWidget(self._process_btn)
 
         self._analyze_btn = self._make_btn(
-            "Analyze Data", "#3fb950", self._on_analyze_data)
+            "Analyze Data", THEME.SUCCESS, self._on_analyze_data)
         top.addWidget(self._analyze_btn)
 
         self._getdata_btn = self._make_btn(
-            "Get Data", "#d29922", self._on_get_data)
+            "Get Data", THEME.WARN, self._on_get_data)
         top.addWidget(self._getdata_btn)
 
         self._doitall_btn = self._make_btn(
@@ -2143,7 +2143,7 @@ class GainMonitorWindow(QMainWindow):
         top.addWidget(self._doitall_btn)
 
         self._refresh_btn = self._make_btn(
-            "Refresh", "#3fb950", self._on_refresh)
+            "Refresh", THEME.SUCCESS, self._on_refresh)
         self._refresh_btn.setEnabled(False)
         top.addWidget(self._refresh_btn)
 
@@ -2153,11 +2153,11 @@ class GainMonitorWindow(QMainWindow):
         self._auto_refresh_btn.setEnabled(False)
         self._auto_refresh_btn.setFont(QFont("Consolas", 10))
         self._auto_refresh_btn.setFixedHeight(28)
-        self._auto_refresh_btn.setStyleSheet(
+        self._auto_refresh_btn.setStyleSheet(themed(
             "QPushButton{background:#161b22;color:#8b949e;border:1px solid #30363d;"
             "border-radius:3px;padding:0 8px;}"
             "QPushButton:checked{background:#1a3a1a;color:#3fb950;border-color:#3fb950;}"
-            "QPushButton:hover{background:#21262d;}")
+            "QPushButton:hover{background:#21262d;}"))
         self._auto_refresh_btn.toggled.connect(self._on_auto_refresh_toggled)
         top.addWidget(self._auto_refresh_btn)
 
@@ -2168,16 +2168,16 @@ class GainMonitorWindow(QMainWindow):
         self._auto_refresh_interval.setSuffix(" s")
         self._auto_refresh_interval.setFixedWidth(72)
         self._auto_refresh_interval.setFont(QFont("Consolas", 10))
-        self._auto_refresh_interval.setStyleSheet(
+        self._auto_refresh_interval.setStyleSheet(themed(
             "QSpinBox{background:#161b22;color:#c9d1d9;border:1px solid #30363d;"
             "border-radius:3px;padding:2px 4px;}"
-            "QSpinBox::up-button,QSpinBox::down-button{width:16px;}")
+            "QSpinBox::up-button,QSpinBox::down-button{width:16px;}"))
         self._auto_refresh_interval.valueChanged.connect(self._on_refresh_interval_changed)
         top.addWidget(self._auto_refresh_interval)
 
         self._status_lbl = QLabel("No data loaded")
         self._status_lbl.setFont(QFont("Consolas", 11))
-        self._status_lbl.setStyleSheet("color:#8b949e;")
+        self._status_lbl.setStyleSheet(themed("color:#8b949e;"))
         top.addWidget(self._status_lbl)
         root.addLayout(top)
 
@@ -2207,7 +2207,7 @@ class GainMonitorWindow(QMainWindow):
         self._ref_combo.setCurrentIndex(LMS_REF_DEFAULT)
         self._ref_combo.setFixedWidth(90)
         self._ref_combo.setFont(QFont("Consolas", 10))
-        self._ref_combo.setStyleSheet(
+        self._ref_combo.setStyleSheet(themed(
             "QComboBox{background:#161b22;color:#c9d1d9;"
             "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
             "QComboBox::drop-down{border:none;width:18px;}"
@@ -2215,7 +2215,7 @@ class GainMonitorWindow(QMainWindow):
             "border-right:4px solid transparent;border-top:5px solid #8b949e;"
             "margin-right:4px;}"
             "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;selection-background-color:#1f6feb;}")
+            "border:1px solid #30363d;selection-background-color:#1f6feb;}"))
         self._ref_combo.currentIndexChanged.connect(self._on_ref_changed)
         ctrl.addWidget(self._ref_combo)
 
@@ -2225,7 +2225,7 @@ class GainMonitorWindow(QMainWindow):
         self._view_combo.addItems(["Gain Factor", "Deviation (σ)", "Run-to-Run Drift", "Summary"])
         self._view_combo.setFixedWidth(150)
         self._view_combo.setFont(QFont("Consolas", 10))
-        self._view_combo.setStyleSheet(
+        self._view_combo.setStyleSheet(themed(
             "QComboBox{background:#161b22;color:#c9d1d9;"
             "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
             "QComboBox::drop-down{border:none;width:18px;}"
@@ -2233,7 +2233,7 @@ class GainMonitorWindow(QMainWindow):
             "border-right:4px solid transparent;border-top:5px solid #8b949e;"
             "margin-right:4px;}"
             "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;selection-background-color:#1f6feb;}")
+            "border:1px solid #30363d;selection-background-color:#1f6feb;}"))
         self._view_combo.currentIndexChanged.connect(self._on_view_mode_changed)
         ctrl.addWidget(self._view_combo)
 
@@ -2251,7 +2251,7 @@ class GainMonitorWindow(QMainWindow):
         self._thresh_g_input = QLineEdit("10.0")
         self._thresh_g_input.setFixedWidth(46)
         self._thresh_g_input.setFont(QFont("Consolas", 10))
-        self._thresh_g_input.setStyleSheet(_edit_ss)
+        self._thresh_g_input.setStyleSheet(themed(_edit_ss))
         self._thresh_g_input.editingFinished.connect(self._on_drift_threshold_changed)
         ctrl.addWidget(self._thresh_g_input)
         self._thresh_g_pct = self._slabel("%")
@@ -2263,7 +2263,7 @@ class GainMonitorWindow(QMainWindow):
         self._thresh_w_input = QLineEdit("5.0")
         self._thresh_w_input.setFixedWidth(46)
         self._thresh_w_input.setFont(QFont("Consolas", 10))
-        self._thresh_w_input.setStyleSheet(_edit_ss)
+        self._thresh_w_input.setStyleSheet(themed(_edit_ss))
         self._thresh_w_input.editingFinished.connect(self._on_drift_threshold_changed)
         ctrl.addWidget(self._thresh_w_input)
         self._thresh_w_pct = self._slabel("%")
@@ -2274,7 +2274,7 @@ class GainMonitorWindow(QMainWindow):
         self._start_combo = QComboBox()
         self._start_combo.setMinimumWidth(100)
         self._start_combo.setFont(QFont("Consolas", 10))
-        self._start_combo.setStyleSheet(
+        self._start_combo.setStyleSheet(themed(
             "QComboBox{background:#161b22;color:#c9d1d9;"
             "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
             "QComboBox::drop-down{border:none;width:18px;}"
@@ -2282,7 +2282,7 @@ class GainMonitorWindow(QMainWindow):
             "border-right:4px solid transparent;border-top:5px solid #8b949e;"
             "margin-right:4px;}"
             "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;selection-background-color:#1f6feb;}")
+            "border:1px solid #30363d;selection-background-color:#1f6feb;}"))
         self._start_combo.currentIndexChanged.connect(self._on_start_run_changed)
         ctrl.addWidget(self._start_combo)
 
@@ -2291,7 +2291,7 @@ class GainMonitorWindow(QMainWindow):
         self._end_combo = QComboBox()
         self._end_combo.setMinimumWidth(100)
         self._end_combo.setFont(QFont("Consolas", 10))
-        self._end_combo.setStyleSheet(
+        self._end_combo.setStyleSheet(themed(
             "QComboBox{background:#161b22;color:#c9d1d9;"
             "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
             "QComboBox::drop-down{border:none;width:18px;}"
@@ -2299,7 +2299,7 @@ class GainMonitorWindow(QMainWindow):
             "border-right:4px solid transparent;border-top:5px solid #8b949e;"
             "margin-right:4px;}"
             "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;selection-background-color:#1f6feb;}")
+            "border:1px solid #30363d;selection-background-color:#1f6feb;}"))
         self._end_combo.currentIndexChanged.connect(self._on_end_run_changed)
         ctrl.addWidget(self._end_combo)
 
@@ -2309,7 +2309,7 @@ class GainMonitorWindow(QMainWindow):
         self._run_combo = QComboBox()
         self._run_combo.setMinimumWidth(100)
         self._run_combo.setFont(QFont("Consolas", 10))
-        self._run_combo.setStyleSheet(
+        self._run_combo.setStyleSheet(themed(
             "QComboBox{background:#161b22;color:#c9d1d9;"
             "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
             "QComboBox::drop-down{border:none;width:18px;}"
@@ -2317,15 +2317,15 @@ class GainMonitorWindow(QMainWindow):
             "border-right:4px solid transparent;border-top:5px solid #8b949e;"
             "margin-right:4px;}"
             "QComboBox QAbstractItemView{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;selection-background-color:#1f6feb;}")
+            "border:1px solid #30363d;selection-background-color:#1f6feb;}"))
         self._run_combo.currentIndexChanged.connect(self._on_run_changed)
         ctrl.addWidget(self._run_combo)
 
-        self._prev_btn = self._make_btn("<", "#c9d1d9", self._on_prev_run)
+        self._prev_btn = self._make_btn("<", THEME.TEXT, self._on_prev_run)
         self._prev_btn.setFixedWidth(30)
         ctrl.addWidget(self._prev_btn)
 
-        self._next_btn = self._make_btn(">", "#c9d1d9", self._on_next_run)
+        self._next_btn = self._make_btn(">", THEME.TEXT, self._on_next_run)
         self._next_btn.setFixedWidth(30)
         ctrl.addWidget(self._next_btn)
 
@@ -2343,7 +2343,7 @@ class GainMonitorWindow(QMainWindow):
         self._range_min = QLineEdit("0.9")
         self._range_min.setFixedWidth(70)
         self._range_min.setFont(QFont("Consolas", 10))
-        self._range_min.setStyleSheet(_EDIT_SS)
+        self._range_min.setStyleSheet(themed(_EDIT_SS))
         self._range_min.returnPressed.connect(self._on_apply_range)
         rng.addWidget(self._range_min)
 
@@ -2351,7 +2351,7 @@ class GainMonitorWindow(QMainWindow):
         self._range_max = QLineEdit("1.1")
         self._range_max.setFixedWidth(70)
         self._range_max.setFont(QFont("Consolas", 10))
-        self._range_max.setStyleSheet(_EDIT_SS)
+        self._range_max.setStyleSheet(themed(_EDIT_SS))
         self._range_max.returnPressed.connect(self._on_apply_range)
         rng.addWidget(self._range_max)
 
@@ -2381,13 +2381,13 @@ class GainMonitorWindow(QMainWindow):
             "QPushButton:hover{background:#30363d;}"
             "QPushButton:checked{background:#1f6feb;color:white;"
             "border-color:#388bfd;}")
-        self._apply_btn.setStyleSheet(
+        self._apply_btn.setStyleSheet(themed(
             "QPushButton{background:#21262d;color:#c9d1d9;"
             "border:1px solid #30363d;padding:4px 8px;"
             "font:bold 11px Consolas;border-radius:3px;}"
-            "QPushButton:hover{background:#30363d;}")
-        self._log_btn.setStyleSheet(_TOGGLE_SS)
-        self._auto_btn.setStyleSheet(_TOGGLE_SS)
+            "QPushButton:hover{background:#30363d;}"))
+        self._log_btn.setStyleSheet(themed(_TOGGLE_SS))
+        self._auto_btn.setStyleSheet(themed(_TOGGLE_SS))
 
         rng.addStretch()
         left_layout.addLayout(rng)
@@ -2404,9 +2404,9 @@ class GainMonitorWindow(QMainWindow):
         # info label
         self._info = QLabel("Hover over a module for details")
         self._info.setFont(QFont("Consolas", 10))
-        self._info.setStyleSheet(
+        self._info.setStyleSheet(themed(
             "QLabel{background:#161b22;color:#c9d1d9;padding:4px 8px;"
-            "border:1px solid #30363d;border-radius:4px;}")
+            "border:1px solid #30363d;border-radius:4px;}"))
         self._info.setFixedHeight(26)
         left_layout.addWidget(self._info)
 
@@ -2446,19 +2446,19 @@ class GainMonitorWindow(QMainWindow):
 
     def _make_btn(self, text, fg, slot):
         btn = QPushButton(text)
-        btn.setStyleSheet(
+        btn.setStyleSheet(themed(
             f"QPushButton{{background:#21262d;color:{fg};"
             f"border:1px solid #30363d;padding:4px 12px;"
             f"font:bold 11px Consolas;border-radius:3px;}}"
             f"QPushButton:hover{{background:#30363d;}}"
-            f"QPushButton:disabled{{color:#555;}}")
+            f"QPushButton:disabled{{color:#555;}}"))
         btn.clicked.connect(slot)
         return btn
 
     def _slabel(self, text):
         lbl = QLabel(text)
         lbl.setFont(QFont("Consolas", 10))
-        lbl.setStyleSheet("color:#c9d1d9;")
+        lbl.setStyleSheet(themed("color:#c9d1d9;"))
         return lbl
 
     # ---- keyboard navigation ----
@@ -2582,7 +2582,7 @@ class GainMonitorWindow(QMainWindow):
         self._populate_run_combo()
         self._recompute_pairwise_diffs()
         self._status_lbl.setText(f"{len(self._runs)} runs loaded  [auto-refreshed]")
-        self._status_lbl.setStyleSheet("color:#3fb950;")
+        self._status_lbl.setStyleSheet(themed("color:#3fb950;"))
         self._update_all_views()
 
     def _on_process_folder(self):
@@ -2606,14 +2606,14 @@ class GainMonitorWindow(QMainWindow):
 
     def _load_folder(self, folder: str):
         self._status_lbl.setText("Loading...")
-        self._status_lbl.setStyleSheet("color:#d29922;")
+        self._status_lbl.setStyleSheet(themed("color:#d29922;"))
         QApplication.processEvents()
 
         self._runs = load_all_runs(folder)
         self._current_folder = folder
         if not self._runs:
             self._status_lbl.setText("No data files found")
-            self._status_lbl.setStyleSheet("color:#f85149;")
+            self._status_lbl.setStyleSheet(themed("color:#f85149;"))
             return
 
         # populate start/end combos (all runs)
@@ -2642,7 +2642,7 @@ class GainMonitorWindow(QMainWindow):
         self._populate_run_combo()
         self._recompute_pairwise_diffs()
         self._status_lbl.setText(f"{len(self._runs)} runs loaded")
-        self._status_lbl.setStyleSheet("color:#3fb950;")
+        self._status_lbl.setStyleSheet(themed("color:#3fb950;"))
         self._refresh_btn.setEnabled(True)
         self._auto_refresh_btn.setEnabled(True)
         self._file_snapshot = self._take_file_snapshot(folder)
@@ -3182,7 +3182,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-dir", dest="folder", default=None,
                         help="Data folder to load on startup")
+    parser.add_argument("--theme", choices=available_themes(), default="dark",
+                        help="Colour theme (default: dark)")
     args, qt_args = parser.parse_known_args()
+
+    set_theme(args.theme)
 
     app = QApplication([sys.argv[0]] + qt_args)
     win = GainMonitorWindow()

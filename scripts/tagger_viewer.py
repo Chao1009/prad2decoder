@@ -51,6 +51,10 @@ from PyQt6.QtCore import (
     QObject, Qt, QRectF, QThread, QTimer, QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import QAction, QColor, QFont, QImage, QPainter, QPen
+
+from hycal_geoview import (
+    apply_theme_palette, set_theme, available_themes, THEME,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -421,10 +425,10 @@ class BarChart(QWidget):
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        p.fillRect(self.rect(), QColor(250, 250, 250))
+        p.fillRect(self.rect(), QColor(THEME.CANVAS))
 
         r = self._plotRect()
-        p.setPen(QPen(QColor(60, 60, 60)))
+        p.setPen(QPen(QColor(THEME.TEXT)))
         p.drawRect(r)
 
         if self._title:
@@ -436,7 +440,7 @@ class BarChart(QWidget):
 
         n = self._counts.size
         if n <= 0:
-            p.setPen(QColor(120, 120, 120))
+            p.setPen(QColor(THEME.TEXT_DIM))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, "(no hits)")
             return
 
@@ -449,15 +453,15 @@ class BarChart(QWidget):
             h = (c / cmax) * r.height()
             x0 = r.left() + i * bar_w
             y0 = r.bottom() - h
-            color = QColor(80, 140, 200)
+            color = QColor(THEME.ACCENT)
             if self._highlight is not None and i == self._highlight:
-                color = QColor(230, 120, 40)
+                color = QColor(THEME.HIGHLIGHT)
             elif c == 0:
-                color = QColor(220, 220, 220)
+                color = QColor(THEME.BUTTON_HOVER)
             p.fillRect(QRectF(x0 + 0.5, y0, max(bar_w - 1.0, 1.0), h), color)
 
         # y-axis ticks
-        p.setPen(QColor(100, 100, 100))
+        p.setPen(QColor(THEME.TEXT_DIM))
         f = QFont()
         f.setPointSize(8)
         p.setFont(f)
@@ -510,10 +514,10 @@ class Histogram(QWidget):
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        p.fillRect(self.rect(), QColor(250, 250, 250))
+        p.fillRect(self.rect(), QColor(THEME.CANVAS))
 
         r = self._plotRect()
-        p.setPen(QColor(60, 60, 60))
+        p.setPen(QColor(THEME.TEXT))
         p.drawRect(r)
 
         if self._title:
@@ -525,7 +529,7 @@ class Histogram(QWidget):
 
         n = self._counts.size
         if n <= 0 or self._counts.sum() == 0:
-            p.setPen(QColor(120, 120, 120))
+            p.setPen(QColor(THEME.TEXT_DIM))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, "(no hits for this channel)")
             return
 
@@ -542,11 +546,11 @@ class Histogram(QWidget):
             y0 = r.bottom() - h
             p.fillRect(
                 QRectF(x0, y0, max(bar_w, 1.0), h),
-                QColor(80, 140, 200),
+                QColor(THEME.ACCENT),
             )
 
         # y ticks
-        p.setPen(QColor(100, 100, 100))
+        p.setPen(QColor(THEME.TEXT_DIM))
         f = QFont()
         f.setPointSize(8)
         p.setFont(f)
@@ -648,10 +652,10 @@ class Heatmap2D(QWidget):
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        p.fillRect(self.rect(), QColor(250, 250, 250))
+        p.fillRect(self.rect(), QColor(THEME.CANVAS))
 
         r = self._plotRect()
-        p.setPen(QPen(QColor(60, 60, 60)))
+        p.setPen(QPen(QColor(THEME.TEXT)))
 
         if self._title:
             f = QFont()
@@ -661,19 +665,19 @@ class Heatmap2D(QWidget):
 
         if self._image is None:
             p.drawRect(r)
-            p.setPen(QColor(120, 120, 120))
+            p.setPen(QColor(THEME.TEXT_DIM))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter,
                        "(no matched events — set both channels A and B)")
             return
 
         p.drawImage(r, self._image)
-        p.setPen(QPen(QColor(60, 60, 60)))
+        p.setPen(QPen(QColor(THEME.TEXT)))
         p.drawRect(r)
 
         # tick labels
         f = QFont(); f.setPointSize(8)
         p.setFont(f)
-        p.setPen(QColor(80, 80, 80))
+        p.setPen(QColor(THEME.TEXT_DIM))
         xe, ye = self._xedges, self._yedges
         for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
             x = r.left() + frac * r.width()
@@ -974,6 +978,7 @@ class TdcViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("Tagger TDC Viewer")
         self.resize(1280, 800)
+        apply_theme_palette(self)
 
         self._hits: np.ndarray = (
             hits if hits is not None else np.zeros(0, dtype=RECORD_DTYPE)
@@ -1865,6 +1870,10 @@ def _cli_parser() -> argparse.ArgumentParser:
         help="Skip the pre-flight subscribe/ack handshake against --live URL "
              "(the round-trip defaults to ON and aborts startup on failure).",
     )
+    p.add_argument(
+        "--theme", choices=available_themes(), default="dark",
+        help="Colour theme (default: dark)",
+    )
     return p
 
 
@@ -1928,6 +1937,8 @@ def smoke_test_live(url: str, timeout_ms: int = 5000) -> Optional[str]:
 def main(argv):
     args = _cli_parser().parse_args(argv[1:])
     roc = _parse_roc(args.roc)
+
+    set_theme(args.theme)
 
     app = QApplication(argv[:1])
 

@@ -37,7 +37,7 @@ from PyQt6.QtGui import QColor, QFont
 
 from hycal_geoview import (
     Module, load_modules, HyCalMapWidget, PALETTES, PALETTE_NAMES,
-    apply_dark_palette,
+    apply_theme_palette, set_theme, available_themes, THEME,
 )
 
 
@@ -309,7 +309,7 @@ class PedestalMapWidget(HyCalMapWidget):
 
     def _paint_before_modules(self, p, w: int, h: int):
         if self._title:
-            p.setPen(QColor("#c9d1d9"))
+            p.setPen(QColor(THEME.TEXT))
             p.setFont(QFont("Monospace", 11, QFont.Weight.Bold))
             p.drawText(QRectF(0, 4, w, 24),
                        Qt.AlignmentFlag.AlignCenter, self._title)
@@ -317,19 +317,19 @@ class PedestalMapWidget(HyCalMapWidget):
     def _paint_empty(self, p, w: int, h: int):
         # title-only state (pre-data load)
         if self._title:
-            p.setPen(QColor("#c9d1d9"))
+            p.setPen(QColor(THEME.TEXT))
             p.setFont(QFont("Monospace", 11, QFont.Weight.Bold))
             p.drawText(QRectF(0, 4, w, 24),
                        Qt.AlignmentFlag.AlignCenter, self._title)
         if not self._values:
-            p.setPen(QColor("#555555"))
+            p.setPen(QColor(THEME.TEXT_MUTED))
             p.setFont(QFont("Monospace", 12))
             p.drawText(QRectF(0, 0, w, h),
                        Qt.AlignmentFlag.AlignCenter, "No data")
 
     def _paint_overlays(self, p, w: int, h: int):
         # LMS / V labels
-        p.setPen(QColor("#c9d1d9"))
+        p.setPen(QColor(THEME.TEXT))
         p.setFont(QFont("Monospace", 7, QFont.Weight.Bold))
         for name in _LABEL_NAMES:
             r = self._rects.get(name)
@@ -394,7 +394,7 @@ class PedestalMonitorWindow(QMainWindow):
     def _build_ui(self):
         self.setWindowTitle("HyCal Pedestal Monitor")
         self.resize(1600, 1000)
-        apply_dark_palette(self)
+        apply_theme_palette(self)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -406,17 +406,17 @@ class PedestalMonitorWindow(QMainWindow):
         top = QHBoxLayout()
         lbl = QLabel("HYCAL PEDESTAL MONITOR")
         lbl.setFont(QFont("Monospace", 14, QFont.Weight.Bold))
-        lbl.setStyleSheet("color:#58a6ff;")
+        lbl.setStyleSheet(f"color:{THEME.ACCENT};")
         top.addWidget(lbl)
         top.addStretch()
         self._measure_btn = self._make_btn(
-            "Measure Pedestals", "#3fb950", self._on_measure)
+            "Measure Pedestals", THEME.SUCCESS, self._on_measure)
         top.addWidget(self._measure_btn)
         self._reload_btn = self._make_btn(
-            "Reload Files", "#c9d1d9", self._load_data)
+            "Reload Files", THEME.TEXT, self._load_data)
         top.addWidget(self._reload_btn)
         self._save_btn = self._make_btn(
-            "Save Report", "#d29922", self._on_save_report)
+            "Save Report", THEME.WARN, self._on_save_report)
         top.addWidget(self._save_btn)
         root.addLayout(top)
 
@@ -449,10 +449,10 @@ class PedestalMonitorWindow(QMainWindow):
         self._right_mode_btn = QPushButton("Delta")
         self._right_mode_btn.setFixedWidth(75)
         self._right_mode_btn.setStyleSheet(
-            "QPushButton{background:#21262d;color:#58a6ff;"
-            "border:1px solid #30363d;padding:4px 10px;"
-            "font:bold 13px Monospace;border-radius:3px;}"
-            "QPushButton:hover{background:#30363d;}")
+            f"QPushButton{{background:{THEME.BUTTON};color:{THEME.ACCENT};"
+            f"border:1px solid {THEME.BORDER};padding:4px 10px;"
+            f"font:bold 13px Monospace;border-radius:8px;}}"
+            f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}")
         self._right_mode_btn.clicked.connect(self._toggle_right_mode)
         rng.addWidget(self._right_mode_btn)
         rng.addWidget(self._slabel("range:"))
@@ -462,7 +462,7 @@ class PedestalMonitorWindow(QMainWindow):
         rng.addWidget(self._slabel("-"))
         rng.addWidget(self._right_max)
         rng.addSpacing(10)
-        rng.addWidget(self._make_btn("Apply", "#c9d1d9",
+        rng.addWidget(self._make_btn("Apply", THEME.TEXT,
                                      self._apply_ranges))
         rng.addStretch()
         root.addLayout(rng)
@@ -471,8 +471,9 @@ class PedestalMonitorWindow(QMainWindow):
         self._info = QLabel("Hover over a module for details")
         self._info.setFont(QFont("Monospace", 11))
         self._info.setStyleSheet(
-            "QLabel{background:#161b22;color:#c9d1d9;padding:4px 8px;"
-            "border:1px solid #30363d;border-radius:4px;}")
+            f"QLabel{{background:{THEME.PANEL};color:{THEME.TEXT};"
+            f"padding:4px 8px;border:1px solid {THEME.BORDER};"
+            f"border-radius:8px;}}")
         self._info.setFixedHeight(28)
         root.addWidget(self._info)
 
@@ -489,46 +490,49 @@ class PedestalMonitorWindow(QMainWindow):
         self._report.setReadOnly(True)
         self._report.setFont(QFont("Monospace", 10))
         self._report.setStyleSheet(
-            "QTextEdit{background:#161b22;color:#8b949e;"
-            "border:1px solid #30363d;border-radius:4px;}")
+            f"QTextEdit{{background:{THEME.PANEL};color:{THEME.TEXT_DIM};"
+            f"border:1px solid {THEME.BORDER};border-radius:8px;}}")
         self._report.setMaximumHeight(180)
         root.addWidget(self._report)
 
     def _set_status_style(self, mode: str):
+        # Status rows use a translucent variant of the semantic colour as
+        # background to stay within the active theme. Qt's QSS supports
+        # rgba(...) directly, but keeping the fill solid via a near-black
+        # tint is simpler and theme-neutral: reuse PANEL as the base.
         if mode == "measuring":
-            self._status_lbl.setStyleSheet(
-                "QLabel{background:#2d1f00;color:#d29922;padding:4px;"
-                "border:2px solid #d29922;border-radius:4px;}")
+            bg, fg = THEME.PANEL, THEME.WARN
+            border = f"2px solid {THEME.WARN}"
         elif mode == "done":
-            self._status_lbl.setStyleSheet(
-                "QLabel{background:#1a2a1a;color:#3fb950;padding:4px;"
-                "border:2px solid #3fb950;border-radius:4px;}")
+            bg, fg = THEME.PANEL, THEME.SUCCESS
+            border = f"2px solid {THEME.SUCCESS}"
         elif mode == "error":
-            self._status_lbl.setStyleSheet(
-                "QLabel{background:#2a1a1a;color:#f85149;padding:4px;"
-                "border:2px solid #f85149;border-radius:4px;}")
+            bg, fg = THEME.PANEL, THEME.DANGER
+            border = f"2px solid {THEME.DANGER}"
         else:
-            self._status_lbl.setStyleSheet(
-                "QLabel{background:#161b22;color:#8b949e;padding:4px;"
-                "border:1px solid #30363d;border-radius:4px;}")
+            bg, fg = THEME.PANEL, THEME.TEXT_DIM
+            border = f"1px solid {THEME.BORDER}"
+        self._status_lbl.setStyleSheet(
+            f"QLabel{{background:{bg};color:{fg};padding:4px;"
+            f"border:{border};border-radius:8px;}}")
 
     # -- helpers --
 
     def _make_btn(self, text, fg, slot):
         btn = QPushButton(text)
         btn.setStyleSheet(
-            f"QPushButton{{background:#21262d;color:{fg};"
-            f"border:1px solid #30363d;padding:6px 16px;"
-            f"font:bold 12px Monospace;border-radius:4px;}}"
-            f"QPushButton:hover{{background:#30363d;}}"
-            f"QPushButton:disabled{{color:#555;}}")
+            f"QPushButton{{background:{THEME.BUTTON};color:{fg};"
+            f"border:1px solid {THEME.BORDER};padding:6px 16px;"
+            f"font:bold 12px Monospace;border-radius:8px;}}"
+            f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}"
+            f"QPushButton:disabled{{color:{THEME.TEXT_MUTED};}}")
         btn.clicked.connect(slot)
         return btn
 
     def _slabel(self, text):
         lbl = QLabel(text)
         lbl.setFont(QFont("Monospace", 10))
-        lbl.setStyleSheet("color:#c9d1d9;")
+        lbl.setStyleSheet(f"color:{THEME.TEXT};")
         return lbl
 
     def _sedit(self, text):
@@ -536,8 +540,9 @@ class PedestalMonitorWindow(QMainWindow):
         e.setFixedWidth(55)
         e.setFont(QFont("Monospace", 10))
         e.setStyleSheet(
-            "QLineEdit{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;border-radius:3px;padding:2px 4px;}")
+            f"QLineEdit{{background:{THEME.PANEL};color:{THEME.TEXT};"
+            f"border:1px solid {THEME.BORDER};border-radius:8px;"
+            f"padding:2px 4px;}}")
         e.returnPressed.connect(self._apply_ranges)
         return e
 
@@ -844,7 +849,11 @@ def main():
                     help="Use simulated data for testing")
     ap.add_argument("--modules-db", type=Path, default=MODULES_JSON)
     ap.add_argument("--daq-map", type=Path, default=DAQ_MAP_JSON)
+    ap.add_argument("--theme", choices=available_themes(), default="dark",
+                    help="Colour theme (default: dark)")
     args = ap.parse_args()
+
+    set_theme(args.theme)
 
     modules = prepare_modules(load_modules(args.modules_db))
     daq_map = load_daq_map(args.daq_map)

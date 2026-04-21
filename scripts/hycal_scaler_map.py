@@ -31,7 +31,7 @@ from PyQt6.QtGui import QColor, QFont
 
 from hycal_geoview import (
     Module, load_modules, HyCalMapWidget, PALETTES, PALETTE_NAMES,
-    apply_dark_palette,
+    apply_theme_palette, set_theme, available_themes, THEME,
 )
 
 
@@ -133,7 +133,7 @@ class ScalerMapWindow(QMainWindow):
                             ("  [SIMULATION]" if self._simulation
                              else "  [REALTIME]"))
         self.resize(800, 860)
-        apply_dark_palette(self)
+        apply_theme_palette(self)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -145,21 +145,21 @@ class ScalerMapWindow(QMainWindow):
         top = QHBoxLayout()
         lbl = QLabel("HYCAL SCALER MAP")
         lbl.setFont(QFont("Monospace", 14, QFont.Weight.Bold))
-        lbl.setStyleSheet("color:#58a6ff;")
+        lbl.setStyleSheet(f"color:{THEME.ACCENT};")
         top.addWidget(lbl)
 
         mode = "SIMULATION" if self._simulation else "REALTIME"
-        mode_clr = "#d29922" if self._simulation else "#3fb950"
+        mode_clr = THEME.WARN if self._simulation else THEME.SUCCESS
         mode_lbl = QLabel(mode)
         mode_lbl.setFont(QFont("Monospace", 10, QFont.Weight.Bold))
         mode_lbl.setStyleSheet(f"color:{mode_clr};")
         top.addWidget(mode_lbl)
         top.addStretch()
 
-        self._poll_btn = self._make_btn("Polling: ON", "#3fb950",
+        self._poll_btn = self._make_btn("Polling: ON", THEME.SUCCESS,
                                         self._toggle_polling)
         top.addWidget(self._poll_btn)
-        top.addWidget(self._make_btn("Refresh Now", "#c9d1d9",
+        top.addWidget(self._make_btn("Refresh Now", THEME.TEXT,
                                      self._refresh))
         root.addLayout(top)
 
@@ -179,20 +179,20 @@ class ScalerMapWindow(QMainWindow):
         ctrl.addWidget(self._min_edit)
         ctrl.addWidget(self._styled_label("-"))
         ctrl.addWidget(self._max_edit)
-        ctrl.addWidget(self._make_btn("Apply", "#c9d1d9",
+        ctrl.addWidget(self._make_btn("Apply", THEME.TEXT,
                                       self._apply_range))
-        self._auto_btn = self._make_btn("Auto Scale", "#d29922",
+        self._auto_btn = self._make_btn("Auto Scale", THEME.WARN,
                                         self._toggle_auto_range)
         ctrl.addWidget(self._auto_btn)
         self._update_auto_btn()
-        self._log_btn = self._make_btn("Log: OFF", "#8b949e",
+        self._log_btn = self._make_btn("Log: OFF", THEME.TEXT_DIM,
                                        self._toggle_log)
         ctrl.addWidget(self._log_btn)
         ctrl.addStretch()
 
         self._conn_lbl = QLabel("EPICS: --")
         self._conn_lbl.setFont(QFont("Monospace", 10))
-        self._conn_lbl.setStyleSheet("color:#8b949e;")
+        self._conn_lbl.setStyleSheet(f"color:{THEME.TEXT_DIM};")
         ctrl.addWidget(self._conn_lbl)
         root.addLayout(ctrl)
 
@@ -200,8 +200,9 @@ class ScalerMapWindow(QMainWindow):
         self._info = QLabel("Hover over a module")
         self._info.setFont(QFont("Monospace", 11))
         self._info.setStyleSheet(
-            "QLabel{background:#161b22;color:#c9d1d9;padding:4px 8px;"
-            "border:1px solid #30363d;border-radius:4px;}")
+            f"QLabel{{background:{THEME.PANEL};color:{THEME.TEXT};"
+            f"padding:4px 8px;border:1px solid {THEME.BORDER};"
+            f"border-radius:8px;}}")
         self._info.setFixedHeight(28)
         root.addWidget(self._info)
 
@@ -210,17 +211,17 @@ class ScalerMapWindow(QMainWindow):
     def _make_btn(self, text: str, fg: str, slot) -> QPushButton:
         btn = QPushButton(text)
         btn.setStyleSheet(
-            f"QPushButton{{background:#21262d;color:{fg};"
-            f"border:1px solid #30363d;padding:5px 14px;"
-            f"font:bold 11px Monospace;border-radius:4px;}}"
-            f"QPushButton:hover{{background:#30363d;}}")
+            f"QPushButton{{background:{THEME.BUTTON};color:{fg};"
+            f"border:1px solid {THEME.BORDER};padding:5px 14px;"
+            f"font:bold 11px Monospace;border-radius:8px;}}"
+            f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}")
         btn.clicked.connect(slot)
         return btn
 
     def _styled_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setFont(QFont("Monospace", 11))
-        lbl.setStyleSheet("color:#c9d1d9;")
+        lbl.setStyleSheet(f"color:{THEME.TEXT};")
         return lbl
 
     def _styled_edit(self, text: str) -> QLineEdit:
@@ -228,8 +229,9 @@ class ScalerMapWindow(QMainWindow):
         e.setFixedWidth(70)
         e.setFont(QFont("Monospace", 11))
         e.setStyleSheet(
-            "QLineEdit{background:#161b22;color:#c9d1d9;"
-            "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}")
+            f"QLineEdit{{background:{THEME.PANEL};color:{THEME.TEXT};"
+            f"border:1px solid {THEME.BORDER};border-radius:8px;"
+            f"padding:2px 6px;}}")
         e.returnPressed.connect(self._apply_range)
         return e
 
@@ -271,8 +273,8 @@ class ScalerMapWindow(QMainWindow):
             self._do_auto_range()
 
         n_ok, n_total = self._ep.connection_count()
-        fg = "#3fb950" if n_ok == n_total else (
-             "#d29922" if n_ok > 0 else "#8b949e")
+        fg = THEME.SUCCESS if n_ok == n_total else (
+             THEME.WARN if n_ok > 0 else THEME.TEXT_DIM)
         self._conn_lbl.setText(f"EPICS: {n_ok}/{n_total}")
         self._conn_lbl.setStyleSheet(f"color:{fg};font:10px Monospace;")
 
@@ -293,12 +295,12 @@ class ScalerMapWindow(QMainWindow):
             self._timer.start(POLL_INTERVAL_MS)
             self._poll_btn.setText("Polling: ON")
             self._poll_btn.setStyleSheet(
-                self._poll_btn.styleSheet().replace("#f85149", "#3fb950"))
+                self._poll_btn.styleSheet().replace(THEME.DANGER, THEME.SUCCESS))
         else:
             self._timer.stop()
             self._poll_btn.setText("Polling: OFF")
             self._poll_btn.setStyleSheet(
-                self._poll_btn.styleSheet().replace("#3fb950", "#f85149"))
+                self._poll_btn.styleSheet().replace(THEME.SUCCESS, THEME.DANGER))
 
     def _apply_range(self):
         try:
@@ -325,16 +327,16 @@ class ScalerMapWindow(QMainWindow):
     def _update_auto_btn(self):
         if self._auto_range_on:
             self._auto_btn.setStyleSheet(
-                "QPushButton{background:#d29922;color:#0d1117;"
-                "border:1px solid #d29922;padding:5px 14px;"
-                "font:bold 11px Monospace;border-radius:4px;}"
-                "QPushButton:hover{background:#e0a82b;}")
+                f"QPushButton{{background:{THEME.WARN};color:{THEME.BG};"
+                f"border:1px solid {THEME.WARN};padding:5px 14px;"
+                f"font:bold 11px Monospace;border-radius:8px;}}"
+                f"QPushButton:hover{{background:{THEME.WARN};}}")
         else:
             self._auto_btn.setStyleSheet(
-                "QPushButton{background:#21262d;color:#d29922;"
-                "border:1px solid #30363d;padding:5px 14px;"
-                "font:bold 11px Monospace;border-radius:4px;}"
-                "QPushButton:hover{background:#30363d;}")
+                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.WARN};"
+                f"border:1px solid {THEME.BORDER};padding:5px 14px;"
+                f"font:bold 11px Monospace;border-radius:8px;}}"
+                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}")
 
     def _cycle_palette(self):
         self._palette_idx = (self._palette_idx + 1) % len(PALETTES)
@@ -346,11 +348,11 @@ class ScalerMapWindow(QMainWindow):
         if on:
             self._log_btn.setText("Log: ON")
             self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace("#8b949e", "#58a6ff"))
+                self._log_btn.styleSheet().replace(THEME.TEXT_DIM, THEME.ACCENT))
         else:
             self._log_btn.setText("Log: OFF")
             self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace("#58a6ff", "#8b949e"))
+                self._log_btn.styleSheet().replace(THEME.ACCENT, THEME.TEXT_DIM))
 
     def _on_hover(self, name: str):
         parts = [name]
@@ -374,7 +376,11 @@ def main():
                     help="Simulation mode (random values, no EPICS)")
     ap.add_argument("--database", type=Path, default=MODULES_JSON,
                     help="Path to hycal_modules.json")
+    ap.add_argument("--theme", choices=available_themes(), default="dark",
+                    help="Colour theme (default: dark)")
     args = ap.parse_args()
+
+    set_theme(args.theme)
 
     modules = load_modules(args.database)
     print(f"Loaded {len(modules)} modules")

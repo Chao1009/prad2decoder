@@ -27,9 +27,12 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QTextEdit, QSplitter, QFileDialog,
 )
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal
-from PyQt6.QtGui import QColor, QPen, QFont
+from PyQt6.QtGui import QColor, QPen, QFont, QPalette
 
-from hycal_geoview import HyCalMapWidget as _HyCalMapBase
+from hycal_geoview import (
+    HyCalMapWidget as _HyCalMapBase,
+    THEME, apply_theme_palette, set_theme, available_themes,
+)
 
 
 # ===========================================================================
@@ -54,15 +57,13 @@ _LMS_V_XPOS = {
 }
 _LABEL_NAMES = set(_LMS_V_XPOS.keys()) | {"LMSP"}
 
-# Colours
-COL_BG       = QColor("#0a0e14")
-COL_ON       = QColor("#2a6e3f")   # enabled (green-ish)
-COL_OFF      = QColor("#b02020")   # disabled (red)
-COL_ON_GLASS = QColor("#1e5e34")
-COL_HOVER    = QColor("#58a6ff")
-COL_NO_DAQ   = QColor("#1a1a2e")   # no DAQ mapping
-COL_TEXT      = QColor("#c9d1d9")
-COL_DIM       = QColor("#555555")
+# Colours — resolved against the active :class:`THEME` at paint time.
+def _col_on()       -> QColor: return QColor(THEME.SUCCESS)        # enabled
+def _col_off()      -> QColor: return QColor(THEME.DANGER)         # disabled
+def _col_on_glass() -> QColor: return QColor(THEME.SUCCESS).darker(140)
+def _col_hover()    -> QColor: return QColor(THEME.ACCENT)
+def _col_no_daq()   -> QColor: return QColor(THEME.NO_DATA)
+def _col_text()     -> QColor: return QColor(THEME.TEXT)
 
 
 # ===========================================================================
@@ -250,20 +251,24 @@ class HyCalMapWidget(_HyCalMapBase):
     def _paint_modules(self, p):
         disabled = self._disabled
         mod_map = self._mod_map
+        col_on       = _col_on()
+        col_on_glass = _col_on_glass()
+        col_off      = _col_off()
+        col_no_daq   = _col_no_daq()
         for name, rect in self._rects.items():
             m = mod_map.get(name)
             if m and m.crate < 0:
-                p.fillRect(rect, COL_NO_DAQ)
+                p.fillRect(rect, col_no_daq)
             elif name in disabled:
-                p.fillRect(rect, COL_OFF)
+                p.fillRect(rect, col_off)
             elif m and m.mod_type == "PbGlass":
-                p.fillRect(rect, COL_ON_GLASS)
+                p.fillRect(rect, col_on_glass)
             else:
-                p.fillRect(rect, COL_ON)
+                p.fillRect(rect, col_on)
 
     def _paint_overlays(self, p, w, h):
         # LMS / V labels
-        p.setPen(COL_TEXT)
+        p.setPen(_col_text())
         p.setFont(QFont("Monospace", 7, QFont.Weight.Bold))
         for name in _LABEL_NAMES:
             r = self._rects.get(name)
@@ -271,12 +276,12 @@ class HyCalMapWidget(_HyCalMapBase):
                 p.drawText(r, Qt.AlignmentFlag.AlignCenter, name)
         # hover highlight (use mask-editor's hover colour)
         if self._hovered and self._hovered in self._rects:
-            p.setPen(QPen(COL_HOVER, 2.0))
+            p.setPen(QPen(_col_hover(), 2.0))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(self._rects[self._hovered])
 
     def _paint_after_colorbar(self, p, w, h):
-        p.setPen(QColor("#8b949e"))
+        p.setPen(QColor(THEME.TEXT_DIM))
         p.setFont(QFont("Monospace", 9))
         p.drawText(QRectF(8, h - 18, w - 16, 16),
                    Qt.AlignmentFlag.AlignLeft,
@@ -352,13 +357,7 @@ class TriggerMaskEditor(QMainWindow):
         self._output_path = output_path
         self._mod_map: Dict[str, ModuleInfo] = {m.name: m for m in modules}
 
-        # Dark palette
-        pal = self.palette()
-        pal.setColor(pal.ColorRole.Window, QColor("#0d1117"))
-        pal.setColor(pal.ColorRole.WindowText, QColor("#c9d1d9"))
-        pal.setColor(pal.ColorRole.Base, QColor("#161b22"))
-        pal.setColor(pal.ColorRole.Text, QColor("#c9d1d9"))
-        self.setPalette(pal)
+        apply_theme_palette(self)
 
         # Widgets
         self._map = HyCalMapWidget(modules)
@@ -366,17 +365,21 @@ class TriggerMaskEditor(QMainWindow):
             self._map.disabled = initial_disabled
 
         self._status = QLabel("Click or drag modules to toggle trigger mask")
-        self._status.setStyleSheet("color: #8b949e; font: 10pt Monospace; padding: 4px;")
+        self._status.setStyleSheet(
+            f"color: {THEME.TEXT_DIM}; font: 10pt Monospace; padding: 4px;")
 
         self._text = QTextEdit()
         self._text.setReadOnly(True)
         self._text.setStyleSheet(
-            "background: #161b22; color: #c9d1d9; font: 9pt Monospace; border: 1px solid #30363d;")
+            f"background: {THEME.PANEL}; color: {THEME.TEXT}; "
+            f"font: 9pt Monospace; border: 1px solid {THEME.BORDER};")
 
         # Buttons
-        btn_style = ("QPushButton { background: #21262d; color: #c9d1d9; "
-                     "border: 1px solid #30363d; padding: 6px 14px; font: 10pt; }"
-                     "QPushButton:hover { background: #30363d; }")
+        btn_style = (
+            f"QPushButton {{ background: {THEME.BUTTON}; color: {THEME.TEXT}; "
+            f"border: 1px solid {THEME.BORDER}; padding: 6px 14px; "
+            f"font: 10pt; border-radius: 8px; }}"
+            f"QPushButton:hover {{ background: {THEME.BUTTON_HOVER}; }}")
 
         btn_clear = QPushButton("Enable All")
         btn_clear.setStyleSheet(btn_style)
@@ -482,7 +485,11 @@ def main():
     parser = argparse.ArgumentParser(description="HyCal Trigger Mask Editor")
     parser.add_argument("-i", "--input", help="Load existing trigger mask file")
     parser.add_argument("-o", "--output", help="Default save path")
+    parser.add_argument("--theme", choices=available_themes(), default="dark",
+                        help="Colour theme (default: dark)")
     args = parser.parse_args()
+
+    set_theme(args.theme)
 
     modules = load_data()
 
