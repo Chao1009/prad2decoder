@@ -106,6 +106,16 @@ except Exception as _sib_exc:  # noqa: BLE001
                         f"sibling import: {type(_sib_exc).__name__}: {_sib_exc}"
     HAVE_PRAD2PY = False
 
+# Shared theme utilities live under scripts/hycal_geoview.py (sibling dir
+# of gem/ in both source and install trees).  A missing import here means
+# the install is broken — we don't try to soften that with fallbacks.
+_SCRIPTS_DIR = _SCRIPT_DIR.parent / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+from hycal_geoview import (  # noqa: E402
+    THEME, apply_theme_palette, available_themes, set_theme, themed,
+)
+
 
 # ---------------------------------------------------------------------------
 # Event index
@@ -451,6 +461,7 @@ class GemEventViewer(QMainWindow):
         super().__init__()
         self.setWindowTitle("GEM Event Viewer")
         self.resize(1400, 820)
+        apply_theme_palette(self)
 
         self._daq_config_path = str(daq_config_path or default_daq_config() or "")
         self._gem_map_path    = str(gem_map_path or default_gem_map() or "")
@@ -491,14 +502,15 @@ class GemEventViewer(QMainWindow):
         self._scan_worker: Optional[ScanWorker] = None
         self._progress: Optional[QProgressDialog] = None
 
-        self._build_ui()
-        self._load_geometry_and_gemsys()
-
-        # Debounce timer for slider changes — avoids rebuilding on every tick
-        # of a drag.
+        # Debounce timer must be created BEFORE _build_ui: widgets in the
+        # tuning dock emit valueChanged while populating their defaults,
+        # which routes through _on_threshold_change → _redraw_timer.start().
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setSingleShot(True)
         self._redraw_timer.timeout.connect(self._re_reconstruct_current)
+
+        self._build_ui()
+        self._load_geometry_and_gemsys()
 
         if initial_evio:
             QTimer.singleShot(50, lambda: self._open_evio(initial_evio))
@@ -517,7 +529,7 @@ class GemEventViewer(QMainWindow):
         # --- Top row: file + nav ---
         top = QHBoxLayout()
         self.file_label = QLabel("(no file loaded)")
-        self.file_label.setStyleSheet("color: #444;")
+        self.file_label.setStyleSheet(themed("color:#8b949e;"))
         top.addWidget(self.file_label, 1)
 
         self.btn_prev = QPushButton("◀ Prev"); self.btn_prev.setShortcut("Left")
@@ -586,7 +598,7 @@ class GemEventViewer(QMainWindow):
         # without a pedestal file.  Right-aligned, fixed width.
         self._ped_badge = QLabel("")
         self._ped_badge.setStyleSheet(
-            "color: #b00020; font-weight: bold; padding: 0 8px;")
+            f"color:{THEME.DANGER}; font-weight: bold; padding: 0 8px;")
         self._ped_badge.hide()
         self.statusBar().addPermanentWidget(self._ped_badge)
         self._set_status("Open an EVIO file via File → Open EVIO… (Ctrl+O).")
@@ -1111,8 +1123,11 @@ def main():
     parser.add_argument("-P", "--gem-ped", default=None,
                         help="Pedestal file (required for full-readout data; "
                              "ignored for online-ZS production data).")
+    parser.add_argument("--theme", choices=available_themes(), default="dark",
+                        help="Colour theme (default: dark).")
     args = parser.parse_args()
 
+    set_theme(args.theme)
     app = QApplication(sys.argv)
     win = GemEventViewer(
         initial_evio=args.evio,
