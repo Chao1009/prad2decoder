@@ -616,10 +616,17 @@ class Hist1DWidget(QWidget):
         self._hover_idx: int = -1
 
         self._logy_cb = QCheckBox("log Y", self)
-        self._logy_cb.setFont(QFont("Monospace", 9))
+        self._logy_cb.setFont(QFont("Monospace", 9, QFont.Weight.Bold))
         self._logy_cb.setStyleSheet(
-            "QCheckBox{color:#8b949e;background:transparent;}"
-            "QCheckBox:hover{color:#c9d1d9;}")
+            "QCheckBox{color:#c9d1d9;background:rgba(22,27,34,180);"
+            "padding:2px 6px;border:1px solid #30363d;border-radius:3px;}"
+            "QCheckBox:hover{color:#ffffff;border:1px solid #58a6ff;}"
+            "QCheckBox::indicator{width:12px;height:12px;"
+            "border:1px solid #8b949e;border-radius:2px;"
+            "background:#0d1117;}"
+            "QCheckBox::indicator:hover{border:1px solid #58a6ff;}"
+            "QCheckBox::indicator:checked{background:#58a6ff;"
+            "border:1px solid #58a6ff;}")
         self._logy_cb.toggled.connect(self.set_log_y)
         self._logy_cb.adjustSize()
         self._logy_cb.raise_()
@@ -1137,10 +1144,10 @@ class WaveformViewerWindow(QMainWindow):
             right_lay.addWidget(hist, stretch=1)
         split.addWidget(right)
 
-        # Left panel takes ~40% (enough for a square geo view); right ~60%
-        split.setStretchFactor(0, 2)
-        split.setStretchFactor(1, 3)
-        split.setSizes([620, 880])
+        # Even 50/50 split between the geo+waveform column and the hist stack.
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 1)
+        split.setSizes([750, 750])
         root.addWidget(split, stretch=1)
 
         # navigation + batch controls
