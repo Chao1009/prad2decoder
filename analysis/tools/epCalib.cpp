@@ -98,7 +98,7 @@ int main(int argc, char *argv[])
     }
     if (root_files.empty()) {
         std::cerr << "No input files specified.\n";
-        std::cerr << "Usage: epCalib <input_raw.root|dir> [more files...] -i iteration -o output_root_file -E Ebeam -D daq_config.json -n max_events]\n";
+        std::cerr << "Usage: epCalib <input_raw.root|dir> [more files...] -i iteration -o output_root_file -E Ebeam -D daq_config.json -n max_events\n";
         return 1;
     }
 
