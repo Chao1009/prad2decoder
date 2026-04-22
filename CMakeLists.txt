@@ -262,7 +262,7 @@ if(BUILD_PYTHON)
         "hycal_pedestal_monitor:scripts/hycal_pedestal_monitor.py"
         "hycal_gain_monitor:scripts/hycal_gain_monitor.py"
         "hycal_map_builder:scripts/hycal_map_builder.py"
-        "waveform_viewer:scripts/waveform_viewer.py"
+        "hycal_event_viewer:scripts/hycal_event_viewer.py"
     )
     foreach(_entry ${_PRAD2_PY_WRAPPERS})
         string(REPLACE ":" ";" _parts "${_entry}")

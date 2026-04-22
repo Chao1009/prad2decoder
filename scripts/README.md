@@ -87,27 +87,25 @@ hycal_map_builder mydata.json         # auto-load
 hycal_map_builder mydata.txt --field rms
 ```
 
-### waveform_viewer.py
+### hycal_event_viewer.py
 
-Event-by-event browser for FADC250 waveforms. Opens an EVIO file in
-**random-access** mode (native event-pointer table via
-`evc::EvChannel::OpenRandomAccess`), does a single Scan-only pass to
-index physics sub-events, and then lets you step through events with
-Prev / Next / Jump — all fast in both directions.
+Event-by-event EVIO browser with two tabs:
 
-The layout is a horizontal split: HyCal geo picker + raw-waveform plot on
-the left, four stacked histograms on the right (peak height, integral,
-time, peaks/event). For each viewed event the selected module's waveform
-is drawn and its four histograms accumulate; clicking a module in the
-geo picker (only lit modules are clickable) switches the selection.
+* **Waveform** — FADC250 peak finding and per-module histograms.  HyCal
+  geo picker + raw-waveform plot on the left, four stacked histograms
+  on the right (peak height, integral, time, peaks/event).  Clicking a
+  module in the geo picker switches the selection; "Process next 10k"
+  fills histograms in a background pass.
+* **Cluster** — HyCal energy heatmap with live clustering (`prad2py.det.HyCalCluster`),
+  cluster overlays, and a cluster table.
 
-A **Process next 10k** button runs a background pass that fills the
-selected module's histograms without displaying waveforms, for fast
-accumulation.
+Opens in **random-access** mode (native event-pointer table via
+`evc::EvChannel::OpenRandomAccess`); a single Scan-only pass indexes
+physics sub-events so Prev / Next / Jump are fast both directions.
 
 ```bash
-waveform_viewer                        # File → Open…
-waveform_viewer run.evio.00000
+hycal_event_viewer                        # File → Open…
+hycal_event_viewer run.evio.00000
 ```
 
 File → Save writes the current per-module histograms to JSON for later
@@ -269,7 +267,7 @@ while ch.read() == dec.Status.success:
         # gem_evt = ch.gem();  vtp_evt = ch.vtp()
 ```
 
-Random-access mode (also used internally by `waveform_viewer` and
+Random-access mode (also used internally by `hycal_event_viewer` and
 `prad2_server`'s file mode):
 
 ```python

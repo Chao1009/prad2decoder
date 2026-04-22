@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Waveform Viewer
-===============
+HyCal Event Viewer
+==================
 Browses an evio file event-by-event.  Opens the file in evio's
 random-access mode (no event processing at open time), indexes physics
-sub-events, and lets the user step through them.  For each viewed
-event, the selected module's waveform is drawn and the four
-per-module histograms (peak height, integral, time, n-peaks) accumulate.
+sub-events, and lets the user step through them.  Two tabs:
 
-The "Process next 10k" button runs a background pass that fills the
-current module's histograms without displaying waveforms, for fast
-accumulation.
+* **Waveform** — per-module FADC display, stacked waveform, four
+  accumulating histograms (peak height, integral, time, n-peaks).
+  "Process next 10k" fills histograms in a background pass.
+* **Cluster** — HyCal heatmap of per-module energy with cluster
+  overlays (crosshair + energy label), cluster table, selector.
+  Clustering uses ``prad2py.det.HyCalCluster`` on live ADC data;
+  calibration comes from ``HyCalSystem::Init``.
 
 Usage
 -----
-    python scripts/waveform_viewer.py RUN.evio.00000
-    python scripts/waveform_viewer.py             # File → Open…
+    python scripts/hycal_event_viewer.py RUN.evio.00000
+    python scripts/hycal_event_viewer.py             # File → Open…
 """
 from __future__ import annotations
 
@@ -31,10 +33,12 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QAbstractItemView, QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QComboBox, QCheckBox, QCompleter, QFileDialog, QMessageBox,
-    QProgressDialog, QSizePolicy, QStatusBar, QToolTip, QPushButton, QSpinBox,
-    QSplitter,
+    QProgressDialog, QSizePolicy, QStatusBar, QToolTip, QPushButton,
+    QSpinBox, QDoubleSpinBox, QSplitter, QTabWidget, QTableWidget,
+    QTableWidgetItem, QHeaderView, QDockWidget, QGroupBox,
 )
 from PyQt6.QtCore import (
     Qt, QObject, QPointF, QRectF, QThread, pyqtSignal, QTimer,
@@ -1217,6 +1221,246 @@ class WaveformGeoView(HyCalMapWidget):
 
 
 # ===========================================================================
+#  Cluster display wrappers
+# ===========================================================================
+
+
+class _DisplayCluster:
+    """Display-friendly wrapper around a bound ClusterHit.  We can't set
+    arbitrary attributes on pybind11 objects, so carry centre-name +
+    member-name lists alongside the raw hit."""
+    __slots__ = ("energy", "x", "y", "nblocks", "npos",
+                 "center_id", "center_name", "members")
+
+    def __init__(self, hit, center_name: str, members: List[str]):
+        self.energy      = float(hit.energy)
+        self.x           = float(hit.x)
+        self.y           = float(hit.y)
+        self.nblocks     = int(hit.nblocks)
+        self.npos        = int(hit.npos)
+        self.center_id   = int(hit.center_id)
+        self.center_name = center_name or ""
+        self.members     = list(members)
+
+
+# ===========================================================================
+#  Cluster map widget — HyCal heatmap + cluster overlays
+# ===========================================================================
+
+
+class HyCalClusterMap(HyCalMapWidget):
+    """HyCal map coloured by per-module energy (MeV) with cluster overlays
+    (crosshair + small circle + energy label) mirroring the web monitor."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent, include_lms=True, enable_zoom_pan=True,
+                         show_colorbar=True)
+        self._clusters: List = []               # List[ClusterHit]
+        self._selected_cluster: Optional[int] = None
+        self._member_modules: set = set()       # module names of selected cluster
+
+    # -- public API ------------------------------------------------------
+
+    def set_clusters(self, clusters):
+        self._clusters = list(clusters) if clusters else []
+        self._recompute_membership()
+        self.update()
+
+    def set_selected_cluster(self, idx: Optional[int]):
+        """Highlight one cluster; pass None for 'show all'."""
+        if idx is not None and not (0 <= idx < len(self._clusters)):
+            idx = None
+        self._selected_cluster = idx
+        self._recompute_membership()
+        self.update()
+
+    # -- internals -------------------------------------------------------
+
+    def _recompute_membership(self):
+        """Build set of module names that belong to the selected cluster.
+        ClusterHit doesn't carry a module list; we use ``center_id`` plus
+        the ``members`` list if the caller attached one.  If not, only the
+        centre module lights up for a selected cluster — still useful."""
+        self._member_modules.clear()
+        if self._selected_cluster is None:
+            return
+        cl = self._clusters[self._selected_cluster]
+        members = getattr(cl, "members", None)
+        if members:
+            self._member_modules.update(members)
+        elif getattr(cl, "center_name", ""):
+            self._member_modules.add(cl.center_name)
+
+    def _paint_modules(self, p):
+        """Default colormap paint, but dim non-members when a cluster is
+        selected.  Calls the base implementation via a per-module alpha."""
+        dim = self._selected_cluster is not None and self._member_modules
+        if not dim:
+            super()._paint_modules(p)
+            return
+        stops = self.palette_stops()
+        vmin, vmax = self._vmin, self._vmax
+        no_data = self.NO_DATA_COLOR
+        for name, rect in self._rects.items():
+            v = self._values.get(name)
+            if v is None:
+                col = QColor(no_data)
+            else:
+                t = ((v - vmin) / (vmax - vmin)) if vmax > vmin else 0.5
+                col = cmap_qcolor(t, stops)
+            if name not in self._member_modules:
+                col = QColor(col.red(), col.green(), col.blue(), 60)
+            p.fillRect(rect, col)
+
+    def _paint_overlays(self, p, w, h):
+        super()._paint_overlays(p, w, h)   # hover border
+        if not self._clusters:
+            return
+
+        p.save()
+        cross_pen = QPen(QColor("#ffd166"), 1.6)
+        circle_pen = QPen(QColor("#ffd166"), 1.4)
+        label_pen = QPen(QColor("#ffffff" if THEME.BG.startswith("#0")
+                                or THEME.BG == "#000000" else "#1d1d1f"))
+        font = QFont("Monospace", 9, QFont.Weight.Bold)
+        p.setFont(font)
+        fm = p.fontMetrics()
+
+        for i, cl in enumerate(self._clusters):
+            if self._selected_cluster is not None and i != self._selected_cluster:
+                continue
+            pt = self.geo_to_canvas(cl.x, cl.y)
+            # crosshair
+            p.setPen(cross_pen)
+            L = 9
+            p.drawLine(QPointF(pt.x() - L, pt.y()),
+                       QPointF(pt.x() + L, pt.y()))
+            p.drawLine(QPointF(pt.x(), pt.y() - L),
+                       QPointF(pt.x(), pt.y() + L))
+            # circle scaled by log-ish energy
+            r = max(6.0, min(20.0, 4.0 + 2.0 * (cl.energy ** 0.33)))
+            p.setPen(circle_pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(pt, r, r)
+            # label: "C{id}  {E:.0f} MeV"
+            text = f"C{i}  {cl.energy:.0f}"
+            tw = fm.horizontalAdvance(text)
+            tx = pt.x() + r + 3
+            ty = pt.y() - 3
+            # background halo for readability
+            halo = QColor(0, 0, 0, 140)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(halo)
+            p.drawRect(QRectF(tx - 2, ty - fm.ascent(),
+                              tw + 4, fm.height()))
+            p.setPen(QColor("#ffd166"))
+            p.drawText(QPointF(tx, ty), text)
+        p.restore()
+
+
+# ===========================================================================
+#  Cluster panel — selector + table + footer stats
+# ===========================================================================
+
+
+class ClusterPanel(QWidget):
+    """Right-side pane for the Cluster tab: combo + table + summary line."""
+
+    clusterSelected = pyqtSignal(object)    # int | None  (None = show all)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+
+        self._selector = QComboBox()
+        self._selector.addItem("All clusters", None)
+        self._selector.currentIndexChanged.connect(self._on_selector_changed)
+        lay.addWidget(self._selector)
+
+        self._table = QTableWidget(0, 6)
+        self._table.setHorizontalHeaderLabels(
+            ["#", "center", "E [MeV]", "x [mm]", "y [mm]", "nblocks"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hh.setStretchLastSection(True)
+        self._table.itemSelectionChanged.connect(self._on_table_selection)
+        lay.addWidget(self._table, stretch=1)
+
+        self._summary = QLabel("no event")
+        self._summary.setFont(QFont("Monospace", 9))
+        lay.addWidget(self._summary)
+
+        self._clusters: List = []
+
+    def set_clusters(self, clusters):
+        self._clusters = list(clusters) if clusters else []
+        # Repopulate selector
+        self._selector.blockSignals(True)
+        self._selector.clear()
+        self._selector.addItem("All clusters", None)
+        for i, cl in enumerate(self._clusters):
+            label = f"C{i}  E={cl.energy:.0f} MeV  {getattr(cl, 'center_name', '?')}"
+            self._selector.addItem(label, i)
+        self._selector.setCurrentIndex(0)
+        self._selector.blockSignals(False)
+
+        # Populate table
+        self._table.blockSignals(True)
+        self._table.setRowCount(len(self._clusters))
+        for i, cl in enumerate(self._clusters):
+            row = [
+                f"{i}",
+                getattr(cl, "center_name", "?"),
+                f"{cl.energy:.1f}",
+                f"{cl.x:.1f}",
+                f"{cl.y:.1f}",
+                f"{cl.nblocks}",
+            ]
+            for c, v in enumerate(row):
+                item = QTableWidgetItem(v)
+                if c in (0, 2, 3, 4, 5):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                          | Qt.AlignmentFlag.AlignVCenter)
+                self._table.setItem(i, c, item)
+        self._table.blockSignals(False)
+
+        n = len(self._clusters)
+        tot = sum(c.energy for c in self._clusters)
+        self._summary.setText(f"{n} clusters   ΣE = {tot:.0f} MeV")
+
+    def _on_selector_changed(self, _idx: int):
+        data = self._selector.currentData()
+        # Sync table selection without echoing
+        self._table.blockSignals(True)
+        if data is None:
+            self._table.clearSelection()
+        else:
+            self._table.selectRow(int(data))
+        self._table.blockSignals(False)
+        self.clusterSelected.emit(data)
+
+    def _on_table_selection(self):
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
+            return
+        i = rows[0].row()
+        # Sync combo
+        self._selector.blockSignals(True)
+        self._selector.setCurrentIndex(i + 1)   # +1 for leading "All"
+        self._selector.blockSignals(False)
+        self.clusterSelected.emit(i)
+
+
+# ===========================================================================
 #  Main window
 # ===========================================================================
 
@@ -1226,7 +1470,7 @@ def _natural_sort_key(s: str):
             for p in _NATKEY_RE.split(s or "")]
 
 
-class WaveformViewerWindow(QMainWindow):
+class HyCalEventViewer(QMainWindow):
 
     def __init__(self,
                  *,
@@ -1236,7 +1480,9 @@ class WaveformViewerWindow(QMainWindow):
                  accept_mask: int,
                  reject_mask: int,
                  daq_config_path: str,
-                 hycal_modules: Optional[List] = None):
+                 hycal_modules: Optional[List] = None,
+                 hycal_modules_path: Optional[str] = None,
+                 daq_map_path: Optional[str] = None):
         super().__init__()
         self._hist_config   = hist_config
         self._daq_map       = daq_map
@@ -1245,6 +1491,8 @@ class WaveformViewerWindow(QMainWindow):
         self._reject_mask   = reject_mask
         self._daq_cfg_path  = daq_config_path
         self._hycal_modules = hycal_modules or []
+        self._hycal_modules_path = hycal_modules_path
+        self._daq_map_path       = daq_map_path
 
         # Bin configs — merge user config with defaults, add n-peaks hist
         self._h_cfg = hist_config.get("height_hist",
@@ -1289,6 +1537,29 @@ class WaveformViewerWindow(QMainWindow):
         self._batch_worker: Optional[BatchWorker] = None
         self._batch_thread: Optional[QThread] = None
 
+        # HyCal clustering — init once, reused each event.  Keep a cache
+        # keyed by (crate, slot, ch) so per-channel module lookups don't
+        # trip into C++ through the GIL on every hit.
+        self._hcsys = None
+        self._hccl  = None
+        self._hc_cache: Dict[Tuple[int, int, int], object] = {}
+        if _HAVE_PRAD2PY and self._hycal_modules_path and self._daq_map_path:
+            try:
+                self._hcsys = prad2py.det.HyCalSystem()
+                ok = self._hcsys.init(str(self._hycal_modules_path),
+                                      str(self._daq_map_path))
+                if ok:
+                    self._hccl = prad2py.det.HyCalCluster(self._hcsys)
+                else:
+                    print("[hycal] HyCalSystem.init returned False — "
+                          "cluster tab will be empty", file=sys.stderr)
+                    self._hcsys = None
+            except Exception as e:
+                print(f"[hycal] init failed: {type(e).__name__}: {e}",
+                      file=sys.stderr)
+                self._hcsys = None
+                self._hccl  = None
+
         apply_theme_palette(self)
         self._build_ui()
         self._make_menu()
@@ -1296,7 +1567,7 @@ class WaveformViewerWindow(QMainWindow):
     # -- UI --
 
     def _build_ui(self):
-        self.setWindowTitle("Waveform Viewer")
+        self.setWindowTitle("HyCal Event Viewer")
         self.resize(1500, 1000)
 
         central = QWidget()
@@ -1384,7 +1655,32 @@ class WaveformViewerWindow(QMainWindow):
         self._info.setStyleSheet(themed("color:#8b949e;"))
         root.addWidget(self._info)
 
-        # -- main split: geo+waveform on the left, 2x2 hists on the right --
+        # -- tabbed central area: Waveform + Cluster -----------------------
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._build_waveform_tab(), "Waveform")
+        self._tabs.addTab(self._build_cluster_tab(),  "Cluster")
+        root.addWidget(self._tabs, stretch=1)
+
+        # -- advanced dock (hidden by default) -----------------------------
+        self._adv_dock = self._build_advanced_dock()
+
+        self.setStatusBar(QStatusBar())
+        self._clear_plots()
+
+        # Keyboard: ← / → to navigate prev / next.
+        QShortcut(QKeySequence(Qt.Key.Key_Left),  self, activated=self._on_prev)
+        QShortcut(QKeySequence(Qt.Key.Key_Right), self, activated=self._on_next)
+
+    # ---- Tabs -----------------------------------------------------------
+
+    def _build_waveform_tab(self) -> QWidget:
+        """Original waveform viewer body: geo + waveform on the left, four
+        histograms stacked on the right."""
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(3)
+
         split = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: geo view (square, top) + waveform plot (bottom)
@@ -1398,8 +1694,6 @@ class WaveformViewerWindow(QMainWindow):
         self._geo.moduleClicked.connect(self._on_geo_clicked)
         self._geo.setSizePolicy(QSizePolicy.Policy.Expanding,
                                 QSizePolicy.Policy.Expanding)
-        # Geo view is square, so give it more vertical space; the waveform
-        # plot is wide-and-short and fills whatever's left below.
         left_lay.addWidget(self._geo, stretch=3)
         self._wave = WaveformPlotWidget()
         left_lay.addWidget(self._wave, stretch=1)
@@ -1423,14 +1717,165 @@ class WaveformViewerWindow(QMainWindow):
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 1)
         split.setSizes([750, 750])
-        root.addWidget(split, stretch=1)
+        lay.addWidget(split, stretch=1)
+        return tab
 
-        self.setStatusBar(QStatusBar())
-        self._clear_plots()
+    def _build_cluster_tab(self) -> QWidget:
+        """HyCal heatmap + cluster panel.  Populated each event by
+        ``_display_clusters``."""
+        tab = QWidget()
+        lay = QHBoxLayout(tab)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
 
-        # Keyboard: ← / → to navigate prev / next.
-        QShortcut(QKeySequence(Qt.Key.Key_Left),  self, activated=self._on_prev)
-        QShortcut(QKeySequence(Qt.Key.Key_Right), self, activated=self._on_next)
+        self._cluster_map = HyCalClusterMap()
+        if self._hycal_modules:
+            self._cluster_map.set_modules(self._hycal_modules)
+        self._cluster_map.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                        QSizePolicy.Policy.Expanding)
+        lay.addWidget(self._cluster_map, stretch=3)
+
+        self._cluster_panel = ClusterPanel()
+        self._cluster_panel.clusterSelected.connect(
+            self._cluster_map.set_selected_cluster)
+        lay.addWidget(self._cluster_panel, stretch=1)
+
+        return tab
+
+    # ---- Advanced tuning dock ------------------------------------------
+
+    def _build_advanced_dock(self):
+        """Right-side collapsible dock exposing WaveConfig + HyCalClusterConfig.
+
+        Both configs live in prad2py bindings; changes trigger a re-run of
+        the current event (``_rerun_current``) so the effect is immediate.
+        """
+        dock = QDockWidget("Advanced tuning", self)
+        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea
+                             | Qt.DockWidgetArea.LeftDockWidgetArea)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable
+                         | QDockWidget.DockWidgetFeature.DockWidgetMovable
+                         | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+
+        root = QWidget()
+        rlay = QVBoxLayout(root)
+        rlay.setContentsMargins(6, 6, 6, 6)
+
+        # ---- WaveConfig ------------------------------------------------
+        wg = QGroupBox("Waveform analyser")
+        wf = QFormLayout(wg)
+        self._adv_wave_spins: Dict[str, QDoubleSpinBox] = {}
+        wave_fields = [
+            ("resolution",      0.0,   1e6, 1.0,   "peak integral resolution"),
+            ("threshold",       0.0,  4096, 1.0,   "primary peak ADC thr"),
+            ("min_threshold",   0.0,  4096, 1.0,   "absolute min ADC thr"),
+            ("min_peak_ratio",  0.0,    1.0, 0.01, "secondary/primary ratio"),
+            ("int_tail_ratio",  0.0,    1.0, 0.01, "tail integration cut"),
+            ("ped_flatness",    0.0, 1000.0, 0.5,  "pedestal RMS ceiling"),
+            ("clk_mhz",         1.0,  1000, 1.0,   "FADC clock (MHz)"),
+        ]
+        for name, lo, hi, step, tip in wave_fields:
+            sp = QDoubleSpinBox()
+            sp.setRange(lo, hi); sp.setSingleStep(step); sp.setDecimals(3)
+            val = getattr(self._wcfg, name, 0.0)
+            sp.setValue(float(val))
+            sp.setToolTip(tip)
+            sp.valueChanged.connect(self._on_advanced_changed)
+            wf.addRow(name, sp)
+            self._adv_wave_spins[name] = sp
+
+        self._adv_wave_int_spins: Dict[str, QSpinBox] = {}
+        for name, lo, hi, tip in [
+                ("ped_nsamples", 1, 64,  "samples to use for pedestal"),
+                ("ped_max_iter", 1, 100, "pedestal iteration cap"),
+                ("overflow",     0, 65535, "overflow cutoff (ADC)")]:
+            sp = QSpinBox()
+            sp.setRange(lo, hi); sp.setValue(int(getattr(self._wcfg, name, 0)))
+            sp.setToolTip(tip)
+            sp.valueChanged.connect(self._on_advanced_changed)
+            wf.addRow(name, sp)
+            self._adv_wave_int_spins[name] = sp
+
+        # Python-side hist threshold (gates hist fills + cluster feeding).
+        sp = QDoubleSpinBox()
+        sp.setRange(0.0, 65535.0); sp.setSingleStep(1.0); sp.setDecimals(2)
+        sp.setValue(self._hist_threshold)
+        sp.setToolTip("Minimum peak height (ADC) to count in hists/cluster")
+        sp.valueChanged.connect(self._on_advanced_changed)
+        wf.addRow("hist_threshold", sp)
+        self._adv_hist_threshold_spin = sp
+        rlay.addWidget(wg)
+
+        # ---- HyCalClusterConfig ---------------------------------------
+        cg = QGroupBox("HyCal clustering")
+        cf = QFormLayout(cg)
+        self._adv_cluster_spins: Dict[str, object] = {}
+        if self._hccl is not None:
+            ccfg = self._hccl.get_config()
+            cluster_fields = [
+                ("min_module_energy",  0.0, 1e4, 0.1, "single-module threshold (MeV)"),
+                ("min_center_energy",  0.0, 1e4, 0.1, "seed threshold (MeV)"),
+                ("min_cluster_energy", 0.0, 1e5, 0.1, "total cluster threshold (MeV)"),
+                ("log_weight_thres",   0.0, 20.0, 0.1, "log-weight offset"),
+            ]
+            for name, lo, hi, step, tip in cluster_fields:
+                sp = QDoubleSpinBox()
+                sp.setRange(lo, hi); sp.setSingleStep(step); sp.setDecimals(3)
+                sp.setValue(float(getattr(ccfg, name, 0.0)))
+                sp.setToolTip(tip)
+                sp.valueChanged.connect(self._on_advanced_changed)
+                cf.addRow(name, sp)
+                self._adv_cluster_spins[name] = sp
+
+            for name, lo, hi, tip in [
+                    ("min_cluster_size", 1, 100, "min modules in cluster"),
+                    ("split_iter",       0, 100, "island-split iteration cap"),
+                    ("least_split",      0, 100, "min energy gap for split")]:
+                sp = QSpinBox()
+                sp.setRange(lo, hi); sp.setValue(int(getattr(ccfg, name, 0)))
+                sp.setToolTip(tip)
+                sp.valueChanged.connect(self._on_advanced_changed)
+                cf.addRow(name, sp)
+                self._adv_cluster_spins[name] = sp
+
+            cbx = QCheckBox("corner_conn (include diagonal neighbors)")
+            cbx.setChecked(bool(getattr(ccfg, "corner_conn", False)))
+            cbx.toggled.connect(self._on_advanced_changed)
+            cf.addRow(cbx)
+            self._adv_cluster_spins["corner_conn"] = cbx
+        else:
+            cf.addRow(QLabel("(HyCalSystem not initialized)"))
+        rlay.addWidget(cg)
+
+        rlay.addStretch(1)
+        dock.setWidget(root)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        dock.hide()
+        return dock
+
+    def _on_advanced_changed(self, *_):
+        """Push every dock value back into WaveConfig + HyCalClusterConfig,
+        then re-run the current event."""
+        for name, sp in self._adv_wave_spins.items():
+            setattr(self._wcfg, name, float(sp.value()))
+        for name, sp in self._adv_wave_int_spins.items():
+            setattr(self._wcfg, name, int(sp.value()))
+        self._hist_threshold = float(self._adv_hist_threshold_spin.value())
+
+        if self._hccl is not None and self._adv_cluster_spins:
+            ccfg = self._hccl.get_config()
+            for name, widget in self._adv_cluster_spins.items():
+                if isinstance(widget, QCheckBox):
+                    setattr(ccfg, name, bool(widget.isChecked()))
+                elif isinstance(widget, QSpinBox):
+                    setattr(ccfg, name, int(widget.value()))
+                else:
+                    setattr(ccfg, name, float(widget.value()))
+            self._hccl.set_config(ccfg)
+
+        # Re-run the current event so the new settings take effect.
+        if self._current_idx >= 0:
+            self._goto(self._current_idx)
 
     def _small_btn(self, text: str, slot, primary: bool = False) -> QPushButton:
         btn = QPushButton(text)
@@ -1471,6 +1916,12 @@ class WaveformViewerWindow(QMainWindow):
         a_quit.setShortcut("Ctrl+Q")
         a_quit.triggered.connect(self.close)
         mf.addAction(a_quit)
+
+        mv = mb.addMenu("&View")
+        a_adv = self._adv_dock.toggleViewAction()
+        a_adv.setText("&Advanced tuning")
+        a_adv.setShortcut("Ctrl+T")
+        mv.addAction(a_adv)
 
     # -- file open --
 
@@ -1772,10 +2223,16 @@ class WaveformViewerWindow(QMainWindow):
         do_fill = trig_ok and not already
 
         current_vals: Dict[str, float] = {}   # module_name -> max peak integral
+        module_energies: Dict[str, float] = {}  # name -> MeV (cluster tab)
+
+        # Reset clustering state for this event.
+        if self._hccl is not None:
+            self._hccl.clear()
 
         for r in range(fadc_evt.nrocs):
             roc = fadc_evt.roc(r)
             roc_tag = int(roc.tag)
+            crate = self._roc_to_crate.get(roc_tag)
             for s in roc.present_slots():
                 slot = roc.slot(s)
                 for c in slot.present_channels():
@@ -1792,8 +2249,20 @@ class WaveformViewerWindow(QMainWindow):
                     # Max peak integral (above threshold) for the geo view's
                     # "current" mode.
                     above = [p.integral for p in peaks if p.height >= threshold]
-                    if above and hits.module:
-                        current_vals[hits.module] = max(above)
+                    max_int = max(above) if above else 0.0
+                    if max_int > 0 and hits.module:
+                        current_vals[hits.module] = max_int
+
+                    # Feed the cluster tab: resolve channel → HyCal module
+                    # on first sight, then push (module_idx, energy_MeV).
+                    if self._hccl is not None and crate is not None and max_int > 0:
+                        mod = self._resolve_hycal_module(crate, s, c, key)
+                        if mod is not None:
+                            energy = mod.energize(max_int)
+                            if energy > 0:
+                                self._hccl.add_hit(mod.index, energy)
+                                module_energies[mod.name] = energy
+
                     if not do_fill:
                         continue
                     kept = 0
@@ -1823,6 +2292,60 @@ class WaveformViewerWindow(QMainWindow):
             self._set_info_line(info, peaks=sel_peaks)
         self._display_hists_for_selected()
         self._display_waveform(fadc_evt)
+        self._display_clusters(module_energies)
+
+    def _resolve_hycal_module(self, crate: int, slot: int, ch: int,
+                              cache_key: Tuple[int, int, int]):
+        """Look up a HyCal Module by DAQ address, caching on the ROC-tag key.
+        Returns the Module or None if this channel isn't a HyCal module
+        (LMS / SCINT / scaler channels return None and are silently ignored)."""
+        if self._hcsys is None:
+            return None
+        if cache_key in self._hc_cache:
+            return self._hc_cache[cache_key]
+        m = self._hcsys.module_by_daq(int(crate), int(slot), int(ch))
+        # Filter: only HyCal PWO4/PbGlass modules contribute to clustering.
+        if m is not None and not m.is_hycal():
+            m = None
+        self._hc_cache[cache_key] = m
+        return m
+
+    def _display_clusters(self, module_energies: Dict[str, float]):
+        """Push per-event energies + reconstructed clusters to the Cluster tab."""
+        if self._hccl is None:
+            return
+        # Push energies to the heatmap
+        if module_energies:
+            vmax = max(module_energies.values())
+        else:
+            vmax = 1.0
+        self._cluster_map.set_values(module_energies)
+        self._cluster_map.set_range(0.0, vmax if vmax > 0 else 1.0)
+
+        # Reconstruct + wrap for display
+        self._hccl.form_clusters()
+        matched = self._hccl.reconstruct_matched()
+        display: List["_DisplayCluster"] = []
+        for rr in matched:
+            mc = rr.cluster
+            hit = rr.hit
+            centre = mc.center
+            cname = ""
+            members = []
+            try:
+                cmod = self._hcsys.module(centre.index)
+                cname = cmod.name
+            except Exception:
+                pass
+            for h in mc.hits:
+                try:
+                    members.append(self._hcsys.module(h.index).name)
+                except Exception:
+                    pass
+            display.append(_DisplayCluster(hit, cname, members))
+
+        self._cluster_map.set_clusters(display)
+        self._cluster_panel.set_clusters(display)
 
     def _compute_overall_occupancy(self) -> Dict[str, float]:
         """module_name -> events_with_peak / events_accumulated (skip empty)."""
@@ -2089,7 +2612,8 @@ class WaveformViewerWindow(QMainWindow):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Waveform viewer — browse an evio file event-by-event.")
+        description="HyCal Event Viewer — browse an evio file event-by-event "
+                    "with Waveform and Cluster tabs.")
     ap.add_argument("path", nargs="?", type=Path,
                     help="evio file to open (otherwise use File → Open…).")
     ap.add_argument("--config", type=Path,
@@ -2134,14 +2658,18 @@ def main():
     reject_mask = _mask_from_names(reject_names, bit_map) if reject_names else 0
 
     app = QApplication(sys.argv)
-    win = WaveformViewerWindow(
-        hist_config     = hist_cfg,
-        daq_map         = daq_map,
-        roc_to_crate    = roc_to_crate,
-        accept_mask     = accept_mask,
-        reject_mask     = reject_mask,
-        daq_config_path = str(args.daq_config) if args.daq_config.is_file() else "",
-        hycal_modules   = hycal_modules,
+    win = HyCalEventViewer(
+        hist_config        = hist_cfg,
+        daq_map            = daq_map,
+        roc_to_crate       = roc_to_crate,
+        accept_mask        = accept_mask,
+        reject_mask        = reject_mask,
+        daq_config_path    = str(args.daq_config) if args.daq_config.is_file() else "",
+        hycal_modules      = hycal_modules,
+        hycal_modules_path = (str(args.hycal_modules)
+                              if args.hycal_modules.is_file() else None),
+        daq_map_path       = (str(args.daq_map)
+                              if args.daq_map.is_file() else None),
     )
     win.show()
     if args.path is not None:
