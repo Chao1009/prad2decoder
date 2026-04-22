@@ -80,6 +80,7 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QProgressDialog,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QStatusBar,
@@ -541,8 +542,12 @@ class ApvPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(self.MIN_W, self.MIN_H)
+        # Horizontal stretch to fill the grid cell (capped by RawApvTab
+        # to ≤ viewport/COLS); fixed height from sizeHint.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
         self._title = ""
-        self._badge = ""                # "full-readout" when firmware did NOT run ZS
+        self._badge = ""                # e.g. "no hits" for full-readout APVs with no ZS survivors
         self._frame: Optional[np.ndarray] = None    # (128, 6) float or int16
         self._hits:  Optional[np.ndarray] = None    # (128,) bool
         self._y_auto = True
@@ -765,33 +770,48 @@ class RawApvTab(QWidget):
                     f"(GemSystem idx {idx})")
                 grid.addWidget(panel, r, c)
                 panels[idx] = panel
-            # Freeze the layout: panels take their own sizeHint, leftover
-            # width and height go into terminal stretches.  Hiding some
-            # panels via setVisible no longer re-flows survivors.
+            # Equal stretch across the COLS data columns; each panel caps
+            # at viewport/COLS via the maxWidth set in resizeEvent below.
             for c in range(self.COLS):
-                grid.setColumnStretch(c, 0)
-            grid.setColumnStretch(self.COLS, 1)
+                grid.setColumnStretch(c, 1)
             grid.setRowStretch(grid.rowCount(), 1)
             page.setWidget(content)
             self._panels[det_name] = panels
             tab_i = self._tabs.addTab(page, det_name)
             self._tab_index_of[det_name] = tab_i
+        self._apply_panel_max_width()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._apply_panel_max_width()
+
+    def _apply_panel_max_width(self):
+        """Cap each panel at ``viewport_width / COLS`` so filtering (hide
+        via setVisible) can't make survivors balloon past 1/COLS."""
+        if not self._panels:
+            return
+        # Use the tab widget's content area width — scroll bar reserved.
+        vp_w = self._tabs.width() if self._tabs.count() else self.width()
+        max_w = max(ApvPanel.MIN_W, (vp_w - 24) // self.COLS)
+        for panels in self._panels.values():
+            for p in panels.values():
+                p.setMaximumWidth(int(max_w))
 
     def set_event_data(self,
                        processed: Dict[int, np.ndarray],
                        raw:       Dict[int, np.ndarray],
                        hits:      Dict[int, np.ndarray],
-                       full_readout_apvs: Optional[set] = None):
+                       no_hit_apvs: Optional[set] = None):
         """Push per-event data; call after process_event() returns.
 
-        ``full_readout_apvs`` = set of GemSystem indices where the firmware
-        shipped all 128 strips (no online ZS).  These get a red frame +
-        'full-readout' badge so users can tell them apart from the normal
-        (firmware-ZS'd) case."""
+        ``no_hit_apvs`` = set of GemSystem indices for APVs the caller
+        wants highlighted as suspicious (red frame + 'no hits' badge).
+        The caller typically picks full-readout APVs that produced no
+        software-ZS hits — dead cables / bad pedestals diagnostic."""
         self._processed = processed
         self._raw       = raw
         self._hits      = hits
-        self._full_readout = full_readout_apvs or set()
+        self._no_hit_apvs = no_hit_apvs or set()
         self._refresh_all_panels()
 
     def _on_control_changed(self, *_):
@@ -826,10 +846,10 @@ class RawApvTab(QWidget):
                          else self._raw.get(idx))
                 title = (f"c{m['crate_id']} m{m['mpd_id']} a{m['adc_ch']}  "
                          f"{m['det_name']} {m['plane_type']} p{m['det_pos']}")
-                # Highlight APVs where firmware did NOT run ZS — these
-                # ship all 128 strips, and the software has to do the
-                # suppression.  Normal (firmware-ZS'd) APVs stay unmarked.
-                badge = "full-readout" if idx in self._full_readout else ""
+                # Highlight "no hits" APVs: the caller marks full-readout
+                # channels that produced no software-ZS hits — likely
+                # dead cable / missing pedestal.  Normal APVs stay clean.
+                badge = "no hits" if idx in self._no_hit_apvs else ""
                 panel.set_frame(title, frame, has_zs, badge)
 
             tab_i = self._tab_index_of.get(det_name)
@@ -1058,11 +1078,8 @@ class GemEventViewer(QMainWindow):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
 
-        # --- Top row: file + nav ---
+        # --- Top row: navigation (file info lives in the status bar) ---
         top = QHBoxLayout()
-        self.file_label = QLabel("(no file loaded)")
-        self.file_label.setStyleSheet(themed("color:#8b949e;"))
-        top.addWidget(self.file_label, 1)
 
         self.btn_prev = QPushButton("◀ Prev"); self.btn_prev.setShortcut("Left")
         self.btn_next = QPushButton("Next ▶"); self.btn_next.setShortcut("Right")
@@ -1134,17 +1151,21 @@ class GemEventViewer(QMainWindow):
         self.tabs.addTab(self.raw_apv_tab, "Raw APV")
         root.addWidget(self.tabs, 1)
 
-        # --- Status bar ---
+        # --- Status bar: left = per-event info, right = file info ---
         self.setStatusBar(QStatusBar(self))
         self._status = QLabel("")
         self.statusBar().addPermanentWidget(self._status, 1)
         # Red warning badge — only visible when full-readout data is loaded
-        # without a pedestal file.  Right-aligned, fixed width.
+        # without a pedestal file.
         self._ped_badge = QLabel("")
         self._ped_badge.setStyleSheet(
             f"color:{THEME.DANGER}; font-weight: bold; padding: 0 8px;")
         self._ped_badge.hide()
         self.statusBar().addPermanentWidget(self._ped_badge)
+        # File info (name, event count, mode) — right-aligned, dim text.
+        self.file_label = QLabel("(no file loaded)")
+        self.file_label.setStyleSheet(themed("color:#8b949e; padding: 0 8px;"))
+        self.statusBar().addPermanentWidget(self.file_label)
         self._set_status("Open an EVIO file via File → Open EVIO… (Ctrl+O).")
 
         # --- Advanced dock (hidden by default) ---
@@ -1707,7 +1728,7 @@ class GemEventViewer(QMainWindow):
         processed: Dict[int, np.ndarray] = {}
         raw:       Dict[int, np.ndarray] = {}
         hits:      Dict[int, np.ndarray] = {}
-        full_readout: set = set()
+        no_hit_fr: set = set()
         for i in range(self._gsys.get_n_apvs()):
             try:
                 processed[i] = self._gsys.get_apv_frame(i)
@@ -1718,9 +1739,14 @@ class GemEventViewer(QMainWindow):
             key = (int(cfg.crate_id), int(cfg.mpd_id), int(cfg.adc_ch))
             if key in raw_by_addr:
                 raw[i] = raw_by_addr[key]
-                if key in full_readout_addrs:
-                    full_readout.add(i)
-        self.raw_apv_tab.set_event_data(processed, raw, hits, full_readout)
+                # Highlight "suspicious" APVs: full-readout (firmware
+                # shipped all 128 strips, no online ZS) AND no channel
+                # survived software ZS.  In a full-readout run this
+                # picks out dead cables / bad pedestals / no-hit APVs;
+                # in a firmware-ZS run nothing triggers.
+                if key in full_readout_addrs and not bool(hits[i].any()):
+                    no_hit_fr.add(i)
+        self.raw_apv_tab.set_event_data(processed, raw, hits, no_hit_fr)
 
     def _re_reconstruct_current(self):
         if self._gsys is None or self._gcl is None:
