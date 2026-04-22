@@ -860,6 +860,10 @@ class RawApvTab(QWidget):
         self._grouped: Dict[str, List[int]] = {}
         # det_name → {apv_idx: ApvPanel}
         self._panels: Dict[str, Dict[int, ApvPanel]] = {}
+        # det_name → list of apv_index in the packed grid order
+        self._sorted_idx: Dict[str, List[int]] = {}
+        # det_name → QGridLayout holding the panels (for repack)
+        self._grids: Dict[str, QGridLayout] = {}
         # det_name → tab index (for grey-out)
         self._tab_index_of: Dict[str, int] = {}
 
@@ -873,6 +877,8 @@ class RawApvTab(QWidget):
         self._no_hit_apvs.clear()
         self._grouped.clear()
         self._panels.clear()
+        self._sorted_idx.clear()
+        self._grids.clear()
         self._tab_index_of.clear()
         self._tabs.clear()
         self._status.setText("")
@@ -921,6 +927,8 @@ class RawApvTab(QWidget):
             grid.setRowStretch(grid.rowCount(), 1)
             page.setWidget(content)
             self._panels[det_name] = panels
+            self._sorted_idx[det_name] = sorted_apvs
+            self._grids[det_name] = grid
             tab_i = self._tabs.addTab(page, det_name)
             self._tab_index_of[det_name] = tab_i
         self._apply_panel_max_width()
@@ -998,8 +1006,9 @@ class RawApvTab(QWidget):
         dim_col.setAlpha(100)
 
         for det_name, panels in self._panels.items():
-            visible_in_tab = 0
-            for idx, panel in panels.items():
+            visible_ordered: List[int] = []
+            for idx in self._sorted_idx.get(det_name, list(panels.keys())):
+                panel = panels[idx]
                 m = self._apv_meta[idx]
                 total += 1
                 has_zs = self._hits.get(idx)
@@ -1009,7 +1018,7 @@ class RawApvTab(QWidget):
                     continue
                 panel.setVisible(True)
                 shown += 1
-                visible_in_tab += 1
+                visible_ordered.append(idx)
 
                 frame = source.get(idx)
                 title = (f"c{m['crate_id']} m{m['mpd_id']} a{m['adc_ch']}  "
@@ -1023,10 +1032,23 @@ class RawApvTab(QWidget):
                     cm_trace=self._cm.get(idx) if show_cm else None,
                 )
 
+            # Repack: put visible panels into the front slots in sorted
+            # order so filtering doesn't leave gaps.  Hidden panels are
+            # removed from the layout entirely (they'll rejoin when
+            # visible again).  The columns keep equal stretch so panels
+            # still scale with the window.
+            grid = self._grids.get(det_name)
+            if grid is not None:
+                for idx, panel in panels.items():
+                    grid.removeWidget(panel)
+                for n, idx in enumerate(visible_ordered):
+                    r, c = divmod(n, self.COLS)
+                    grid.addWidget(panels[idx], r, c)
+
             tab_i = self._tab_index_of.get(det_name)
             if tab_i is not None:
                 tab_bar.setTabTextColor(
-                    tab_i, dim_col if visible_in_tab == 0 else active_col)
+                    tab_i, dim_col if len(visible_ordered) == 0 else active_col)
 
         mode = "processed" if processed_view else "raw"
         self._status.setText(f"{shown}/{total} APVs  [{mode}]")
