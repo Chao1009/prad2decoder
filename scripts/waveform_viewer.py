@@ -790,6 +790,19 @@ class WaveformPlotWidget(QWidget):
         self._update_stack_counter()
         self.update()
 
+    def reset_stack_if_new_key(self, key: str):
+        """Reset traces when the caller switches to a different channel.
+
+        Lets _display_waveform report a module change even when the new
+        module has no samples in the current event — otherwise the empty
+        early-return path would leave the previous module's stacks behind.
+        """
+        if self._stack_enabled and key != self._stack_key:
+            self._stack_traces = []
+            self._stack_key = key
+            self._update_stack_counter()
+            self.update()
+
     def is_stacking(self) -> bool:
         return self._stack_enabled
 
@@ -1869,12 +1882,14 @@ class WaveformViewerWindow(QMainWindow):
             self._wave.clear("(select a module)")
             return
         roc_tag, slot, ch = key
+        stack_key = f"{roc_tag:02X}_{slot}_{ch}"
         samples = _find_channel_samples(fadc_evt, roc_tag, slot, ch)
         if samples is None or samples.size == 0:
-            # Keep the stacker intact — matches resources/waveform.js:105
-            # where empty events in stack mode return without touching the
-            # plot.
+            # Keep the stacker intact on empty events — matches
+            # resources/waveform.js:105 — but still clear it when the
+            # user has switched to a different module.
             if self._wave.is_stacking():
+                self._wave.reset_stack_if_new_key(stack_key)
                 return
             hits = self._channels.get(key)
             mod = hits.module if hits and hits.module else "(unmapped)"
@@ -1887,7 +1902,7 @@ class WaveformViewerWindow(QMainWindow):
                             title=(f"{mod}   roc=0x{roc_tag:02X}  "
                                    f"slot={slot}  ch={ch}"),
                             clk_mhz=self._wcfg.clk_mhz,
-                            stack_key=f"{roc_tag:02X}_{slot}_{ch}")
+                            stack_key=stack_key)
 
     def _clear_hists(self):
         self._h_height.clear("Peak Height")
