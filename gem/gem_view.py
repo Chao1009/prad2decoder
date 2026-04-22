@@ -406,13 +406,24 @@ def _w2p(scale: float, ox: float, oy: float, world_h: float,
 
 
 _LEGEND_ENTRIES = [
-    ("patch-teal",    "X strip hits"),
-    ("patch-red",     "Y strip hits"),
+    ("patch-cmap",    "strip hits"),
     ("tri-up-blue",   "X cluster"),
     ("tri-right-red", "Y cluster"),
     ("plus-fg",       "2D hit"),
     ("dash-gray",     "Cross-talk"),
 ]
+
+
+def _pick_charge_lut(bg: QColor) -> List[Tuple[int, int, int]]:
+    """Dark backgrounds → winter (cool); light → autumn (warm).
+
+    X- and Y-strip orientation already separates the two planes visually
+    (vertical vs horizontal lines), so a single colormap for both carries
+    enough information and frees up a colorbar's worth of canvas space.
+    """
+    # Rec. 601 luma — darker than ~45% luma counts as a dark theme.
+    luma = 0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()
+    return CMAP_WINTER_RGB if luma < 115 else CMAP_AUTUMN_RGB
 
 
 def draw_event_panels(painter: QPainter, canvas: QRectF,
@@ -426,12 +437,14 @@ def draw_event_panels(painter: QPainter, canvas: QRectF,
                       fg: Optional[QColor] = None):
     """Paint one event (all visible detectors) into ``canvas``.
 
-    Layout: title top (~28 px), legend bottom (~32 px), two colorbars right
+    Layout: title top (~28 px), legend bottom (~32 px), one colorbar right
     (~80 px).  Remaining area divided horizontally into N panels, one per
-    detector.
+    detector.  Strip colormap is theme-dependent — winter on dark, autumn
+    on light.
     """
     if bg is None: bg = QColor("white")
     if fg is None: fg = QColor("#222")
+    lut = _pick_charge_lut(bg)
 
     painter.fillRect(canvas, bg)
 
@@ -440,7 +453,7 @@ def draw_event_panels(painter: QPainter, canvas: QRectF,
 
     title_h = 32 if title else 8
     legend_h = 36
-    cb_w = 110
+    cb_w = 90
     margin = 12
 
     # Title
@@ -451,13 +464,13 @@ def draw_event_panels(painter: QPainter, canvas: QRectF,
             QRectF(canvas.x(), canvas.y() + 4, canvas.width(), title_h - 8),
             Qt.AlignmentFlag.AlignCenter, title)
 
-    # Colorbars (right margin) — based on global charge range
+    # Colorbar (right margin) — based on global charge range
     vmin, vmax = charge_range(det_hits)
     cb_area = QRectF(canvas.right() - cb_w - margin,
                      canvas.y() + title_h,
                      cb_w,
                      canvas.height() - title_h - legend_h - margin)
-    _paint_twin_colorbars(painter, cb_area, vmin, vmax, fg)
+    _paint_colorbar(painter, cb_area, lut, vmin, vmax, "strip charge", fg)
 
     # Panel strip
     panels_area = QRectF(canvas.x() + margin,
@@ -481,18 +494,19 @@ def draw_event_panels(painter: QPainter, canvas: QRectF,
             dg = detectors.get(did, detectors.get(ref_key, {}))
             _draw_event_panel(painter, panel, dg, dd,
                               det_hits.get(did, {"x": [], "y": []}),
-                              hole, vmin, vmax, fg)
+                              hole, vmin, vmax, fg, lut)
 
     # Legend
     legend = QRectF(canvas.x(), canvas.bottom() - legend_h,
                     canvas.width(), legend_h)
-    _paint_legend(painter, legend, _LEGEND_ENTRIES, fg)
+    _paint_legend(painter, legend, _LEGEND_ENTRIES, fg, lut)
 
 
 def _draw_event_panel(p: QPainter, panel: QRectF,
                       geom: dict, det_data: dict, hits: Dict[str, list],
                       hole: Optional[dict],
-                      vmin: float, vmax: float, fg: QColor):
+                      vmin: float, vmax: float, fg: QColor,
+                      lut: List[Tuple[int, int, int]]):
     x_size = geom.get("x_size", 1.0)
     y_size = geom.get("y_size", 1.0)
     x_pitch = geom.get("x_pitch", 1.0)
@@ -528,12 +542,13 @@ def _draw_event_panel(p: QPainter, panel: QRectF,
         p.setBrush(QColor(255, 204, 0, 24))
         p.drawRect(QRectF(rx, ry, rw, rh))
 
-    # Strip segments (solid first, then cross-talk dashed)
+    # Strip segments (solid first, then cross-talk dashed).  Both planes
+    # use the active colormap — orientation alone identifies X vs Y.
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     span = max(vmax - vmin, 1e-9)
-    _draw_charge_strips(p, hits.get("x", []), "X", CMAP_WINTER_RGB,
+    _draw_charge_strips(p, hits.get("x", []), "X", lut,
                         vmin, span, scale, ox, oy, y_size, x_size)
-    _draw_charge_strips(p, hits.get("y", []), "Y", CMAP_AUTUMN_RGB,
+    _draw_charge_strips(p, hits.get("y", []), "Y", lut,
                         vmin, span, scale, ox, oy, y_size, x_size)
 
     # Clusters + 2D hits
@@ -638,47 +653,39 @@ def _draw_clusters_and_2d(p: QPainter, det_data: dict,
         p.drawLine(QPointF(hx, hy - plus_s), QPointF(hx, hy + plus_s))
 
 
-def _paint_twin_colorbars(p: QPainter, area: QRectF,
-                          vmin: float, vmax: float, fg: QColor):
-    """Two vertical colourbars (X plane blue, Y plane red) stacked in ``area``."""
-    pad = 6
-    half_h = (area.height() - pad) / 2
+def _paint_colorbar(p: QPainter, area: QRectF,
+                    lut: List[Tuple[int, int, int]],
+                    vmin: float, vmax: float,
+                    label: str, fg: QColor):
+    """One vertical colourbar spanning ``area`` (min at bottom, max at top)."""
     bar_w = 14
     label_w = area.width() - bar_w - 8
+    bar = QRectF(area.x() + 6, area.y() + 4, bar_w, area.height() - 8)
 
-    for i, (lut, label) in enumerate(
-            [(CMAP_WINTER_RGB, "X charge"),
-             (CMAP_AUTUMN_RGB, "Y charge")]):
-        bar = QRectF(area.x() + 6,
-                     area.y() + i * (half_h + pad),
-                     bar_w, half_h)
-        grad = QLinearGradient(0, bar.bottom(), 0, bar.top())
-        # build gradient from LUT (6 sample points)
-        n_samples = 6
-        for k in range(n_samples):
-            t = k / (n_samples - 1)
-            r, g, b = lut[int(round(t * (len(lut) - 1)))]
-            grad.setColorAt(t, QColor(r, g, b))
-        p.fillRect(bar, QBrush(grad))
-        p.setPen(QPen(fg, 0))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(bar)
+    grad = QLinearGradient(0, bar.bottom(), 0, bar.top())
+    n_samples = 6
+    for k in range(n_samples):
+        t = k / (n_samples - 1)
+        r, g, b = lut[int(round(t * (len(lut) - 1)))]
+        grad.setColorAt(t, QColor(r, g, b))
+    p.fillRect(bar, QBrush(grad))
+    p.setPen(QPen(fg, 0))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRect(bar)
 
-        p.setPen(fg)
-        p.setFont(_font(8))
-        text_x = bar.right() + 4
-        p.drawText(QRectF(text_x, bar.top() - 2, label_w, 12),
-                   Qt.AlignmentFlag.AlignLeft,
-                   f"{vmax:.0f}")
-        p.drawText(QRectF(text_x, bar.center().y() - 6, label_w, 12),
-                   Qt.AlignmentFlag.AlignLeft,
-                   label)
-        p.drawText(QRectF(text_x, bar.bottom() - 10, label_w, 12),
-                   Qt.AlignmentFlag.AlignLeft,
-                   f"{vmin:.0f}")
+    p.setPen(fg)
+    p.setFont(_font(8))
+    text_x = bar.right() + 4
+    p.drawText(QRectF(text_x, bar.top() - 2, label_w, 12),
+               Qt.AlignmentFlag.AlignLeft, f"{vmax:.0f}")
+    p.drawText(QRectF(text_x, bar.center().y() - 6, label_w, 12),
+               Qt.AlignmentFlag.AlignLeft, label)
+    p.drawText(QRectF(text_x, bar.bottom() - 10, label_w, 12),
+               Qt.AlignmentFlag.AlignLeft, f"{vmin:.0f}")
 
 
-def _paint_legend(p: QPainter, area: QRectF, entries, fg: QColor):
+def _paint_legend(p: QPainter, area: QRectF, entries, fg: QColor,
+                  lut: List[Tuple[int, int, int]]):
     """Horizontal legend row inside ``area`` — equal-width cells."""
     p.setPen(fg)
     p.setFont(_font(9))
@@ -691,18 +698,15 @@ def _paint_legend(p: QPainter, area: QRectF, entries, fg: QColor):
     for i, (kind, label) in enumerate(entries):
         cx = area.x() + i * cell_w + 8
         cy = area.center().y()
-        _draw_legend_glyph(p, kind, cx, cy, fg)
+        _draw_legend_glyph(p, kind, cx, cy, fg, lut)
         p.setPen(fg)
         p.drawText(QPointF(cx + mark_w + 4, cy + fm.ascent() / 2 - 2), label)
 
 
-def _draw_legend_glyph(p: QPainter, kind: str, cx: float, cy: float, fg: QColor):
-    if kind == "patch-teal":
-        c = QColor(*CMAP_WINTER_RGB[len(CMAP_WINTER_RGB) // 2])
-        p.setPen(QPen(c, 0)); p.setBrush(c)
-        p.drawRect(QRectF(cx, cy - 5, 14, 10))
-    elif kind == "patch-red":
-        c = QColor(*CMAP_AUTUMN_RGB[len(CMAP_AUTUMN_RGB) // 2])
+def _draw_legend_glyph(p: QPainter, kind: str, cx: float, cy: float,
+                       fg: QColor, lut: List[Tuple[int, int, int]]):
+    if kind == "patch-cmap":
+        c = QColor(*lut[len(lut) // 2])
         p.setPen(QPen(c, 0)); p.setBrush(c)
         p.drawRect(QRectF(cx, cy - 5, 14, 10))
     elif kind == "tri-up-blue":
