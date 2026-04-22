@@ -560,6 +560,7 @@ class ApvPanel(QWidget):
         self._y_fixed: Optional[Tuple[float, float]] = None
         self._thr_trace:  Optional[np.ndarray] = None    # (128,) float
         self._cm_trace:   Optional[np.ndarray] = None    # (6,)  int16
+        self._signal_flag = False       # True → accent border (ZS survivors present)
 
     def sizeHint(self):
         return QSize(self.HINT_W, self.HINT_H)
@@ -571,7 +572,8 @@ class ApvPanel(QWidget):
                   sample_mask: Tuple[bool, ...] = (True,) * 6,
                   y_fixed: Optional[Tuple[float, float]] = None,
                   thr_trace: Optional[np.ndarray] = None,
-                  cm_trace: Optional[np.ndarray] = None):
+                  cm_trace: Optional[np.ndarray] = None,
+                  signal_flag: bool = False):
         self._title = title
         self._badge = badge
         self._frame = frame
@@ -580,6 +582,7 @@ class ApvPanel(QWidget):
         self._y_fixed = y_fixed
         self._thr_trace = thr_trace
         self._cm_trace  = cm_trace
+        self._signal_flag = signal_flag
 
         if y_fixed is not None:
             self._y_lo, self._y_hi = y_fixed
@@ -651,13 +654,21 @@ class ApvPanel(QWidget):
         dim = QColor(getattr(THEME, "TEXT_DIM", "#8b949e"))
         p.fillRect(0, 0, w, h, bg)
 
-        # Frame border; red tint when a badge is set — makes the "this
-        # APV shipped firmware-ZS'd data" state impossible to miss.
+        # Frame border priority: badge (red) > signal_flag (accent) > default.
+        # Badge warns about "no hits" full-readout APVs; signal_flag
+        # highlights APVs with surviving ZS hits so the eye can spot
+        # them at a glance when the Signal Only filter is off.
         border = QColor(getattr(THEME, "BORDER", "#30363d"))
         badge_col = QColor(getattr(THEME, "DANGER", "#ff6b6b"))
+        accent_col = QColor(getattr(THEME, "ACCENT", "#ffd166"))
+        border_w = 1
         if self._badge:
             border = badge_col
-        p.setPen(QPen(border, 1))
+            border_w = 1
+        elif self._signal_flag:
+            border = accent_col
+            border_w = 2
+        p.setPen(QPen(border, border_w))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(0, 0, w - 1, h - 1)
 
@@ -1027,12 +1038,17 @@ class RawApvTab(QWidget):
                 title = (f"c{m['crate_id']} m{m['mpd_id']} a{m['adc_ch']}  "
                          f"{m['det_name']} {m['plane_type']} p{m['det_pos']}")
                 badge = "no hits" if idx in self._no_hit_apvs else ""
+                # Highlight signal panels only when showing all APVs —
+                # under Signal Only every visible panel has hits, so
+                # highlighting would be redundant.
+                signal_flag = has_any_zs and not signal_only
                 panel.set_frame(
                     title, frame, has_zs, badge,
                     sample_mask=sample_mask,
                     y_fixed=shared_range,
                     thr_trace=self._thr.get(idx) if show_thr else None,
                     cm_trace=self._cm.get(idx) if show_cm else None,
+                    signal_flag=signal_flag,
                 )
 
             # Repack: put visible panels into the front slots in sorted
