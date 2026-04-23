@@ -1511,6 +1511,14 @@ class HyCalEventViewer(QMainWindow):
         self._wcfg.min_peak_ratio = float(thr_cfg.get(
             "min_secondary_peak_ratio", self._wcfg.min_peak_ratio))
 
+        # Peak time-cut window (ns).  Peaks whose WaveAnalyzer time falls
+        # outside [time_min, time_max] are rejected when picking the
+        # per-channel energy for histograms and clustering.  Matches the
+        # server's `waveform.time_cut` behaviour (viewer_utils.h).
+        _tc = hist_config.get("time_cut", {})
+        self._time_min = float(_tc.get("min", -1e30))
+        self._time_max = float(_tc.get("max",  1e30))
+
         # Debounce timer for Advanced-dock re-runs: coalesce rapid
         # slider drags into a single re-read + re-analyse.  Must exist
         # before the dock widgets are built (they connect to it via
@@ -1552,6 +1560,9 @@ class HyCalEventViewer(QMainWindow):
         self._hcsys = None
         self._hccl  = None
         self._hc_cache: Dict[Tuple[int, int, int], object] = {}
+        # True once LoadCalibration has been called with >0 matches.
+        # Gates the "no calibration" warning banner on the cluster tab.
+        self._hycal_calib_loaded = False
         if _HAVE_PRAD2PY and self._hycal_modules_path and self._daq_map_path:
             try:
                 self._hcsys = prad2py.det.HyCalSystem()
@@ -1733,7 +1744,24 @@ class HyCalEventViewer(QMainWindow):
         """HyCal heatmap + cluster panel.  Populated each event by
         ``_display_clusters``."""
         tab = QWidget()
-        lay = QHBoxLayout(tab)
+        root = QVBoxLayout(tab)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(2)
+
+        # Calibration warning banner — visible when no gain file has been
+        # loaded (cal_factor==0 → every energize() returns 0 → no clusters).
+        self._calib_warn_lbl = QLabel(
+            "⚠ No HyCal calibration loaded — cluster energies will be 0 "
+            "and no clusters will form.  Use File → Load HyCal calibration…")
+        self._calib_warn_lbl.setStyleSheet(
+            f"background:{THEME.DANGER}; color:#ffffff; "
+            f"padding:4px 8px; font-weight: bold;")
+        self._calib_warn_lbl.setWordWrap(True)
+        self._calib_warn_lbl.setVisible(not self._hycal_calib_loaded)
+        root.addWidget(self._calib_warn_lbl)
+
+        body = QWidget()
+        lay = QHBoxLayout(body)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
@@ -1749,6 +1777,7 @@ class HyCalEventViewer(QMainWindow):
             self._cluster_map.set_selected_cluster)
         lay.addWidget(self._cluster_panel, stretch=1)
 
+        root.addWidget(body, stretch=1)
         return tab
 
     # ---- Advanced tuning dock ------------------------------------------
@@ -1775,7 +1804,6 @@ class HyCalEventViewer(QMainWindow):
         wf = QFormLayout(wg)
         self._adv_wave_spins: Dict[str, QDoubleSpinBox] = {}
         wave_fields = [
-            ("resolution",      0.0,   1e6, 1.0,   "peak integral resolution"),
             ("threshold",       0.0,  4096, 1.0,   "primary peak ADC thr"),
             ("min_threshold",   0.0,  4096, 1.0,   "absolute min ADC thr"),
             ("min_peak_ratio",  0.0,    1.0, 0.01, "secondary/primary ratio"),
@@ -1795,6 +1823,7 @@ class HyCalEventViewer(QMainWindow):
 
         self._adv_wave_int_spins: Dict[str, QSpinBox] = {}
         for name, lo, hi, tip in [
+                ("resolution",   1, 16,  "smoothing half-width (1 = no smoothing)"),
                 ("ped_nsamples", 1, 64,  "samples to use for pedestal"),
                 ("ped_max_iter", 1, 100, "pedestal iteration cap"),
                 ("overflow",     0, 65535, "overflow cutoff (ADC)")]:
@@ -1813,6 +1842,31 @@ class HyCalEventViewer(QMainWindow):
         sp.valueChanged.connect(self._on_advanced_changed)
         wf.addRow("hist_threshold", sp)
         self._adv_hist_threshold_spin = sp
+
+        # Peak time-cut window (ns).  Only peaks whose time falls inside
+        # [time_min, time_max] contribute to hists / cluster energies.
+        self._adv_time_min_spin = QDoubleSpinBox()
+        self._adv_time_min_spin.setRange(-1e5, 1e5)
+        self._adv_time_min_spin.setSingleStep(1.0)
+        self._adv_time_min_spin.setDecimals(1)
+        self._adv_time_min_spin.setValue(self._time_min if self._time_min > -1e20 else 0.0)
+        self._adv_time_min_spin.setToolTip(
+            "Peaks with time < this (ns) are ignored when picking the "
+            "per-channel integral.")
+        self._adv_time_min_spin.valueChanged.connect(self._on_advanced_changed)
+        wf.addRow("time_cut.min (ns)", self._adv_time_min_spin)
+
+        self._adv_time_max_spin = QDoubleSpinBox()
+        self._adv_time_max_spin.setRange(-1e5, 1e5)
+        self._adv_time_max_spin.setSingleStep(1.0)
+        self._adv_time_max_spin.setDecimals(1)
+        self._adv_time_max_spin.setValue(self._time_max if self._time_max < 1e20 else 400.0)
+        self._adv_time_max_spin.setToolTip(
+            "Peaks with time > this (ns) are ignored when picking the "
+            "per-channel integral.")
+        self._adv_time_max_spin.valueChanged.connect(self._on_advanced_changed)
+        wf.addRow("time_cut.max (ns)", self._adv_time_max_spin)
+
         rlay.addWidget(wg)
 
         # ---- HyCalClusterConfig ---------------------------------------
@@ -1826,6 +1880,7 @@ class HyCalEventViewer(QMainWindow):
                 ("min_center_energy",  0.0, 1e4, 0.1, "seed threshold (MeV)"),
                 ("min_cluster_energy", 0.0, 1e5, 0.1, "total cluster threshold (MeV)"),
                 ("log_weight_thres",   0.0, 20.0, 0.1, "log-weight offset"),
+                ("least_split",        0.0, 1.0, 0.01, "min fraction to keep a split hit"),
             ]
             for name, lo, hi, step, tip in cluster_fields:
                 sp = QDoubleSpinBox()
@@ -1838,8 +1893,7 @@ class HyCalEventViewer(QMainWindow):
 
             for name, lo, hi, tip in [
                     ("min_cluster_size", 1, 100, "min modules in cluster"),
-                    ("split_iter",       0, 100, "island-split iteration cap"),
-                    ("least_split",      0, 100, "min energy gap for split")]:
+                    ("split_iter",       0, 100, "island-split iteration cap")]:
                 sp = QSpinBox()
                 sp.setRange(lo, hi); sp.setValue(int(getattr(ccfg, name, 0)))
                 sp.setToolTip(tip)
@@ -1867,6 +1921,8 @@ class HyCalEventViewer(QMainWindow):
         for name, sp in self._adv_wave_int_spins.items():
             self._adv_defaults[f"wave_{name}"] = sp.value()
         self._adv_defaults["hist_threshold"] = self._adv_hist_threshold_spin.value()
+        self._adv_defaults["time_min"] = self._adv_time_min_spin.value()
+        self._adv_defaults["time_max"] = self._adv_time_max_spin.value()
         for name, w in self._adv_cluster_spins.items():
             if isinstance(w, QCheckBox):
                 self._adv_defaults[f"cluster_{name}"] = w.isChecked()
@@ -1898,6 +1954,11 @@ class HyCalEventViewer(QMainWindow):
         self._adv_hist_threshold_spin.blockSignals(True)
         self._adv_hist_threshold_spin.setValue(self._adv_defaults["hist_threshold"])
         self._adv_hist_threshold_spin.blockSignals(False)
+        for spin, key in ((self._adv_time_min_spin, "time_min"),
+                           (self._adv_time_max_spin, "time_max")):
+            spin.blockSignals(True)
+            spin.setValue(self._adv_defaults[key])
+            spin.blockSignals(False)
         for name, w in self._adv_cluster_spins.items():
             w.blockSignals(True)
             if isinstance(w, QCheckBox):
@@ -1910,22 +1971,33 @@ class HyCalEventViewer(QMainWindow):
 
     def _on_advanced_changed(self, *_):
         """Push every dock value back into WaveConfig + HyCalClusterConfig,
-        then schedule a debounced re-run of the current event."""
+        then schedule a debounced re-run of the current event.  Setattrs
+        are wrapped in try/except so a type mismatch on any single field
+        (e.g. pybind's strict int↔float) doesn't take down the whole dock."""
+        def _safe(obj, name, value):
+            try:
+                setattr(obj, name, value)
+            except Exception as exc:     # noqa: BLE001
+                print(f"[advanced] {type(obj).__name__}.{name} "
+                      f"setattr failed: {exc}", file=sys.stderr)
+
         for name, sp in self._adv_wave_spins.items():
-            setattr(self._wcfg, name, float(sp.value()))
+            _safe(self._wcfg, name, float(sp.value()))
         for name, sp in self._adv_wave_int_spins.items():
-            setattr(self._wcfg, name, int(sp.value()))
+            _safe(self._wcfg, name, int(sp.value()))
         self._hist_threshold = float(self._adv_hist_threshold_spin.value())
+        self._time_min = float(self._adv_time_min_spin.value())
+        self._time_max = float(self._adv_time_max_spin.value())
 
         if self._hccl is not None and self._adv_cluster_spins:
             ccfg = self._hccl.get_config()
             for name, widget in self._adv_cluster_spins.items():
                 if isinstance(widget, QCheckBox):
-                    setattr(ccfg, name, bool(widget.isChecked()))
+                    _safe(ccfg, name, bool(widget.isChecked()))
                 elif isinstance(widget, QSpinBox):
-                    setattr(ccfg, name, int(widget.value()))
+                    _safe(ccfg, name, int(widget.value()))
                 else:
-                    setattr(ccfg, name, float(widget.value()))
+                    _safe(ccfg, name, float(widget.value()))
             self._hccl.set_config(ccfg)
 
         # Debounce: coalesce slider drags into one re-run.
@@ -1964,6 +2036,10 @@ class HyCalEventViewer(QMainWindow):
         a_open.triggered.connect(self._open_evio_dialog)
         mf.addAction(a_open)
 
+        a_calib = QAction("Load HyCal &calibration…", self)
+        a_calib.triggered.connect(self._load_hycal_calib_dialog)
+        mf.addAction(a_calib)
+
         self._a_save = QAction("&Save histograms as JSON…", self)
         self._a_save.setShortcut("Ctrl+S")
         self._a_save.triggered.connect(self._save_json_dialog)
@@ -1990,6 +2066,46 @@ class HyCalEventViewer(QMainWindow):
             "evio files (*.evio *.evio.*);;All files (*)")
         if path_str:
             self.open_path(Path(path_str))
+
+    def _load_hycal_calib_dialog(self):
+        """Load HyCal per-module calibration constants (cal_factor,
+        cal_base_energy, cal_non_linear) from a JSON file via
+        HyCalSystem.LoadCalibration.  Success hides the "no calibration"
+        warning banner on the cluster tab and re-runs the current event
+        so cluster energies reflect the new calibration."""
+        if self._hcsys is None:
+            QMessageBox.warning(self, "HyCal system not ready",
+                "Cannot load calibration — HyCalSystem.init() did not "
+                "complete.  Check that hycal_modules.json and daq_map.json "
+                "are present.")
+            return
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Load HyCal calibration", str(Path.cwd()),
+            "JSON files (*.json);;All files (*)")
+        if not path_str:
+            return
+        try:
+            nmatched = self._hcsys.load_calibration(path_str)
+        except Exception as exc:             # noqa: BLE001
+            QMessageBox.critical(self, "Calibration load failed",
+                                 f"{type(exc).__name__}: {exc}")
+            return
+        if nmatched is None or int(nmatched) <= 0:
+            QMessageBox.warning(self, "Calibration load failed",
+                f"load_calibration returned {nmatched!r} — 0 modules "
+                f"matched.  Check that the file format matches "
+                f"HyCalSystem::LoadCalibration's expected schema.")
+            return
+        self._hycal_calib_loaded = True
+        if hasattr(self, "_calib_warn_lbl"):
+            self._calib_warn_lbl.setVisible(False)
+        self.statusBar().showMessage(
+            f"Calibration loaded: {Path(path_str).name} "
+            f"({int(nmatched)} modules matched)", 5000)
+        # Re-run the current event so cluster energies reflect the new
+        # cal_factors.  No-op if no event has been loaded yet.
+        if self._current_idx >= 0:
+            self._goto(self._current_idx)
 
     def open_path(self, path: Path):
         err = _check_evchannel_support()
@@ -2305,15 +2421,25 @@ class HyCalEventViewer(QMainWindow):
                     _, _, peaks = analyze(samples, wcfg)
                     if key == sel_key:
                         sel_peaks = peaks
-                    # Max peak integral (above threshold) for the geo view's
-                    # "current" mode.
-                    above = [p.integral for p in peaks if p.height >= threshold]
-                    max_int = max(above) if above else 0.0
+                    # Pick the best peak inside the time-cut window;
+                    # matches viewer_utils.h::bestPeakInWindow.
+                    best_int = 0.0
+                    for p in peaks:
+                        if p.height < threshold:
+                            continue
+                        if not (self._time_min <= p.time <= self._time_max):
+                            continue
+                        if p.integral > best_int:
+                            best_int = p.integral
+                    max_int = best_int
                     if max_int > 0 and hits.module:
                         current_vals[hits.module] = max_int
 
                     # Feed the cluster tab: resolve channel → HyCal module
-                    # on first sight, then push (module_idx, energy_MeV).
+                    # and push (module_idx, energy_MeV).  Without a gain
+                    # file loaded, cal_factor==0 → energize returns 0 →
+                    # no clusters form; the cluster tab surfaces a
+                    # warning banner (File → Load HyCal calibration…).
                     if self._hccl is not None and crate is not None and max_int > 0:
                         mod = self._resolve_hycal_module(crate, s, c, key)
                         if mod is not None:
@@ -2326,11 +2452,14 @@ class HyCalEventViewer(QMainWindow):
                         continue
                     kept = 0
                     for p in peaks:
-                        if p.height >= threshold:
-                            hits.height.fill(p.height)
-                            hits.integral.fill(p.integral)
-                            hits.position.fill(p.time)
-                            kept += 1
+                        if p.height < threshold:
+                            continue
+                        if not (self._time_min <= p.time <= self._time_max):
+                            continue
+                        hits.height.fill(p.height)
+                        hits.integral.fill(p.integral)
+                        hits.position.fill(p.time)
+                        kept += 1
                     hits.npeaks.fill(kept)
                     hits.events += 1
                     if kept > 0:
