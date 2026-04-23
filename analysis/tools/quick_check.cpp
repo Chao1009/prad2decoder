@@ -167,7 +167,7 @@ int main(int argc, char *argv[])
     TH1F *h_tot = new TH1F("total_energy",
         "Total energy per event;E (MeV);Counts", 1000, 0, 4000);
 
-    PhysicsTools::MollerData hycal_mollers;
+    MollerData hycal_mollers;
 
     // --- event loop : basic distributions + Moller candidates on HyCal ---
     int N = tree->GetEntries();
@@ -201,7 +201,7 @@ int main(int argc, char *argv[])
             float Epair = ev.cl_energy[0] + ev.cl_energy[1];
             float sigma = Ebeam * 0.025f / std::sqrt(Ebeam / 1000.f);
             if (std::abs(Epair - Ebeam) < 3. * sigma) {
-                PhysicsTools::MollerEvent mp(
+                MollerEvent mp(
                     {ev.cl_x[0], ev.cl_y[0], ev.cl_z[0], ev.cl_energy[0]},
                     {ev.cl_x[1], ev.cl_y[1], ev.cl_z[1], ev.cl_energy[1]});
                 hycal_mollers.push_back(mp);

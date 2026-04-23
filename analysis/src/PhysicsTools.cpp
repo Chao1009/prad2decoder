@@ -95,28 +95,6 @@ PhysicsTools::PhysicsTools(fdec::HyCalSystem &hycal)
 
 PhysicsTools::~PhysicsTools() = default;
 
-// transfrom detector coordinates to target and beam center coordinates
-// only used for offline analysis
-void TransformDetData(std::vector<HCHit> &hc_hits, float beamX, float beamY, float ZfromTarget)
-{
-    // Transform HyCal hit coordinates from detector frame to target frame
-    for (auto &hc_hit : hc_hits) {
-        hc_hit.x -= beamX;
-        hc_hit.y -= beamY;
-        hc_hit.z += ZfromTarget;
-    }
-}
-
-void TransformDetData(std::vector<GEMHit> &gem_hits, float beamX, float beamY, float ZfromTarget)
-{
-    // Transform GEM hit coordinates from detector frame to target frame
-    for (auto &gem_hit : gem_hits) {
-        gem_hit.x -= beamX;
-        gem_hit.y -= beamY;
-        gem_hit.z += ZfromTarget;
-    }
-}
-
 void PhysicsTools::FillModuleEnergy(int module_id, float energy)
 {   
     if (module_id >= 0){
@@ -229,6 +207,7 @@ std::array<float, 3> PhysicsTools::FitPeakResolution(int module_id) const
     h->Fit(&gaus, "RQ");
 
     float mean  = gaus.GetParameter(1);
+    if( mean < 0 ) mean = 0.f;
     float sigma = gaus.GetParameter(2);
     float chi2 = (gaus.GetNDF() > 0) ? gaus.GetChisquare() / gaus.GetNDF() : 0.f;
     return {mean, sigma, chi2};

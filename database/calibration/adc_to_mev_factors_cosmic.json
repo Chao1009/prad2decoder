@@ -3360,18 +3360,6 @@
     "non_linear": 0.0
   },
   {
-    "name": "W561",
-    "factor": 0,
-    "base_energy": 25.0,
-    "non_linear": 0.0
-  },
-  {
-    "name": "W562",
-    "factor": 0,
-    "base_energy": 25.0,
-    "non_linear": 0.0
-  },
-  {
     "name": "W563",
     "factor": 0.1167962326,
     "base_energy": 25.0,
@@ -3560,18 +3548,6 @@
   {
     "name": "W594",
     "factor": 0.1105011448,
-    "base_energy": 25.0,
-    "non_linear": 0.0
-  },
-  {
-    "name": "W595",
-    "factor": 0,
-    "base_energy": 25.0,
-    "non_linear": 0.0
-  },
-  {
-    "name": "W596",
-    "factor": 0,
     "base_energy": 25.0,
     "non_linear": 0.0
   },

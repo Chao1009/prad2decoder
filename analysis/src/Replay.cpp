@@ -9,6 +9,7 @@
 #include "HyCalCluster.h"
 #include "GemCluster.h"
 #include "MatchingTools.h"
+#include "ConfigSetup.h"
 #include "InstallPaths.h"
 
 #include <nlohmann/json.hpp>
@@ -459,8 +460,14 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     if(prad1 == true)
         daq_map_file = db_dir + "/prad1/prad_daq_map.json";
     hycal.Init(db_dir + "/hycal_modules.json", daq_map_file);
+    
     if(prad1 == true) evc::load_pedestals(db_dir + "/prad1/adc1881m_pedestals.json", daq_cfg_);
-    std::string calib_file = db_dir + "/calibration/adc_to_mev_factors_cosmic.json";
+    
+    std::string run_str = get_run_str(input_evio);
+    int run_num = get_run_int(input_evio);
+    gCalibConfig = LoadCalibConfig(db_dir + "/calibration/calibration_config.json", run_num);
+
+    std::string calib_file = db_dir + gCalibConfig.energy_calib_file;
     int nmatched = hycal.LoadCalibration(calib_file);
     if (nmatched >= 0)
         std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
@@ -689,13 +696,10 @@ if(!prad1){
             for (int i = 0; i < ev->n_gem_hits; ++i)
                 gem_hits[ev->det_id[i]].push_back(GEMHit{ev->gem_x[i], ev->gem_y[i], 0.f, ev->det_id[i]});
             //transform the coordinates of detector data
-            // (now the default position, TO DO: read from database)
-            float gem_z[4] = {5407.+39.71/2., 5407.-39.71/2.,
-                              5807.+39.71/2., 5807.-39.71/2.}; //mm, the center of the two GEMs
-            TransformDetData(hc_hits, 0.f, 0.f, 6225.f);
-            GetProjection(hc_hits, 6225.f);
-            for(int i = 0; i < 4; ++i)
-                TransformDetData(gem_hits[i], 0.f, 0.f, gem_z[i]);
+            
+            TransformDetData(hc_hits, gCalibConfig);
+            GetProjection(hc_hits, hycal_z_);
+            for(int i = 0; i < 4; ++i) TransformDetData(gem_hits[i], gCalibConfig);
 
             //matching.SetMatchRange(5.0f); // matching radius in mm, 15mm default
             matching.SetSquareSelection(true); // use square cut instead of circular cut

@@ -2,6 +2,7 @@
 #include "PhysicsTools.h"
 #include "HyCalSystem.h"
 #include "EventData.h"
+#include "ConfigSetup.h"
 #include "InstallPaths.h"
 
 #include <TFile.h>
@@ -16,6 +17,7 @@
 #include <TF1.h>
 
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <cmath>
@@ -75,23 +77,23 @@ void setupReconBranches(TTree *tree, EventVars_Recon &ev)
 }
 
 static std::vector<std::string> collectRootFiles(const std::string &path);
-void projectToHyCalSurface(PhysicsTools::MollerData &m_data, float hycal_z);
-double fitAndDraw(TH1F* hist, const std::string& out_path, const double fit_range = 4.);
+void projectToHyCalSurface(MollerData &m_data, float hycal_z);
+float fitAndDraw(TH1F* hist, const std::string& out_path, const float survey_position, const float fit_range = 4.);
 
 // ── Main ─────────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[])
 {
     std::string output;
-    float Ebeam = 3500.f;
-    float hycal_z = 6225.f; //mm, the default position of HyCal surface, TO DO: read from database
-    
+    std::string transform_config;
+
     int max_events = -1;
     int opt;
-    while ((opt = getopt(argc, argv, "o:n:")) != -1) {
+    while ((opt = getopt(argc, argv, "o:n:c:")) != -1) {
         switch (opt) {
             case 'o': output = optarg; break;
             case 'n': max_events = std::atoi(optarg); break;
+            case 'c': transform_config = optarg; break;
         }
     }
     // collect input files (can be files, directories, or mixed)
@@ -102,27 +104,24 @@ int main(int argc, char *argv[])
     }
     if (root_files.empty()) {
         std::cerr << "No input files specified.\n";
-        std::cerr << "Usage: det_calib <input_recon.root|dir> [more files...] [-o out.root] [-n max_events]\n";
+        std::cerr << "Usage: det_calib <input_recon.root|dir> [more files...] [-o out.root] [-n max_events] [-c det_position_calib.json]\n";
         return 1;
     }
     // extract run number from first input file name (e.g. prad_023626.00000_recon.root -> 23626)
-    std::string run_str = "unknown";
-    {
-        std::string fname = fs::path(root_files[0]).filename().string();
-        auto ppos = fname.find("prad_");
-        if (ppos != std::string::npos) {
-            size_t s = ppos + 5;
-            size_t e = s;
-            while (e < fname.size() && std::isdigit((unsigned char)fname[e])) e++;
-            if (e > s) run_str = std::to_string(std::stoul(fname.substr(s, e - s)));
-        }
-    }
+    std::string run_str = get_run_str(root_files[0]);
+    int run_num = get_run_int(root_files[0]);
 
     // --- database path ---
     std::string dbDir = prad2::resolve_data_dir(
         "PRAD2_DATABASE_DIR",
         {"../share/prad2evviewer/database"},
         DATABASE_DIR);
+
+    // --- load detector geometry config from JSON ---
+    if (transform_config.empty()) {
+        transform_config = dbDir + "/calibration/calibration_config.json";
+    }
+    CalibConfig geo = LoadCalibConfig(transform_config, run_num);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;
@@ -170,8 +169,8 @@ int main(int argc, char *argv[])
     }
     TFile outfile(outName, "RECREATE");
 
-    PhysicsTools::MollerData hycal_mollers;
-    PhysicsTools::MollerData gem_mollers[4];
+    MollerData hycal_mollers;
+    MollerData gem_mollers[4];
 
     // --- event loop : select Moller events on HyCal and each GEM plane ---
     int N = tree->GetEntries();
@@ -185,24 +184,28 @@ int main(int argc, char *argv[])
         bool good_moller = false;
         if(ev.match_num == 2){
             float Epair = ev.matchHC_energy[0] + ev.matchHC_energy[1];
-            if (std::abs(Epair - Ebeam) < 4.f * Ebeam * 0.025f / std::sqrt(Ebeam / 1000.f)) {
+            if(geo.Ebeam <= 0.f){
+                std::cerr << "Error: Ebeam not set, cannot apply Moller energy cut.\n";
+                break;
+            }
+            if (std::abs(Epair - geo.Ebeam) < 4.f * geo.Ebeam * 0.025f / std::sqrt(geo.Ebeam / 1000.f)) {
                 good_moller = true;
             }
         }
         if(!good_moller) continue;
 
         //have selected good Moller events for further analysis
-        PhysicsTools::MollerEvent h_m;
-        PhysicsTools::MollerEvent g_m;
+        MollerEvent h_m;
+        MollerEvent g_m;
         
-        h_m = PhysicsTools::MollerEvent(
+        h_m = MollerEvent(
                 {ev.matchHC_x[0], ev.matchHC_y[0], ev.matchHC_z[0], ev.matchHC_energy[0]},
                 {ev.matchHC_x[1], ev.matchHC_y[1], ev.matchHC_z[1], ev.matchHC_energy[1]});
         hycal_mollers.push_back(h_m);
         
         // select two moller on one chamber for upstream GEMs 
         if(ev.matchG_det_id[0][0] == ev.matchG_det_id[1][0]){
-            g_m = PhysicsTools::MollerEvent(
+            g_m = MollerEvent(
                 {ev.matchG_x[0][0], ev.matchG_y[0][0], ev.matchG_z[0][0], ev.matchHC_energy[0]},
                 {ev.matchG_x[1][0], ev.matchG_y[1][0], ev.matchG_z[1][0], ev.matchHC_energy[1]});
             int det_id = ev.matchG_det_id[0][0];
@@ -212,7 +215,7 @@ int main(int argc, char *argv[])
 
         // select two moller on one chamber for downstream GEMs
         if(ev.matchG_det_id[0][1] == ev.matchG_det_id[1][1]){
-            g_m = PhysicsTools::MollerEvent(
+            g_m = MollerEvent(
                 {ev.matchG_x[0][1], ev.matchG_y[0][1], ev.matchG_z[0][1], ev.matchHC_energy[0]},
                 {ev.matchG_x[1][1], ev.matchG_y[1][1], ev.matchG_z[1][1], ev.matchHC_energy[1]});
             int det_id = ev.matchG_det_id[0][1];
@@ -231,8 +234,10 @@ int main(int argc, char *argv[])
 
     //hycal Moller events
     //projectToHyCalSurface(hycal_mollers, hycal_z); //project to HyCal surface
+    //move to beam center coordinates
+    TransformDetData(hycal_mollers, hycal_x_, hycal_y_, 0.f);
     for (int i = 0; i < hycal_mollers.size(); i++) {
-        vertex_hycal->Fill(physics.GetMollerZdistance(hycal_mollers[i], Ebeam));
+        vertex_hycal->Fill(physics.GetMollerZdistance(hycal_mollers[i], geo.Ebeam));
         if (i >= 1) {
             auto c = physics.GetMollerCenter(hycal_mollers[i-1], hycal_mollers[i]);
             center_hycal->Fill(c[0], c[1]);
@@ -243,8 +248,9 @@ int main(int argc, char *argv[])
 
     //gem Moller events
     for (int d = 0; d < 4; d++) {
+        TransformDetData(gem_mollers[d], gem_x_[d], gem_y_[d], 0.f);
         for (int i = 0; i < gem_mollers[d].size(); i++) {
-            vertex_gem[d]->Fill(physics.GetMollerZdistance(gem_mollers[d][i], Ebeam));
+            vertex_gem[d]->Fill(physics.GetMollerZdistance(gem_mollers[d][i], geo.Ebeam));
             if (i >= 1) {
                 auto c = physics.GetMollerCenter(gem_mollers[d][i-1], gem_mollers[d][i]);
                 center_gem[d]->Fill(c[0], c[1]);
@@ -255,26 +261,39 @@ int main(int argc, char *argv[])
     }
 
     //fit histograms, and get the beam position and vertex distance for each detector plane
-    double hycal_vertex_z = fitAndDraw(vertex_hycal, "Poscalib_result/" + run_str +"/hycal_vertex_z", 100.);
-    double hycal_center_x = fitAndDraw(center_hycal_x, "Poscalib_result/" + run_str +"/hycal_center_x", 2.);
-    double hycal_center_y = fitAndDraw(center_hycal_y, "Poscalib_result/" + run_str +"/hycal_center_y", 2.);
-    double gem_vertex_z[4];
-    double gem_center_x[4];
-    double gem_center_y[4];
+    float hycal_vertex_z = fitAndDraw(vertex_hycal, "Poscalib_result/" + run_str +"/hycal_vertex_z", geo.hycal_z,  100.);
+    float hycal_center_x = fitAndDraw(center_hycal_x, "Poscalib_result/" + run_str +"/hycal_center_x", geo.hycal_x, 2.);
+    float hycal_center_y = fitAndDraw(center_hycal_y, "Poscalib_result/" + run_str +"/hycal_center_y", geo.hycal_y, 2.);
+    float gem_vertex_z[4];
+    float gem_center_x[4];
+    float gem_center_y[4];
     for (int d = 0; d < 4; d++) {
-        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_vertex_z", 25.);
-        gem_center_x[d] = fitAndDraw(center_gem_x[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_x", 0.3);
-        gem_center_y[d] = fitAndDraw(center_gem_y[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_y", 1.);
+        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_vertex_z", geo.gem_z[d], 25.);
+        gem_center_x[d] = fitAndDraw(center_gem_x[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_x", geo.gem_x[d], 0.3);
+        gem_center_y[d] = fitAndDraw(center_gem_y[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_y", geo.gem_y[d], 1.);
     }
     //print summary of calibration results
-    std::cerr << "HyCal vertex z distance: " << hycal_vertex_z << " mm (pre-entered number " << hycal_z << " mm)" << "\n";
-    std::cerr << "HyCal center x: " << hycal_center_x << " mm\n";
-    std::cerr << "HyCal center y: " << hycal_center_y << " mm\n";
+    std::cerr << "HyCal vertex z distance: " << hycal_vertex_z << " mm (survey position " << geo.hycal_z << " mm)" << "\n";
+    std::cerr << "HyCal center x: " << hycal_center_x << " mm (survey position " << geo.hycal_x << " mm)\n";
+    std::cerr << "HyCal center y: " << hycal_center_y << " mm (survey position " << geo.hycal_y << " mm)\n";
+    
     for (int d = 0; d < 4; d++) {
-        std::cerr << "GEM " << d << " vertex z distance: " << gem_vertex_z[d] << " mm\n";
-        std::cerr << "GEM " << d << " center x: " << gem_center_x[d] << " mm\n";
-        std::cerr << "GEM " << d << " center y: " << gem_center_y[d] << " mm\n";
+        std::cerr << "GEM " << d << " vertex z distance: " << gem_vertex_z[d] << " mm (survey position " << geo.gem_z[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center x: " << gem_center_x[d] << " mm (survey position " << geo.gem_x[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center y: " << gem_center_y[d] << " mm (survey position " << geo.gem_y[d] << " mm)\n";
     }
+
+    geo.hycal_z = hycal_vertex_z;
+    geo.hycal_x = hycal_center_x;
+    geo.hycal_y = hycal_center_y;
+    for (int d = 0; d < 4; d++) {
+        geo.gem_z[d] = gem_vertex_z[d];
+        geo.gem_x[d] = gem_center_x[d];
+        geo.gem_y[d] = gem_center_y[d];
+    }
+    //write back the updated geometry config to JSON file
+    WriteTransformConfig(transform_config, run_num, geo);
+    
 
     //save histograms
     outfile.cd();
@@ -310,7 +329,7 @@ static std::vector<std::string> collectRootFiles(const std::string &path)
     return files;
 }
 
-void projectToHyCalSurface(PhysicsTools::MollerData &m_data, float hycal_z)
+void projectToHyCalSurface(MollerData &m_data, float hycal_z)
 {
     //project the Moller event from target center(z = 0) to the HyCal surface (z = hycal_z)
     for (auto &evt : m_data) {
@@ -323,15 +342,16 @@ void projectToHyCalSurface(PhysicsTools::MollerData &m_data, float hycal_z)
     }
 }
 
-double fitAndDraw(TH1F* hist, const std::string& out_path, const double fit_range){
+float fitAndDraw(TH1F* hist, const std::string& out_path, const float survey_position, const float fit_range){
     TCanvas *c = new TCanvas("", "", 800, 600);
-    double mean = hist->GetBinCenter(hist->GetMaximumBin());
+    float mean = hist->GetBinCenter(hist->GetMaximumBin());
     hist->Fit("gaus", "rq", "", mean-fit_range, mean+fit_range);
     hist->Draw();
     TLatex *latex = new TLatex();
     latex->SetNDC();
     latex->SetTextSize(0.04);
     latex->DrawLatex(0.15, 0.85, Form("%.2f mm +- %.2f mm", hist->GetFunction("gaus")->GetParameter(1), hist->GetFunction("gaus")->GetParError(1)));
+    latex->DrawLatex(0.15, 0.80, Form("Survey position: %.2f mm", survey_position));
     fs::create_directories(fs::path(out_path).parent_path());
     c->SaveAs((out_path + ".png").c_str());
     delete c;
