@@ -11,6 +11,7 @@
 #include "HyCalSystem.h"
 #include "MatchingTools.h"
 #include "EventData.h"
+#include "ConfigSetup.h"
 #include "InstallPaths.h"
 
 #include <TFile.h>
@@ -107,6 +108,11 @@ int main(int argc, char *argv[])
         {"../share/prad2evviewer/database"},
         DATABASE_DIR);
 
+    // --- load detector geometry config from JSON ---
+    std::string run_str = get_run_str(root_files[0]);
+    int run_num = get_run_int(root_files[0]);
+    gGeoConfig = LoadTransformConfig(dbDir + "/calibration/det_position_calib.json", run_num);
+
     // --- init detector system ---
     fdec::HyCalSystem hycal;
     hycal.Init(dbDir + "/hycal_modules.json",
@@ -178,9 +184,8 @@ int main(int argc, char *argv[])
         }
 
         //transform detector coordinates to target and beam center coordinates
-        TransformDetData(hc_hits, 0.f, 0.f, hycal_z); // assuming beamX=beamY=0 for now
-        for(int d = 0; d < 4; d++) 
-            TransformDetData(gem_hits[d], 0.f, 0.f, gem_z[d]);
+        TransformDetData(hc_hits, gGeoConfig);
+        for(int d = 0; d < 4; d++) TransformDetData(gem_hits[d], gGeoConfig);
 
         //then matching between GEM hits and HyCal clusters
             //optional settings

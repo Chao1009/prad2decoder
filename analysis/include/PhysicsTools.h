@@ -49,12 +49,6 @@ struct DataPoint
 typedef std::pair<DataPoint, DataPoint> MollerEvent;
 typedef std::vector<MollerEvent> MollerData;
 
-//transfrom detector coordinates to target and beam center coordinates
-// only used for offline analysis
-void TransformDetData(std::vector<HCHit>  &hc_hits,  float beamX, float beamY, float ZfromTarget);
-void TransformDetData(std::vector<GEMHit> &gem_hits, float beamX, float beamY, float ZfromTarget);
-void TransformDetData(MollerData          &mollers,  float beamX, float beamY, float ZfromTarget);
-
 class PhysicsTools
 {
 public:

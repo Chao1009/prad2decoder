@@ -100,7 +100,7 @@ float MatchingTools::ProjectionDistance(const analysis::GEMHit &g1,
 bool MatchingTools::PreMatch(const analysis::HCHit &hycal,
                              const analysis::GEMHit &gem) const
 {
-    ProjectHit proj = GetProjectionHits(gem.x, gem.y, gem.z, hycal_z_);
+    ProjectHit proj = GetProjectionHits(gem.x, gem.y, gem.z, hycal.z);
     float dx = std::fabs(hycal.x - proj.x_proj);
     float dy = std::fabs(hycal.y - proj.y_proj);
 

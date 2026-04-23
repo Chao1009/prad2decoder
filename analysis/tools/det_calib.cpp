@@ -2,6 +2,7 @@
 #include "PhysicsTools.h"
 #include "HyCalSystem.h"
 #include "EventData.h"
+#include "ConfigSetup.h"
 #include "InstallPaths.h"
 
 #include <TFile.h>
@@ -14,8 +15,6 @@
 #include <TLatex.h>
 #include <TCanvas.h>
 #include <TF1.h>
-
-#include <nlohmann/json.hpp>
 
 #include <iostream>
 #include <fstream>
@@ -86,17 +85,7 @@ float fitAndDraw(TH1F* hist, const std::string& out_path, const float survey_pos
 int main(int argc, char *argv[])
 {
     std::string output;
-    std::string calib_config;
-    float Ebeam = 3500.f;
-    float hycal_z = 6222.5f;
-    float hycal_x = 0.f;
-    float hycal_y = 0.f;
-    float gem_z[4] = {5423.71, 5384.00, 5823.71, 5784.00};
-    float gem_x[4] = {0., 0., 0., 0.};
-    float gem_y[4] = {0., 0., 0., 0.};
-
-    float shift_hx = 0.f, shift_hy = 0.f;
-    float shift_gx[4] = {0.f, 0.f, 0.f, 0.f}, shift_gy[4] = {0.f, 0.f, 0.f, 0.f};
+    std::string transform_config;
 
     int max_events = -1;
     int opt;
@@ -104,7 +93,7 @@ int main(int argc, char *argv[])
         switch (opt) {
             case 'o': output = optarg; break;
             case 'n': max_events = std::atoi(optarg); break;
-            case 'c': calib_config = optarg; break;
+            case 'c': transform_config = optarg; break;
         }
     }
     // collect input files (can be files, directories, or mixed)
@@ -115,21 +104,12 @@ int main(int argc, char *argv[])
     }
     if (root_files.empty()) {
         std::cerr << "No input files specified.\n";
-        std::cerr << "Usage: det_calib <input_recon.root|dir> [more files...] [-o out.root] [-n max_events] [-c det_calib_config.json]\n";
+        std::cerr << "Usage: det_calib <input_recon.root|dir> [more files...] [-o out.root] [-n max_events] [-c det_position_calib.json]\n";
         return 1;
     }
     // extract run number from first input file name (e.g. prad_023626.00000_recon.root -> 23626)
-    std::string run_str = "unknown";
-    {
-        std::string fname = fs::path(root_files[0]).filename().string();
-        auto ppos = fname.find("prad_");
-        if (ppos != std::string::npos) {
-            size_t s = ppos + 5;
-            size_t e = s;
-            while (e < fname.size() && std::isdigit((unsigned char)fname[e])) e++;
-            if (e > s) run_str = std::to_string(std::stoul(fname.substr(s, e - s)));
-        }
-    }
+    std::string run_str = get_run_str(root_files[0]);
+    int run_num = get_run_int(root_files[0]);
 
     // --- database path ---
     std::string dbDir = prad2::resolve_data_dir(
@@ -138,35 +118,10 @@ int main(int argc, char *argv[])
         DATABASE_DIR);
 
     // --- load detector geometry config from JSON ---
-    if (calib_config.empty()) {
-        calib_config = dbDir + "/det_calib_config.json";
+    if (transform_config.empty()) {
+        transform_config = dbDir + "/calibration/det_position_calib.json";
     }
-    {
-        std::ifstream cfg_f(calib_config);
-        if (!cfg_f) {
-            std::cerr << "Warning: cannot open config file " << calib_config << ", using defaults.\n";
-        } else {
-            auto cfg = nlohmann::json::parse(cfg_f, nullptr, false, true);
-            if (!cfg.is_discarded()) {
-                if (cfg.contains("Ebeam"))           Ebeam   = cfg["Ebeam"].get<float>();
-                if (cfg.contains("hycal")) {
-                    auto &h = cfg["hycal"];
-                    if (h.contains("z")) hycal_z = h["z"].get<float>();
-                    if (h.contains("x")) hycal_x = h["x"].get<float>();
-                    if (h.contains("y")) hycal_y = h["y"].get<float>();
-                }
-                if (cfg.contains("gem")) {
-                    auto &g = cfg["gem"];
-                    if (g.contains("z")) for (int d = 0; d < 4; d++) gem_z[d] = g["z"][d].get<float>();
-                    if (g.contains("x")) for (int d = 0; d < 4; d++) gem_x[d] = g["x"][d].get<float>();
-                    if (g.contains("y")) for (int d = 0; d < 4; d++) gem_y[d] = g["y"][d].get<float>();
-                }
-                std::cerr << "Loaded detector config from: " << calib_config << "\n";
-            } else {
-                std::cerr << "Warning: failed to parse " << calib_config << ", using defaults.\n";
-            }
-        }
-    }
+    gGeoConfig = LoadTransformConfig(transform_config, run_num);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;
@@ -229,7 +184,11 @@ int main(int argc, char *argv[])
         bool good_moller = false;
         if(ev.match_num == 2){
             float Epair = ev.matchHC_energy[0] + ev.matchHC_energy[1];
-            if (std::abs(Epair - Ebeam) < 4.f * Ebeam * 0.025f / std::sqrt(Ebeam / 1000.f)) {
+            if(Ebeam_ <= 0.f){
+                std::cerr << "Error: Ebeam not set, cannot apply Moller energy cut.\n";
+                break;
+            }
+            if (std::abs(Epair - Ebeam_) < 4.f * Ebeam_ * 0.025f / std::sqrt(Ebeam_ / 1000.f)) {
                 good_moller = true;
             }
         }
@@ -276,9 +235,9 @@ int main(int argc, char *argv[])
     //hycal Moller events
     //projectToHyCalSurface(hycal_mollers, hycal_z); //project to HyCal surface
     //move to beam center coordinates
-    TransformDetData(hycal_mollers, shift_hx, shift_hy, 0.f);
+    TransformDetData(hycal_mollers, hycal_x_, hycal_y_, 0.f);
     for (int i = 0; i < hycal_mollers.size(); i++) {
-        vertex_hycal->Fill(physics.GetMollerZdistance(hycal_mollers[i], Ebeam));
+        vertex_hycal->Fill(physics.GetMollerZdistance(hycal_mollers[i], Ebeam_));
         if (i >= 1) {
             auto c = physics.GetMollerCenter(hycal_mollers[i-1], hycal_mollers[i]);
             center_hycal->Fill(c[0], c[1]);
@@ -289,9 +248,9 @@ int main(int argc, char *argv[])
 
     //gem Moller events
     for (int d = 0; d < 4; d++) {
-        TransformDetData(gem_mollers[d], shift_gx[d], shift_gy[d], 0.f);
+        TransformDetData(gem_mollers[d], gem_x_[d], gem_y_[d], 0.f);
         for (int i = 0; i < gem_mollers[d].size(); i++) {
-            vertex_gem[d]->Fill(physics.GetMollerZdistance(gem_mollers[d][i], Ebeam));
+            vertex_gem[d]->Fill(physics.GetMollerZdistance(gem_mollers[d][i], Ebeam_));
             if (i >= 1) {
                 auto c = physics.GetMollerCenter(gem_mollers[d][i-1], gem_mollers[d][i]);
                 center_gem[d]->Fill(c[0], c[1]);
@@ -302,26 +261,26 @@ int main(int argc, char *argv[])
     }
 
     //fit histograms, and get the beam position and vertex distance for each detector plane
-    float hycal_vertex_z = fitAndDraw(vertex_hycal, "Poscalib_result/" + run_str +"/hycal_vertex_z", hycal_z,  100.);
-    float hycal_center_x = fitAndDraw(center_hycal_x, "Poscalib_result/" + run_str +"/hycal_center_x", hycal_x, 2.);
-    float hycal_center_y = fitAndDraw(center_hycal_y, "Poscalib_result/" + run_str +"/hycal_center_y", hycal_y, 2.);
+    float hycal_vertex_z = fitAndDraw(vertex_hycal, "Poscalib_result/" + run_str +"/hycal_vertex_z", hycal_z_,  100.);
+    float hycal_center_x = fitAndDraw(center_hycal_x, "Poscalib_result/" + run_str +"/hycal_center_x", hycal_x_, 2.);
+    float hycal_center_y = fitAndDraw(center_hycal_y, "Poscalib_result/" + run_str +"/hycal_center_y", hycal_y_, 2.);
     float gem_vertex_z[4];
     float gem_center_x[4];
     float gem_center_y[4];
     for (int d = 0; d < 4; d++) {
-        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_vertex_z", gem_z[d], 25.);
-        gem_center_x[d] = fitAndDraw(center_gem_x[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_x", gem_x[d], 0.3);
-        gem_center_y[d] = fitAndDraw(center_gem_y[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_y", gem_y[d], 1.);
+        gem_vertex_z[d] = fitAndDraw(vertex_gem[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_vertex_z", gem_z_[d], 25.);
+        gem_center_x[d] = fitAndDraw(center_gem_x[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_x", gem_x_[d], 0.3);
+        gem_center_y[d] = fitAndDraw(center_gem_y[d], "Poscalib_result/" + run_str + "/gem" + std::to_string(d) + "_center_y", gem_y_[d], 1.);
     }
     //print summary of calibration results
-    std::cerr << "HyCal vertex z distance: " << hycal_vertex_z << " mm (survey position " << hycal_z << " mm)" << "\n";
-    std::cerr << "HyCal center x: " << hycal_center_x << " mm (survey position " << hycal_x << " mm)\n";
-    std::cerr << "HyCal center y: " << hycal_center_y << " mm (survey position " << hycal_y << " mm)\n";
+    std::cerr << "HyCal vertex z distance: " << hycal_vertex_z << " mm (survey position " << hycal_z_ << " mm)" << "\n";
+    std::cerr << "HyCal center x: " << hycal_center_x << " mm (survey position " << hycal_x_ << " mm)\n";
+    std::cerr << "HyCal center y: " << hycal_center_y << " mm (survey position " << hycal_y_ << " mm)\n";
     
     for (int d = 0; d < 4; d++) {
-        std::cerr << "GEM " << d << " vertex z distance: " << gem_vertex_z[d] << " mm (survey position " << gem_z[d] << " mm)\n";
-        std::cerr << "GEM " << d << " center x: " << gem_center_x[d] << " mm (survey position " << gem_x[d] << " mm)\n";
-        std::cerr << "GEM " << d << " center y: " << gem_center_y[d] << " mm (survey position " << gem_y[d] << " mm)\n";
+        std::cerr << "GEM " << d << " vertex z distance: " << gem_vertex_z[d] << " mm (survey position " << gem_z_[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center x: " << gem_center_x[d] << " mm (survey position " << gem_x_[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center y: " << gem_center_y[d] << " mm (survey position " << gem_y_[d] << " mm)\n";
     }
 
     //save histograms

@@ -67,11 +67,9 @@ public:
 
     // configuration setters
     void SetMatchRange(float range)    { matchRange_ = range; }
-    void SetHyCalZ(float z)            { hycal_z_ = z; }
     void SetSquareSelection(bool sq)   { squareSel_ = sq; }
 
 private:
-    float hycal_z_    = 6225.f; // mm, default HyCal z position from target
     float matchRange_ = 15.f;   // mm, spatial matching window
     bool  squareSel_  = true;   // true = square window, false = circular
 
