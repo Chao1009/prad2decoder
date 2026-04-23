@@ -1,24 +1,40 @@
 #!/bin/tcsh -f
 # ───────────────────────────────────────────────────────────────────────
-# prad2_server_tmux_template — launch prad2_server inside a detached
-# tmux session with stdout/stderr tee'd to a console log so crashes
-# leave a trail.
+# prad2_server_tmux_template — start / stop / restart prad2_server
+# inside a detached tmux session with stdout/stderr tee'd to a console
+# log so crashes leave a trail.
 #
 # Template — NOT installed by `make install`.  Copy it to a convenient
 # location (e.g. ~/bin/prad2_server_tmux.csh), tweak the config block
 # for your site, and `chmod +x` the copy.
+#
+# Usage:  start_prad2mon [start|stop|restart|status]
+#         (default: start — preserves bare-invocation behaviour)
 #
 # Prerequisite: source prad2_setup.csh first so prad2_server is on PATH
 # and LD_LIBRARY_PATH picks up the installed shared libraries (evio, …).
 # ───────────────────────────────────────────────────────────────────────
 
 # ── Site-specific config — edit these for your setup ───────────────────
-set HOST_MACHINE = "clondaq6"
-set REMOTE_ENV   = "/home/clasrun/prad2_daq/prad2_env.csh"
-set SESSION      = "prad2mon"
-set LOG_DIR      = "/home/clasrun/prad2_daq/monitor"
-set LOG          = "$LOG_DIR/console.log"
-set SERVER_ARGS  = "--et -d /data/stage6"
+set HOST_MACHINE  = "clondaq6"
+set REMOTE_ENV    = "/home/clasrun/prad2_daq/prad2_env.csh"
+set SESSION       = "prad2mon"
+set BINARY        = "prad2_server"
+set LOG_DIR       = "/home/clasrun/prad2_daq/monitor"
+set LOG           = "$LOG_DIR/console.log"
+set SERVER_ARGS   = "--et -d /data/stage6"
+
+# Seconds to wait for a graceful shutdown after Ctrl+C before forcing
+# the tmux session down.
+set STOP_TIMEOUT  = 10
+
+# ── Parse subcommand (default: start) ──────────────────────────────────
+set CMD = "start"
+if ( $#argv >= 1 ) set CMD = "$argv[1]"
+if ( "$CMD" != "start" && "$CMD" != "stop" && "$CMD" != "restart" && "$CMD" != "status" ) then
+    echo "Usage: $0 [start|stop|restart|status]" >& /dev/stderr
+    exit 2
+endif
 
 # ── Remote dispatch: bounce to $HOST_MACHINE if we're elsewhere ────────
 # ssh doesn't source interactive-shell startup files, so we explicitly
@@ -26,25 +42,87 @@ set SERVER_ARGS  = "--et -d /data/stage6"
 # sources prad2_setup.csh) before re-invoking ourselves on the remote.
 # Assumes $0 resolves on the target host too — true on JLab hall setups
 # where /home is NFS-mounted. Uses a prefix glob so both "clondaq6"
-# and "clondaq6.jlab.org" match.
+# and "clondaq6.jlab.org" match.  ${argv:q} preserves the subcommand
+# across the hop so `start_prad2mon restart` works from any host.
 set THIS_HOST = `hostname`
 if ( "$THIS_HOST" !~ "${HOST_MACHINE}"* ) then
     echo "Not on ${HOST_MACHINE} (this is ${THIS_HOST}) — forwarding via ssh…"
     exec ssh -t $HOST_MACHINE "source ${REMOTE_ENV} && ${0} ${argv:q}"
 endif
 
-# ── Pre-flight checks ──────────────────────────────────────────────────
-tmux has-session -t $SESSION >& /dev/null
-if ( $status == 0 ) then
-    echo "tmux session '$SESSION' is already running."
-    echo "  attach:  tmux attach -t $SESSION"
-    echo "  kill:    tmux kill-session -t $SESSION"
-    exit 1
+# ── status ─────────────────────────────────────────────────────────────
+if ( "$CMD" == "status" ) then
+    tmux has-session -t $SESSION >& /dev/null
+    if ( $status == 0 ) then
+        echo "tmux session '$SESSION': running"
+        pgrep -u "$USER" -x "$BINARY" >& /dev/null
+        if ( $status == 0 ) then
+            echo "$BINARY process: alive"
+            exit 0
+        else
+            echo "$BINARY process: NOT running (pane in fallback bash)"
+            exit 2
+        endif
+    else
+        echo "tmux session '$SESSION': not running"
+        exit 1
+    endif
 endif
 
-which prad2_server >& /dev/null
+# ── stop (shared by stop and restart) ──────────────────────────────────
+if ( "$CMD" == "stop" || "$CMD" == "restart" ) then
+    tmux has-session -t $SESSION >& /dev/null
+    if ( $status == 0 ) then
+        echo "Sending Ctrl+C to $BINARY in tmux session '$SESSION'…"
+        tmux send-keys -t $SESSION C-c
+        # Poll for the server to exit.  -u "$USER" limits pgrep to our
+        # own processes so a sibling instance belonging to another user
+        # can't hold this loop open for the full timeout.
+        set n = $STOP_TIMEOUT
+        while ( $n > 0 )
+            pgrep -u "$USER" -x "$BINARY" >& /dev/null
+            if ( $status != 0 ) break
+            sleep 1
+            @ n--
+        end
+        pgrep -u "$USER" -x "$BINARY" >& /dev/null
+        if ( $status == 0 ) then
+            echo "$BINARY still alive after ${STOP_TIMEOUT}s — forcing tmux kill."
+        else
+            echo "$BINARY exited cleanly."
+        endif
+        tmux kill-session -t $SESSION
+        echo "tmux session '$SESSION' stopped."
+    else
+        echo "tmux session '$SESSION' was not running."
+    endif
+    if ( "$CMD" == "stop" ) exit 0
+endif
+
+# ── start (shared by start and restart) ────────────────────────────────
+# Session presence and server liveness diverge: SH_CMD ends in `exec
+# bash`, so the tmux pane survives a crash to preserve the post-mortem
+# scrollback.  Distinguish the two cases so a stale session doesn't
+# masquerade as a healthy one.
+tmux has-session -t $SESSION >& /dev/null
+if ( $status == 0 ) then
+    pgrep -u "$USER" -x "$BINARY" >& /dev/null
+    if ( $status == 0 ) then
+        echo "tmux session '$SESSION' is already running."
+        echo "  attach:  tmux attach -t $SESSION"
+        echo "  stop:    $0 stop"
+        exit 1
+    else
+        echo "tmux session '$SESSION' exists but $BINARY is not running (crashed?)."
+        echo "  attach:   tmux attach -t $SESSION   (view crash output)"
+        echo "  restart:  $0 restart                (clean up and relaunch)"
+        exit 1
+    endif
+endif
+
+which $BINARY >& /dev/null
 if ( $status != 0 ) then
-    echo "prad2_server not on PATH — source prad2_setup.csh first." >& /dev/stderr
+    echo "$BINARY not on PATH — source prad2_setup.csh first." >& /dev/stderr
     exit 1
 endif
 
@@ -61,17 +139,18 @@ mkdir -p "$LOG_DIR"
 #   echo '--- ...'   stamp a clean exit or crash in the log with a date.
 #   exec bash        keep the pane alive after the server dies so you can
 #                    `tmux attach` and see the last output before it goes.
-set SH_CMD = "stdbuf -oL -eL prad2_server ${SERVER_ARGS} 2>&1 | tee -a ${LOG}"
-set SH_CMD = "${SH_CMD}"'; echo "--- prad2_server exited at $(date) ---" >> '"${LOG}"
+set SH_CMD = "stdbuf -oL -eL $BINARY ${SERVER_ARGS} 2>&1 | tee -a ${LOG}"
+set SH_CMD = "${SH_CMD}"'; echo "--- '"$BINARY"' exited at $(date) ---" >> '"${LOG}"
 set SH_CMD = "${SH_CMD}"'; exec bash'
 
 tmux new-session -d -s $SESSION sh -c "$SH_CMD"
 
 if ( $status == 0 ) then
     echo "Started tmux session '$SESSION'."
-    echo "  attach:  tmux attach -t $SESSION"
-    echo "  tail:    tail -f $LOG"
-    echo "  stop:    tmux send-keys -t $SESSION C-c"
+    echo "  attach:   tmux attach -t $SESSION"
+    echo "  tail:     tail -f $LOG"
+    echo "  stop:     $0 stop"
+    echo "  restart:  $0 restart"
 else
     echo "Failed to start tmux session." >& /dev/stderr
     exit 1
