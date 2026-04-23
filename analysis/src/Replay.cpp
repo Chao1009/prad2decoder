@@ -463,14 +463,14 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     
     if(prad1 == true) evc::load_pedestals(db_dir + "/prad1/adc1881m_pedestals.json", daq_cfg_);
     
-    std::string calib_file = db_dir + "/calibration/adc_to_mev_factors_cosmic.json";
+    std::string run_str = get_run_str(input_evio);
+    int run_num = get_run_int(input_evio);
+    gCalibConfig = LoadTransformConfig(db_dir + "/calibration/calibration_config.json", run_num);
+
+    std::string calib_file = db_dir + gCalibConfig.energy_calib_file;
     int nmatched = hycal.LoadCalibration(calib_file);
     if (nmatched >= 0)
         std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
-
-    std::string run_str = get_run_str(input_evio);
-    int run_num = get_run_int(input_evio);
-    gGeoConfig = LoadTransformConfig(db_dir + "/calibration/det_position_calib.json", run_num);
 
     fdec::HyCalCluster clusterer(hycal);
     fdec::ClusterConfig cl_cfg;
@@ -697,9 +697,9 @@ if(!prad1){
                 gem_hits[ev->det_id[i]].push_back(GEMHit{ev->gem_x[i], ev->gem_y[i], 0.f, ev->det_id[i]});
             //transform the coordinates of detector data
             
-            TransformDetData(hc_hits, gGeoConfig);
+            TransformDetData(hc_hits, gCalibConfig);
             GetProjection(hc_hits, hycal_z_);
-            for(int i = 0; i < 4; ++i) TransformDetData(gem_hits[i], gGeoConfig);
+            for(int i = 0; i < 4; ++i) TransformDetData(gem_hits[i], gCalibConfig);
 
             //matching.SetMatchRange(5.0f); // matching radius in mm, 15mm default
             matching.SetSquareSelection(true); // use square cut instead of circular cut

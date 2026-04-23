@@ -111,7 +111,7 @@ int main(int argc, char *argv[])
     // --- load detector geometry config from JSON ---
     std::string run_str = get_run_str(root_files[0]);
     int run_num = get_run_int(root_files[0]);
-    gGeoConfig = LoadTransformConfig(dbDir + "/calibration/det_position_calib.json", run_num);
+    gCalibConfig = LoadTransformConfig(dbDir + "/calibration/calibration_config.json", run_num);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;
@@ -184,8 +184,8 @@ int main(int argc, char *argv[])
         }
 
         //transform detector coordinates to target and beam center coordinates
-        TransformDetData(hc_hits, gGeoConfig);
-        for(int d = 0; d < 4; d++) TransformDetData(gem_hits[d], gGeoConfig);
+        TransformDetData(hc_hits, gCalibConfig);
+        for(int d = 0; d < 4; d++) TransformDetData(gem_hits[d], gCalibConfig);
 
         //then matching between GEM hits and HyCal clusters
             //optional settings

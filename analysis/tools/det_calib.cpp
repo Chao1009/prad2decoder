@@ -119,9 +119,9 @@ int main(int argc, char *argv[])
 
     // --- load detector geometry config from JSON ---
     if (transform_config.empty()) {
-        transform_config = dbDir + "/calibration/det_position_calib.json";
+        transform_config = dbDir + "/calibration/calibration_config.json";
     }
-    GeoConfig geo = LoadTransformConfig(transform_config, run_num);
+    CalibConfig geo = LoadTransformConfig(transform_config, run_num);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;

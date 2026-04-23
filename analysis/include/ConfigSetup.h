@@ -35,7 +35,8 @@ namespace analysis {
 //   TransformDetData(hits1, geo1);
 //   TransformDetData(hits2, geo2);
 //
-struct GeoConfig {
+struct CalibConfig {
+    std::string energy_calib_file;
     float Ebeam   = 0.f;
     float hycal_z = 6222.5f;
     float hycal_x = 0.f;
@@ -47,31 +48,32 @@ struct GeoConfig {
 
 // Global geometry config for single-run tools.
 // Multi-run code should capture LoadTransformConfig()'s return value into a
-// local GeoConfig instead of relying on this global.
-inline GeoConfig gGeoConfig;
+// local CalibConfig instead of relying on this global.
+inline CalibConfig gCalibConfig;
 
-// Backward-compatible aliases pointing into gGeoConfig (zero overhead).
+// Backward-compatible aliases pointing into gCalibConfig (zero overhead).
 // Existing code that reads/writes Ebeam_, hycal_x_, gem_z_[] etc. continues
 // to work without any modification.
-inline float        &Ebeam_   = gGeoConfig.Ebeam;
-inline float        &hycal_z_ = gGeoConfig.hycal_z;
-inline float        &hycal_x_ = gGeoConfig.hycal_x;
-inline float        &hycal_y_ = gGeoConfig.hycal_y;
-inline float *const  gem_z_   = gGeoConfig.gem_z;
-inline float *const  gem_x_   = gGeoConfig.gem_x;
-inline float *const  gem_y_   = gGeoConfig.gem_y;
+inline std::string  &energy_calib_file_ = gCalibConfig.energy_calib_file;
+inline float        &Ebeam_   = gCalibConfig.Ebeam;
+inline float        &hycal_z_ = gCalibConfig.hycal_z;
+inline float        &hycal_x_ = gCalibConfig.hycal_x;
+inline float        &hycal_y_ = gCalibConfig.hycal_y;
+inline float *const  gem_z_   = gCalibConfig.gem_z;
+inline float *const  gem_x_   = gCalibConfig.gem_x;
+inline float *const  gem_y_   = gCalibConfig.gem_y;
 
 // --- config file loading ----------------------------------------------------
-// Returns a GeoConfig populated from the best-matching entry in the JSON file.
+// Returns a CalibConfig populated from the best-matching entry in the JSON file.
 // Selects the entry whose run_number is the largest value <= run_num.
 // If run_num < 0 (unknown), uses the entry with the largest run_number.
 //
-// Single-run tools:  gGeoConfig = LoadTransformConfig(path, run);
+// Single-run tools:  gCalibConfig = LoadTransformConfig(path, run);
 // Multi-run tools:   auto geo1 = LoadTransformConfig(path, run1);
 //                    auto geo2 = LoadTransformConfig(path, run2);
-inline GeoConfig LoadTransformConfig(const std::string &transform_config, int run_num)
+inline CalibConfig LoadTransformConfig(const std::string &transform_config, int run_num)
 {
-    GeoConfig result;   // start from defaults defined in GeoConfig
+    CalibConfig result;   // start from defaults defined in CalibConfig
 
     std::ifstream cfg_f(transform_config);
     if (!cfg_f) {
@@ -115,6 +117,7 @@ inline GeoConfig LoadTransformConfig(const std::string &transform_config, int ru
 
     const auto &c = *best;
     if (c.contains("Ebeam")) result.Ebeam = c["Ebeam"].get<float>();
+    if (c.contains("energy_calibration")) result.energy_calib_file = c["energy_calibration"].get<std::string>();
     if (c.contains("hycal")) {
         const auto &h = c["hycal"];
         if (h.contains("z")) result.hycal_z = h["z"].get<float>();
@@ -142,13 +145,13 @@ inline GeoConfig LoadTransformConfig(const std::string &transform_config, int ru
 }
 
 // --- config file writing ----------------------------------------------------
-// Appends a new entry (run_number + GeoConfig) to the "configurations" array
+// Appends a new entry (run_number + CalibConfig) to the "configurations" array
 // in the given JSON file. If the file does not exist, it is created from
 // scratch. If an entry with the same run_number already exists, it is
 // overwritten in-place. The updated JSON is written back atomically via a
 // temporary file to avoid corruption on failure.
 inline bool WriteTransformConfig(const std::string &transform_config, int run_num,
-                                 const GeoConfig &geo)
+                                 const CalibConfig &geo)
 {
     // --- load existing file (or start empty) --------------------------------
     nlohmann::json cfg;
@@ -176,6 +179,7 @@ inline bool WriteTransformConfig(const std::string &transform_config, int run_nu
 
     // --- build new entry ----------------------------------------------------
     nlohmann::json entry;
+    entry["energy_calibration"] = geo.energy_calib_file;
     entry["run_number"] = run_num;
     entry["Ebeam"]      = geo.Ebeam;
     entry["hycal"]["z"] = geo.hycal_z;
@@ -229,12 +233,12 @@ inline bool WriteTransformConfig(const std::string &transform_config, int run_nu
 // Explicit-offset overloads (float beamX, float beamY, float ZfromTarget):
 //   Always available; callers supply the numbers directly.
 //
-// GeoConfig overloads (const GeoConfig &geo = gGeoConfig):
+// CalibConfig overloads (const CalibConfig &geo = gCalibConfig):
 //   Use the geometry loaded by LoadTransformConfig().
-//   Default argument = gGeoConfig, so existing single-arg calls like
+//   Default argument = gCalibConfig, so existing single-arg calls like
 //     TransformDetData(hc_hits);
 //   still compile and use the global config unchanged.
-//   Multi-run code can pass an explicit GeoConfig:
+//   Multi-run code can pass an explicit CalibConfig:
 //     TransformDetData(hc_hits, geo1);
 
 // -- single-hit primitives (used internally by the vector overloads) ---------
@@ -258,7 +262,7 @@ inline void TransformDetData(std::vector<HCHit> &hc_hits, float beamX, float bea
     for (auto &h : hc_hits) TransformDetData(h, beamX, beamY, ZfromTarget);
 }
 
-inline void TransformDetData(std::vector<HCHit> &hc_hits, const GeoConfig &geo = gGeoConfig)
+inline void TransformDetData(std::vector<HCHit> &hc_hits, const CalibConfig &geo = gCalibConfig)
 {
     TransformDetData(hc_hits, geo.hycal_x, geo.hycal_y, geo.hycal_z);
 }
@@ -270,7 +274,7 @@ inline void TransformDetData(std::vector<GEMHit> &gem_hits, float beamX, float b
 }
 
 // Each GEM hit is transformed using its own detector id.
-inline void TransformDetData(std::vector<GEMHit> &gem_hits, const GeoConfig &geo = gGeoConfig)
+inline void TransformDetData(std::vector<GEMHit> &gem_hits, const CalibConfig &geo = gCalibConfig)
 {
     for (auto &h : gem_hits) {
         int det_id = h.det_id;
