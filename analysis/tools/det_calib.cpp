@@ -125,7 +125,7 @@ int main(int argc, char *argv[])
 
     // --- load detector geometry config from JSON ---
     if (transform_config.empty()) {
-        transform_config = dbDir + "/calibration/calibration_config.json";
+        transform_config = dbDir + "/calibration/2p1_general.json";
     }
     CalibConfig geo = LoadCalibConfig(transform_config, run_num);
 

@@ -36,13 +36,23 @@ namespace fs = std::filesystem;
 //
 struct CalibConfig {
     std::string energy_calib_file;
-    float Ebeam   = 0.f;
-    float hycal_z = 6222.5f;
-    float hycal_x = 0.f;
-    float hycal_y = 0.f;
-    float gem_z[4] = {5423.71f, 5384.00f, 5823.71f, 5784.00f};
-    float gem_x[4] = {0.f, 0.f, 0.f, 0.f};
-    float gem_y[4] = {0.f, 0.f, 0.f, 0.f};
+    float default_adc2mev  = 0.078f;
+    float Ebeam      = 0.f;
+    float target_x   = 0.f;
+    float target_y   = 0.f;
+    float target_z   = 0.f;
+    float hycal_x    = 0.f;
+    float hycal_y    = 0.f;
+    float hycal_z    = 6225.0f;
+    float hycal_tilt_x = 0.f;
+    float hycal_tilt_y = 0.f;
+    float hycal_tilt_z = 0.f;
+    float gem_x[4]      = {-252.8f,  252.8f, -252.8f,  252.8f};
+    float gem_y[4]      = {0.f, 0.f, 0.f, 0.f};
+    float gem_z[4]      = {5423.0f, 5384.0f, 5823.0f, 5784.0f};
+    float gem_tilt_x[4] = {0.f, 0.f, 0.f, 0.f};
+    float gem_tilt_y[4] = {0.f, 0.f, 0.f, 0.f};
+    float gem_tilt_z[4] = {0.f, 180.f, 0.f, 180.f};
 };
 
 // Global geometry config for single-run tools.
@@ -115,28 +125,46 @@ inline CalibConfig LoadCalibConfig(const std::string &transform_config, int run_
     }
 
     const auto &c = *best;
-    if (c.contains("Ebeam")) result.Ebeam = c["Ebeam"].get<float>();
-    if (c.contains("energy_calibration")) result.energy_calib_file = c["energy_calibration"].get<std::string>();
+    if (c.contains("beam_energy")) result.Ebeam = c["beam_energy"].get<float>();
+    if (c.contains("calibration")) {
+        const auto &cal = c["calibration"];
+        if (cal.contains("file"))           result.energy_calib_file = cal["file"].get<std::string>();
+        if (cal.contains("default_adc2mev")) result.default_adc2mev  = cal["default_adc2mev"].get<float>();
+    }
+    if (c.contains("target") && c["target"].is_array() && c["target"].size() >= 3) {
+        result.target_x = c["target"][0].get<float>();
+        result.target_y = c["target"][1].get<float>();
+        result.target_z = c["target"][2].get<float>();
+    }
     if (c.contains("hycal")) {
         const auto &h = c["hycal"];
-        if (h.contains("z")) result.hycal_z = h["z"].get<float>();
-        if (h.contains("x")) result.hycal_x = h["x"].get<float>();
-        if (h.contains("y")) result.hycal_y = h["y"].get<float>();
+        if (h.contains("position") && h["position"].is_array() && h["position"].size() >= 3) {
+            result.hycal_x = h["position"][0].get<float>();
+            result.hycal_y = h["position"][1].get<float>();
+            result.hycal_z = h["position"][2].get<float>();
+        }
+        if (h.contains("tilting") && h["tilting"].is_array() && h["tilting"].size() >= 3) {
+            result.hycal_tilt_x = h["tilting"][0].get<float>();
+            result.hycal_tilt_y = h["tilting"][1].get<float>();
+            result.hycal_tilt_z = h["tilting"][2].get<float>();
+        }
     }
-    if (c.contains("gem")) {
-        const auto &g = c["gem"];
-        auto load_gem_array = [&](const char *key, float (&dst)[4]) {
-            if (!g.contains(key)) return;
-            const auto &arr = g[key];
-            if (!arr.is_array() || arr.size() != 4) {
-                std::cerr << "Warning: gem." << key << " must be an array of 4 numbers, ignoring.\n";
-                return;
+    if (c.contains("gem") && c["gem"].is_array()) {
+        for (const auto &g : c["gem"]) {
+            if (!g.contains("id")) continue;
+            int id = g["id"].get<int>();
+            if (id < 0 || id >= 4) continue;
+            if (g.contains("position") && g["position"].is_array() && g["position"].size() >= 3) {
+                result.gem_x[id] = g["position"][0].get<float>();
+                result.gem_y[id] = g["position"][1].get<float>();
+                result.gem_z[id] = g["position"][2].get<float>();
             }
-            for (int d = 0; d < 4; d++) dst[d] = arr[d].get<float>();
-        };
-        load_gem_array("z", result.gem_z);
-        load_gem_array("x", result.gem_x);
-        load_gem_array("y", result.gem_y);
+            if (g.contains("tilting") && g["tilting"].is_array() && g["tilting"].size() >= 3) {
+                result.gem_tilt_x[id] = g["tilting"][0].get<float>();
+                result.gem_tilt_y[id] = g["tilting"][1].get<float>();
+                result.gem_tilt_z[id] = g["tilting"][2].get<float>();
+            }
+        }
     }
     std::cerr << "Loaded detector coordinates config (run_number=" << best_run
               << ") from: " << transform_config << "\n";
@@ -169,24 +197,26 @@ inline bool WriteTransformConfig(const std::string &transform_config, int run_nu
     }
 
     // ensure top-level structure
-    if (!cfg.contains("information"))
-        cfg["information"] = "z positions(mm) from target center, x/y (mm) from beam center";
-    if (!cfg.contains("units"))
-        cfg["units"] = "Ebeam is in MeV, z in mm, x/y in mm";
     if (!cfg.contains("configurations") || !cfg["configurations"].is_array())
         cfg["configurations"] = nlohmann::json::array();
 
     // --- build new entry ----------------------------------------------------
     nlohmann::json entry;
-    entry["energy_calibration"] = geo.energy_calib_file;
-    entry["run_number"] = run_num;
-    entry["Ebeam"]      = geo.Ebeam;
-    entry["hycal"]["z"] = geo.hycal_z;
-    entry["hycal"]["x"] = geo.hycal_x;
-    entry["hycal"]["y"] = geo.hycal_y;
-    entry["gem"]["z"]   = nlohmann::json::array({geo.gem_z[0], geo.gem_z[1], geo.gem_z[2], geo.gem_z[3]});
-    entry["gem"]["x"]   = nlohmann::json::array({geo.gem_x[0], geo.gem_x[1], geo.gem_x[2], geo.gem_x[3]});
-    entry["gem"]["y"]   = nlohmann::json::array({geo.gem_y[0], geo.gem_y[1], geo.gem_y[2], geo.gem_y[3]});
+    entry["run_number"]  = run_num;
+    entry["beam_energy"] = geo.Ebeam;
+    entry["calibration"]["file"]            = geo.energy_calib_file;
+    entry["calibration"]["default_adc2mev"] = geo.default_adc2mev;
+    entry["target"] = nlohmann::json::array({geo.target_x, geo.target_y, geo.target_z});
+    entry["hycal"]["position"] = nlohmann::json::array({geo.hycal_x, geo.hycal_y, geo.hycal_z});
+    entry["hycal"]["tilting"]  = nlohmann::json::array({geo.hycal_tilt_x, geo.hycal_tilt_y, geo.hycal_tilt_z});
+    entry["gem"] = nlohmann::json::array();
+    for (int i = 0; i < 4; ++i) {
+        nlohmann::json g;
+        g["id"]       = i;
+        g["position"] = nlohmann::json::array({geo.gem_x[i], geo.gem_y[i], geo.gem_z[i]});
+        g["tilting"]  = nlohmann::json::array({geo.gem_tilt_x[i], geo.gem_tilt_y[i], geo.gem_tilt_z[i]});
+        entry["gem"].push_back(g);
+    }
 
     // --- replace existing entry or append -----------------------------------
     auto &arr = cfg["configurations"];
@@ -247,12 +277,99 @@ inline void TransformDetData(HCHit &h, float beamX, float beamY, float ZfromTarg
     h.y -= beamY;
     h.z += ZfromTarget;
 }
-
 inline void TransformDetData(GEMHit &h, float beamX, float beamY, float ZfromTarget)
 {
     h.x -= beamX;
     h.y -= beamY;
     h.z += ZfromTarget;
+}
+
+// Apply successive rotations Rz → Ry → Rx (extrinsic, small-angle convention).
+// Each angle is in degrees.  Only non-zero axes incur any computation cost.
+inline void RotateDetData(HCHit &h, float x_deg, float y_deg, float z_deg)
+{
+    constexpr float kDeg2Rad = 3.14159265f / 180.f;
+    float x = h.x, y = h.y, z = h.z;
+
+    if (z_deg != 0.f) {
+        float c = std::cos(z_deg * kDeg2Rad), s = std::sin(z_deg * kDeg2Rad);
+        float nx = x * c - y * s;
+        float ny = x * s + y * c;
+        x = nx; y = ny;
+    }
+    if (y_deg != 0.f) {
+        float c = std::cos(y_deg * kDeg2Rad), s = std::sin(y_deg * kDeg2Rad);
+        float nx =  x * c + z * s;
+        float nz = -x * s + z * c;
+        x = nx; z = nz;
+    }
+    if (x_deg != 0.f) {
+        float c = std::cos(x_deg * kDeg2Rad), s = std::sin(x_deg * kDeg2Rad);
+        float ny = y * c - z * s;
+        float nz = y * s + z * c;
+        y = ny; z = nz;
+    }
+    h.x = x; h.y = y; h.z = z;
+}
+
+inline void RotateDetData(GEMHit &h, float x_deg, float y_deg, float z_deg)
+{
+    constexpr float kDeg2Rad = 3.14159265f / 180.f;
+    float x = h.x, y = h.y, z = h.z;
+
+    if (z_deg != 0.f) {
+        float c = std::cos(z_deg * kDeg2Rad), s = std::sin(z_deg * kDeg2Rad);
+        float nx = x * c - y * s;
+        float ny = x * s + y * c;
+        x = nx; y = ny;
+    }
+    if (y_deg != 0.f) {
+        float c = std::cos(y_deg * kDeg2Rad), s = std::sin(y_deg * kDeg2Rad);
+        float nx =  x * c + z * s;
+        float nz = -x * s + z * c;
+        x = nx; z = nz;
+    }
+    if (x_deg != 0.f) {
+        float c = std::cos(x_deg * kDeg2Rad), s = std::sin(x_deg * kDeg2Rad);
+        float ny = y * c - z * s;
+        float nz = y * s + z * c;
+        y = ny; z = nz;
+    }
+    h.x = x; h.y = y; h.z = z;
+}
+
+// -- HCHit vector ------------------------------------------------------------
+inline void RotateDetData(std::vector<HCHit> &hc_hits,
+                          float x_deg, float y_deg, float z_deg)
+{
+    for (auto &h : hc_hits) RotateDetData(h, x_deg, y_deg, z_deg);
+}
+
+// -- GEMHit vector -----------------------------------------------------------
+inline void RotateDetData(std::vector<GEMHit> &gem_hits,
+                          float x_deg, float y_deg, float z_deg)
+{
+    for (auto &h : gem_hits) RotateDetData(h, x_deg, y_deg, z_deg);
+}
+
+// -- CalibConfig overloads (use tilting angles stored in config) -------------
+inline void RotateDetData(std::vector<HCHit> &hc_hits,
+                          const CalibConfig &geo = gCalibConfig)
+{
+    RotateDetData(hc_hits, geo.hycal_tilt_x, geo.hycal_tilt_y, geo.hycal_tilt_z);
+}
+
+inline void RotateDetData(std::vector<GEMHit> &gem_hits,
+                          const CalibConfig &geo = gCalibConfig)
+{
+    for (auto &h : gem_hits) {
+        int det_id = h.det_id;
+        if (det_id >= 0 && det_id < 4) {
+            RotateDetData(h, geo.gem_tilt_x[det_id],
+                             geo.gem_tilt_y[det_id],
+                             geo.gem_tilt_z[det_id]);
+        }
+    }
 }
 
 // -- HCHit vector ------------------------------------------------------------

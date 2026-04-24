@@ -1,0 +1,23 @@
+{   
+    "configurations":[
+        {   
+            "run_number": 0,
+            "beam_energy": 2100.0,
+            "calibration": {
+                "file": "calibration/calibration_factor_0.json",
+                "default_adc2mev": 0.078
+            },
+            "target": [0.0, 0.0, 0.0],
+            "hycal": {
+                "position": [0.0, 0.0, 6225.0],
+                "tilting": [0.0, 0.0, 0.0]
+            },
+            "gem": [
+                {"id": 0, "position": [-252.8, 0.0, 5423.0], "tilting": [0.0, 0.0, 0.0]},
+                {"id": 1, "position": [252.8, 0.0, 5384.0],  "tilting": [0.0, 0.0, 180.0]},
+                {"id": 2, "position": [-252.8, 0.0, 5823.0], "tilting": [0.0, 0.0, 0.0]},
+                {"id": 3, "position": [252.8, 0.0, 5784.0],  "tilting": [0.0, 0.0, 180.0]}
+            ]
+        }
+    ]
+}

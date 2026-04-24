@@ -471,7 +471,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     
     std::string run_str = get_run_str(input_evio);
     int run_num = get_run_int(input_evio);
-    gCalibConfig = LoadCalibConfig(db_dir + "/calibration/calibration_config.json", run_num);
+    gCalibConfig = LoadCalibConfig(db_dir + "/calibration/2p1_general.json", run_num);
 
     std::string calib_file = db_dir + gCalibConfig.energy_calib_file;
     int nmatched = hycal.LoadCalibration(calib_file);
@@ -704,8 +704,12 @@ if(!prad1){
             //transform the coordinates of detector data
             
             TransformDetData(hc_hits, gCalibConfig);
+            RotateDetData(hc_hits, gCalibConfig);
             GetProjection(hc_hits, gCalibConfig.hycal_z);
-            for(int i = 0; i < 4; ++i) TransformDetData(gem_hits[i], gCalibConfig);
+            for(int i = 0; i < 4; ++i) {
+                RotateDetData(gem_hits[i], gCalibConfig);
+                TransformDetData(gem_hits[i], gCalibConfig);
+            }
 
             //matching.SetMatchRange(5.0f); // matching radius in mm, 15mm default
             matching.SetSquareSelection(true); // use square cut instead of circular cut

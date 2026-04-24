@@ -106,7 +106,7 @@ int main(int argc, char *argv[])
     // --- load detector geometry config from JSON ---
     std::string run_str = get_run_str(root_files[0]);
     int run_num = get_run_int(root_files[0]);
-    gCalibConfig = LoadCalibConfig(dbDir + "/calibration/calibration_config.json", run_num);
+    gCalibConfig = LoadCalibConfig(dbDir + "/calibration/2p1_general.json", run_num);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;
