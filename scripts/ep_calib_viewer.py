@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog,
@@ -96,6 +96,8 @@ class IterData:
         self.root_path:      Optional[Path]           = None
         self.factors:        Dict[str, dict]          = {}   # raw JSON entries
         self.expected_peaks: Dict[str, float]         = {}   # from .dat ExpectedPeak
+        self._hist_cache:    Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+        self._global_hists:  dict = {}   # preloaded by worker: ratio_all etc.
 
     @property
     def json_path(self) -> Optional[Path]:
@@ -232,6 +234,7 @@ def compute_metrics(data: IterData) -> None:
                 # hname like "h_W1" -> module name "W1"
                 mod_name = hname[len("h_"):]
                 counts, edges = f[raw_key].to_numpy()
+                data._hist_cache[mod_name] = (counts, edges)
                 mm = data.metrics.setdefault(mod_name, ModuleMetrics(mod_name))
                 mm.stats = float(counts.sum())
                 mm.peak, mm.sigma, mm.chi2 = _fit_histogram(counts, edges)
@@ -383,6 +386,13 @@ class ModuleDetailPanel(QWidget):
         self._refit_btn.setEnabled(False)
         self._refit_btn.clicked.connect(self._do_refit)
         btn_row.addWidget(self._refit_btn)
+        self._mean_btn = QPushButton("Use Mean (χ²=1)")
+        self._mean_btn.setEnabled(False)
+        self._mean_btn.setToolTip(
+            "Compute weighted mean/σ from histogram (in fit range if set)\n"
+            "and use as peak value; χ²/ndf is fixed at 1.0")
+        self._mean_btn.clicked.connect(self._do_use_mean)
+        btn_row.addWidget(self._mean_btn)
         self._apply_btn = QPushButton("Apply && Save JSON")
         self._apply_btn.setEnabled(False)
         self._apply_btn.clicked.connect(self._apply_and_save)
@@ -409,6 +419,7 @@ class ModuleDetailPanel(QWidget):
         self._apply_btn.setEnabled(False)
         self._refit_status.setText("")
         self._refit_btn.setEnabled(bool(name) and HAS_SCIPY and HAS_UPROOT)
+        self._mean_btn.setEnabled(bool(name) and HAS_UPROOT)
 
         # Pre-populate fit range from current fit result
         if mm and mm.peak > 0 and mm.sigma > 0:
@@ -484,14 +495,21 @@ class ModuleDetailPanel(QWidget):
 
     def _read_module_hist(self, name: str
                           ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        # Fast path: return in-memory cache populated during compute_metrics
+        if self._iter_data is not None and name in self._iter_data._hist_cache:
+            return self._iter_data._hist_cache[name]
         if not HAS_UPROOT or self._root_path is None:
             return None
         key = f"module_energy/h_{name}"
         try:
             with uproot.open(str(self._root_path)) as f:
-                if key not in [k.split(";")[0] for k in f.keys()]:
+                avail = {k.split(";")[0] for k in f.keys()}
+                if key not in avail:
                     return None
-                return f[key].to_numpy()
+                result = f[key].to_numpy()
+                if self._iter_data is not None:
+                    self._iter_data._hist_cache[name] = result
+                return result
         except Exception:
             return None
 
@@ -500,6 +518,76 @@ class ModuleDetailPanel(QWidget):
     def set_iter_data(self, data: Optional["IterData"]) -> None:
         """Store reference to current IterData (needed for JSON write-back)."""
         self._iter_data = data
+
+    def _do_use_mean(self) -> None:
+        """Use histogram weighted mean as peak value; chi2/ndf is fixed at 1.0."""
+        name = self._cur_module_name
+        if not name or self._root_path is None:
+            self._refit_status.setText("No module selected")
+            return
+
+        hist_data = self._read_module_hist(name)
+        if hist_data is None:
+            self._refit_status.setText("Histogram not available in ROOT file")
+            return
+
+        counts, edges = hist_data
+        centers = 0.5 * (edges[:-1] + edges[1:])
+
+        # Apply fit range if provided
+        xmin_txt = self._rf_xmin.text().strip()
+        xmax_txt = self._rf_xmax.text().strip()
+        try:
+            xmin = float(xmin_txt) if xmin_txt else None
+        except ValueError:
+            xmin = None
+        try:
+            xmax = float(xmax_txt) if xmax_txt else None
+        except ValueError:
+            xmax = None
+
+        mask = counts > 0
+        if xmin is not None:
+            mask &= centers >= xmin
+        if xmax is not None:
+            mask &= centers <= xmax
+
+        c_sel = counts[mask]
+        x_sel = centers[mask]
+        total = c_sel.sum()
+        if total < 1:
+            self._refit_status.setText("No data in selected range")
+            return
+
+        mu0  = float((x_sel * c_sel).sum() / total)
+        var  = float(((x_sel - mu0) ** 2 * c_sel).sum() / total)
+        bw   = float(edges[1] - edges[0]) if len(edges) > 1 else 1.0
+        sig0 = math.sqrt(max(var, bw ** 2 / 12.0))
+
+        old_peak   = self._mm.peak   if (self._mm and self._mm.peak > 0.0) else 0.0
+        old_factor = self._mm.factor if self._mm else 1.0
+        new_factor = old_factor * mu0 / old_peak if old_peak > 0.0 else 0.0
+
+        self._refit_peak       = mu0
+        self._refit_sigma      = sig0
+        self._refit_chi2       = 1.0
+        self._refit_new_factor = new_factor
+
+        range_note = ""
+        if xmin is not None or xmax is not None:
+            lo_s = f"{xmin:.1f}" if xmin is not None else "-inf"
+            hi_s = f"{xmax:.1f}" if xmax is not None else "+inf"
+            range_note = f"  [range: {lo_s} – {hi_s}]"
+
+        msg = (
+            f"Mean:  μ = {mu0:.2f} MeV     "
+            f"σ = {sig0:.2f} MeV     χ²/ndf = 1.000  (fixed){range_note}"
+        )
+        if new_factor > 0.0:
+            msg += f"\nNew factor: {new_factor:.5f}   (was {old_factor:.5f})"
+        self._refit_status.setText(msg)
+        self._apply_btn.setEnabled(new_factor > 0.0)
+        self._redraw_refit_overlay(name, counts, edges, mu0, sig0)
 
     def _do_refit(self) -> None:
         """Gaussian refit using user-specified range and initial peak center."""
@@ -737,6 +825,7 @@ class GlobalStatsPanel(QWidget):
         super().__init__(parent)
         self._root_path: Optional[Path] = None
         self._right_view_idx = 0
+        self._cached_hists: dict = {}
         self._build_ui()
 
     def _build_ui(self):
@@ -766,7 +855,29 @@ class GlobalStatsPanel(QWidget):
         self._draw_right()
 
     def set_root_path(self, path: Optional[Path]):
+        """Called when no pre-loaded cache is available (legacy / refresh path)."""
         self._root_path = path
+        self._cached_hists.clear()
+        if HAS_UPROOT and path is not None:
+            try:
+                with uproot.open(str(path)) as f:
+                    avail = {k.split(";")[0] for k in f.keys()}
+                    for key in ("ratio_all", "h2_energy_theta",
+                                "one_cluster_energy", "recon_sigma"):
+                        if key in avail:
+                            try:
+                                self._cached_hists[key] = f[key].to_numpy()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        self._draw_ratio()
+        self._draw_right()
+
+    def set_preloaded(self, path: Optional[Path], hists: dict) -> None:
+        """Use already-loaded histogram cache from the background worker."""
+        self._root_path = path
+        self._cached_hists = hists
         self._draw_ratio()
         self._draw_right()
 
@@ -790,11 +901,10 @@ class GlobalStatsPanel(QWidget):
     def _draw_ratio(self):
         ax = self._cv_ratio.ax
         self._cv_ratio.clear_ax()
-        f = self._open_root()
-        if f is not None:
+        data = self._cached_hists.get("ratio_all")
+        if data is not None:
             try:
-                h = f["ratio_all"]
-                counts, edges = h.to_numpy()
+                counts, edges = data
                 centers = 0.5 * (edges[:-1] + edges[1:])
                 nz = counts > 0
                 if nz.any():
@@ -810,8 +920,6 @@ class GlobalStatsPanel(QWidget):
                           facecolor=THEME.PANEL, edgecolor=THEME.BORDER)
             except Exception:
                 pass
-            finally:
-                f.close()
         else:
             ax.text(0.5, 0.5, "ratio_all\nnot found",
                     transform=ax.transAxes, ha="center", va="center",
@@ -827,11 +935,10 @@ class GlobalStatsPanel(QWidget):
             self._etheta_cbar.remove()
             self._etheta_cbar = None
         self._cv_etheta.clear_ax()
-        f = self._open_root()
-        if f is not None:
+        data = self._cached_hists.get("h2_energy_theta")
+        if data is not None:
             try:
-                h = f["h2_energy_theta"]
-                counts, xedges, yedges = h.to_numpy()
+                counts, xedges, yedges = data
                 pcm = ax.pcolormesh(xedges, yedges, counts.T,
                                     cmap="viridis", shading="flat")
                 self._etheta_cbar = self._cv_etheta.fig.colorbar(pcm, ax=ax, pad=0.01)
@@ -839,8 +946,6 @@ class GlobalStatsPanel(QWidget):
                 ax.text(0.5, 0.5, "h2_energy_theta\nnot found",
                         transform=ax.transAxes, ha="center", va="center",
                         color=THEME.TEXT_DIM, fontsize=9)
-            finally:
-                f.close()
         self._cv_etheta._style_ax("Energy vs θ", "θ (deg)", "Energy (MeV)")
         self._cv_etheta.redraw()
 
@@ -852,11 +957,10 @@ class GlobalStatsPanel(QWidget):
             self._etheta_cbar = None
         ax = self._cv_etheta.ax
         self._cv_etheta.clear_ax()
-        f = self._open_root()
-        if f is not None:
+        data = self._cached_hists.get(hist_key)
+        if data is not None:
             try:
-                h = f[hist_key]
-                counts, edges = h.to_numpy()
+                counts, edges = data
                 centers = 0.5 * (edges[:-1] + edges[1:])
                 nz = counts > 0
                 if nz.any():
@@ -872,8 +976,6 @@ class GlobalStatsPanel(QWidget):
                 ax.text(0.5, 0.5, f"{hist_key}\nnot found",
                         transform=ax.transAxes, ha="center", va="center",
                         color=THEME.TEXT_DIM, fontsize=9)
-            finally:
-                f.close()
         self._cv_etheta._style_ax(title, xlabel, "Counts")
         self._cv_etheta.redraw()
 
@@ -886,6 +988,41 @@ class GlobalStatsPanel(QWidget):
         self._draw_1d_hist("recon_sigma",
                            "Resolution (σ)", "σ (MeV)",
                            color=THEME.SUCCESS)
+
+
+# =============================================================================
+#  Background worker
+# =============================================================================
+
+class _MetricsWorker(QThread):
+    """Run compute_metrics() and preload global hists in a background thread."""
+    finished = pyqtSignal(object)   # emits the IterData when done
+
+    _GLOBAL_KEYS = ("ratio_all", "h2_energy_theta",
+                    "one_cluster_energy", "recon_sigma")
+
+    def __init__(self, data: "IterData", parent=None):
+        super().__init__(parent)
+        self._data = data
+
+    def run(self) -> None:
+        compute_metrics(self._data)          # fills _hist_cache + metrics
+        # also preload global histograms so the main thread has zero ROOT I/O
+        if (HAS_UPROOT
+                and self._data.root_path is not None
+                and not self._data._global_hists):
+            try:
+                with uproot.open(str(self._data.root_path)) as f:
+                    avail = {k.split(";")[0] for k in f.keys()}
+                    for key in self._GLOBAL_KEYS:
+                        if key in avail:
+                            try:
+                                self._data._global_hists[key] = f[key].to_numpy()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        self.finished.emit(self._data)
 
 
 # =============================================================================
@@ -909,6 +1046,7 @@ class EpCalibViewerWindow(QMainWindow):
         self._modules:   List[Module] = []
         self._cur_data:  Optional[IterData] = None
         self._map_mode = CalibMapWidget.MODE_DELTA_E
+        self._worker:    Optional[_MetricsWorker] = None
 
         self._build_ui()
         self.setWindowTitle("epCalib Viewer")
@@ -1151,13 +1289,36 @@ class EpCalibViewerWindow(QMainWindow):
         data = self._scan_data.get(run, {}).get(it)
         if data is None:
             return
-        if not data.metrics:
-            compute_metrics(data)
         self._cur_data = data
         self._detail.set_root_path(data.root_path)
         self._detail.set_iter_data(data)
-        self._stats.set_root_path(data.root_path)
-        self._refresh_map()
+        # if metrics + global hists are already cached, update UI immediately
+        if data.metrics and data._global_hists:
+            self._stats.set_preloaded(data.root_path, data._global_hists)
+            self._refresh_map()
+            return
+        if data.metrics and not data._global_hists:
+            # metrics done but global hists not yet - rare; use blocking path
+            self._stats.set_root_path(data.root_path)
+            self._refresh_map()
+            return
+        # stop any previous worker still running
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.quit()
+            self._worker.wait()
+        self.statusBar().showMessage(
+            f"Loading run {run} iter {it} …")
+        self._worker = _MetricsWorker(data, self)
+        self._worker.finished.connect(self._on_metrics_ready)
+        self._worker.start()
+
+    def _on_metrics_ready(self, data: IterData) -> None:
+        """Called from background worker when compute_metrics + global hist load finish."""
+        self.statusBar().clearMessage()
+        if data is self._cur_data:
+            self._stats.set_preloaded(data.root_path, data._global_hists)
+            self._refresh_map()
+        self._worker = None
 
     # ── map mode ──────────────────────────────────────────────────────────────
 

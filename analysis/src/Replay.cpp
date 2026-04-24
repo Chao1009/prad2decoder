@@ -471,9 +471,9 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     
     std::string run_str = get_run_str(input_evio);
     int run_num = get_run_int(input_evio);
-    gCalibConfig = LoadCalibConfig(db_dir + "/calibration/calibration_config.json", run_num);
+    gRunConfig = LoadRunConfig(db_dir + "/calibration/2p1_general.json", run_num);
 
-    std::string calib_file = db_dir + gCalibConfig.energy_calib_file;
+    std::string calib_file = db_dir + gRunConfig.energy_calib_file;
     int nmatched = hycal.LoadCalibration(calib_file);
     if (nmatched >= 0)
         std::cerr << "Calibration: " << calib_file << " (" << nmatched << " modules)\n";
@@ -703,12 +703,16 @@ if(!prad1){
                 gem_hits[ev->det_id[i]].push_back(GEMHit{ev->gem_x[i], ev->gem_y[i], 0.f, ev->det_id[i]});
             //transform the coordinates of detector data
             
-            TransformDetData(hc_hits, gCalibConfig);
-            GetProjection(hc_hits, gCalibConfig.hycal_z);
-            for(int i = 0; i < 4; ++i) TransformDetData(gem_hits[i], gCalibConfig);
+            TransformDetData(hc_hits, gRunConfig);
+            RotateDetData(hc_hits, gRunConfig);
+            GetProjection(hc_hits, gRunConfig.hycal_z);
+            for(int i = 0; i < 4; ++i) {
+                RotateDetData(gem_hits[i], gRunConfig);
+                TransformDetData(gem_hits[i], gRunConfig);
+            }
 
-            //matching.SetMatchRange(5.0f); // matching radius in mm, 15mm default
-            matching.SetSquareSelection(true); // use square cut instead of circular cut
+            matching.SetMatchRange(gRunConfig.matching_radius); // matching radius in mm, 15mm default
+            matching.SetSquareSelection(gRunConfig.matching_use_square); // square/circular cut
             std::vector<MatchHit> matched_hits = matching.Match(hc_hits, gem_hits[0], gem_hits[1], gem_hits[2], gem_hits[3]);
 
             //save the transformed hycal cluster positions in matchHC_x/y/z (no matter is matched or not)
