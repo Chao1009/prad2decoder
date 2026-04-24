@@ -86,24 +86,24 @@ inline float *const  gem_y_   = gRunConfig.gem_y;
 // Single-run tools:  gRunConfig = LoadRunConfig(path, run);
 // Multi-run tools:   auto geo1 = LoadRunConfig(path, run1);
 //                    auto geo2 = LoadRunConfig(path, run2);
-inline RunConfig LoadRunConfig(const std::string &transform_config, int run_num)
+inline RunConfig LoadRunConfig(const std::string &run_config, int run_num)
 {
     RunConfig result;   // start from defaults defined in RunConfig
 
-    std::ifstream cfg_f(transform_config);
+    std::ifstream cfg_f(run_config);
     if (!cfg_f) {
-        std::cerr << "Warning: cannot open config file " << transform_config << ", using defaults.\n";
+        std::cerr << "Warning: cannot open config file " << run_config << ", using defaults.\n";
         std::cerr << "Warning: Ebeam not set, may cause something wrong\n";
         return result;
     }
     auto cfg = nlohmann::json::parse(cfg_f, nullptr, false, true);
     if (cfg.is_discarded()) {
-        std::cerr << "Warning: failed to parse " << transform_config << ", using defaults.\n";
+        std::cerr << "Warning: failed to parse " << run_config << ", using defaults.\n";
         std::cerr << "Warning: Ebeam not set, may cause something wrong\n";
         return result;
     }
     if (!cfg.contains("configurations") || !cfg["configurations"].is_array()) {
-        std::cerr << "Warning: " << transform_config << " has no \"configurations\" array, using defaults.\n";
+        std::cerr << "Warning: " << run_config << " has no \"configurations\" array, using defaults.\n";
         return result;
     }
 
@@ -125,7 +125,7 @@ inline RunConfig LoadRunConfig(const std::string &transform_config, int run_num)
     }
 
     if (best == nullptr) {
-        std::cerr << "Warning: no matching configuration found in " << transform_config
+        std::cerr << "Warning: no matching configuration found in " << run_config
                   << " for run " << run_num << ", using defaults.\n";
         return result;
     }
@@ -186,7 +186,7 @@ inline RunConfig LoadRunConfig(const std::string &transform_config, int run_num)
         if (m.contains("use_square_cut"))  result.matching_use_square = m["use_square_cut"].get<bool>();
     }
     std::cerr << "Loaded detector coordinates config (run_number=" << best_run
-              << ") from: " << transform_config << "\n";
+              << ") from: " << run_config << "\n";
     return result;
 }
 
@@ -196,17 +196,17 @@ inline RunConfig LoadRunConfig(const std::string &transform_config, int run_num)
 // scratch. If an entry with the same run_number already exists, it is
 // overwritten in-place. The updated JSON is written back atomically via a
 // temporary file to avoid corruption on failure.
-inline bool WriteTransformConfig(const std::string &transform_config, int run_num,
+inline bool WriteRunConfig(const std::string &run_config, int run_num,
                                  const RunConfig &geo)
 {
     // --- load existing file (or start empty) --------------------------------
     nlohmann::json cfg;
     {
-        std::ifstream cfg_f(transform_config);
+        std::ifstream cfg_f(run_config);
         if (cfg_f) {
             cfg = nlohmann::json::parse(cfg_f, nullptr, false, true);
             if (cfg.is_discarded()) {
-                std::cerr << "Warning: failed to parse " << transform_config
+                std::cerr << "Warning: failed to parse " << run_config
                           << ", will overwrite with new data.\n";
                 cfg = nlohmann::json::object();
             }
@@ -260,7 +260,7 @@ inline bool WriteTransformConfig(const std::string &transform_config, int run_nu
     });
 
     // --- write back atomically via a temporary file -------------------------
-    std::string tmp_path = transform_config + ".tmp";
+    std::string tmp_path = run_config + ".tmp";
     {
         std::ofstream out(tmp_path);
         if (!out) {
@@ -269,12 +269,12 @@ inline bool WriteTransformConfig(const std::string &transform_config, int run_nu
         }
         out << cfg.dump(4) << "\n";
     }
-    if (std::rename(tmp_path.c_str(), transform_config.c_str()) != 0) {
-        std::cerr << "Error: failed to rename " << tmp_path << " -> " << transform_config << "\n";
+    if (std::rename(tmp_path.c_str(), run_config.c_str()) != 0) {
+        std::cerr << "Error: failed to rename " << tmp_path << " -> " << run_config << "\n";
         return false;
     }
     std::cerr << (replaced ? "Updated" : "Appended") << " run_number=" << run_num
-              << " in " << transform_config << "\n";
+              << " in " << run_config << "\n";
     return true;
 }
 

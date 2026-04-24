@@ -91,7 +91,7 @@ float fitAndDraw(TH1F* hist, const std::string& out_path, const float survey_pos
 int main(int argc, char *argv[])
 {
     std::string output;
-    std::string transform_config;
+    std::string run_config;
 
     int max_events = -1;
     int opt;
@@ -99,7 +99,7 @@ int main(int argc, char *argv[])
         switch (opt) {
             case 'o': output = optarg; break;
             case 'n': max_events = std::atoi(optarg); break;
-            case 'c': transform_config = optarg; break;
+            case 'c': run_config = optarg; break;
         }
     }
     // collect input files (can be files, directories, or mixed)
@@ -110,7 +110,7 @@ int main(int argc, char *argv[])
     }
     if (root_files.empty()) {
         std::cerr << "No input files specified.\n";
-        std::cerr << "Usage: det_calib <input_recon.root|dir> [more files...] [-o out.root] [-n max_events] [-c det_position_calib.json]\n";
+        std::cerr << "Usage: det_calib <input_recon.root|dir> [more files...] [-o out.root] [-n max_events] [-c run_config.json]\n";
         return 1;
     }
     // extract run number from first input file name (e.g. prad_023626.00000_recon.root -> 23626)
@@ -124,10 +124,10 @@ int main(int argc, char *argv[])
         DATABASE_DIR);
 
     // --- load detector geometry config from JSON ---
-    if (transform_config.empty()) {
-        transform_config = dbDir + "/calibration/2p1_general.json";
+    if (run_config.empty()) {
+        run_config = dbDir + "/calibration/2p1_general.json";
     }
-    RunConfig geo = LoadRunConfig(transform_config, run_num);
+    RunConfig geo = LoadRunConfig(run_config, run_num);
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;
@@ -285,20 +285,20 @@ int main(int argc, char *argv[])
     
     for (int d = 0; d < 4; d++) {
         std::cerr << "GEM " << d << " vertex z distance: " << gem_vertex_z[d] << " mm (survey position " << geo.gem_z[d] << " mm)\n";
-        std::cerr << "GEM " << d << " center x: " << gem_center_x[d] << " mm (survey position " << geo.gem_x[d] << " mm)\n";
-        std::cerr << "GEM " << d << " center y: " << gem_center_y[d] << " mm (survey position " << geo.gem_y[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center x: " << gem_center_x[d]+geo.gem_x[d] << " mm (survey position " << geo.gem_x[d] << " mm)\n";
+        std::cerr << "GEM " << d << " center y: " << gem_center_y[d]+geo.gem_y[d] << " mm (survey position " << geo.gem_y[d] << " mm)\n";
     }
 
     geo.hycal_z = hycal_vertex_z;
-    geo.hycal_x = hycal_center_x;
-    geo.hycal_y = hycal_center_y;
+    geo.hycal_x += hycal_center_x;
+    geo.hycal_y += hycal_center_y;
     for (int d = 0; d < 4; d++) {
         geo.gem_z[d] = gem_vertex_z[d];
-        geo.gem_x[d] = gem_center_x[d];
-        geo.gem_y[d] = gem_center_y[d];
+        geo.gem_x[d] += gem_center_x[d];
+        geo.gem_y[d] += gem_center_y[d];
     }
     //write back the updated geometry config to JSON file
-    WriteTransformConfig(transform_config, run_num, geo);
+    WriteRunConfig(run_config, run_num, geo);
     
 
     //save histograms
@@ -356,7 +356,7 @@ float fitAndDraw(TH1F* hist, const std::string& out_path, const float survey_pos
     TLatex *latex = new TLatex();
     latex->SetNDC();
     latex->SetTextSize(0.04);
-    latex->DrawLatex(0.15, 0.85, Form("%.2f mm +- %.2f mm", hist->GetFunction("gaus")->GetParameter(1), hist->GetFunction("gaus")->GetParError(1)));
+    latex->DrawLatex(0.15, 0.85, Form("%.2f mm +- %.2f mm", hist->GetFunction("gaus")->GetParameter(1)+survey_position, hist->GetFunction("gaus")->GetParError(1)));
     latex->DrawLatex(0.15, 0.80, Form("Survey position: %.2f mm", survey_position));
     fs::create_directories(fs::path(out_path).parent_path());
     c->SaveAs((out_path + ".png").c_str());
