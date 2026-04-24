@@ -745,8 +745,6 @@
   {"name":"G763", "crate":2, "slot":20, "channel":9},
   {"name":"G733", "crate":2, "slot":20, "channel":10},
   {"name":"G734", "crate":2, "slot":20, "channel":11},
-  {"name":"W155", "crate":3, "slot":3, "channel":14},
-  {"name":"W188", "crate":3, "slot":3, "channel":15},
   {"name":"W121", "crate":3, "slot":4, "channel":0},
   {"name":"W154", "crate":3, "slot":4, "channel":1},
   {"name":"W88", "crate":3, "slot":4, "channel":2},
@@ -869,7 +867,9 @@
   {"name":"W934", "crate":3, "slot":13, "channel":7},
   {"name":"W900", "crate":3, "slot":13, "channel":8},
   {"name":"W901", "crate":3, "slot":13, "channel":9},
+  {"name":"W155", "crate":3, "slot":13, "channel":13},
   {"name":"W389", "crate":3, "slot":13, "channel":14},
+  {"name":"W188", "crate":3, "slot":13, "channel":15},
   {"name":"W899", "crate":3, "slot":14, "channel":0},
   {"name":"W867", "crate":3, "slot":14, "channel":1},
   {"name":"W865", "crate":3, "slot":14, "channel":2},
@@ -1731,8 +1731,7 @@
   {"name":"V2", "crate":3, "slot":3, "channel":1},
   {"name":"V3", "crate":3, "slot":3, "channel":2},
   {"name":"V4", "crate":3, "slot":3, "channel":3},
-  {"name":"LMSP", "crate":3, "slot":3, "channel":4},
-  {"name":"LMS1", "crate":3, "slot":3, "channel":5},
-  {"name":"LMS2", "crate":3, "slot":3, "channel":6},
-  {"name":"LMS3", "crate":3, "slot":3, "channel":7}
+  {"name":"LMS1", "crate":3, "slot":13, "channel":10},
+  {"name":"LMS2", "crate":3, "slot":13, "channel":11},
+  {"name":"LMS3", "crate":3, "slot":13, "channel":12}
 ]

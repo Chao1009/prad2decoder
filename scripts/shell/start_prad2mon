@@ -29,8 +29,13 @@ set SERVER_ARGS   = "--et -d /data/stage6"
 set STOP_TIMEOUT  = 10
 
 # ── Parse subcommand (default: start) ──────────────────────────────────
+# Block-form `if` matters: tcsh expands `$argv[1]` during substitution on
+# the single-line form even when the guard is false, so a bare invocation
+# would die with "argv: Subscript out of range".
 set CMD = "start"
-if ( $#argv >= 1 ) set CMD = "$argv[1]"
+if ( $#argv >= 1 ) then
+    set CMD = "$argv[1]"
+endif
 if ( "$CMD" != "start" && "$CMD" != "stop" && "$CMD" != "restart" && "$CMD" != "status" ) then
     echo "Usage: $0 [start|stop|restart|status]" >& /dev/stderr
     exit 2
