@@ -44,7 +44,7 @@ from PyQt6.QtCore import (
     Qt, QObject, QPointF, QRectF, QThread, pyqtSignal, QTimer,
 )
 from PyQt6.QtGui import (
-    QAction, QKeySequence, QPainter, QColor, QPen, QFont, QPolygonF,
+    QAction, QBrush, QKeySequence, QPainter, QColor, QPen, QFont, QPolygonF,
     QShortcut,
 )
 
@@ -1248,6 +1248,18 @@ class _DisplayCluster:
 # ===========================================================================
 
 
+# Per-cluster frame/chip colours (mirrors ``PC`` in resources/cluster.js so
+# the Python viewer and the web monitor agree on "cluster #3 is green").
+CLUSTER_PALETTE: Tuple[str, ...] = (
+    "#00b4d8", "#ff6b6b", "#51cf66", "#ffd43b",
+    "#cc5de8", "#ff922b", "#20c997", "#f06595",
+)
+
+
+def cluster_color(idx: int) -> QColor:
+    return QColor(CLUSTER_PALETTE[idx % len(CLUSTER_PALETTE)])
+
+
 class HyCalClusterMap(HyCalMapWidget):
     """HyCal map coloured by per-module energy (MeV) with cluster overlays
     (crosshair + small circle + energy label) mirroring the web monitor."""
@@ -1312,7 +1324,33 @@ class HyCalClusterMap(HyCalMapWidget):
                 col = QColor(col.red(), col.green(), col.blue(), 60)
             p.fillRect(rect, col)
 
+    def _paint_cluster_frames(self, p):
+        """Draw a coloured border around every member module of every
+        cluster (or just the selected cluster).  Mirrors the per-module
+        border colouring in resources/cluster.js."""
+        if not self._clusters:
+            return
+        sel = self._selected_cluster
+        p.save()
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for i, cl in enumerate(self._clusters):
+            if sel is not None and i != sel:
+                continue
+            members = getattr(cl, "members", None) or ()
+            if not members:
+                continue
+            width = 2.5 if (sel is not None and i == sel) else 1.5
+            p.setPen(QPen(cluster_color(i), width))
+            for name in members:
+                rect = self._rects.get(name)
+                if rect is not None:
+                    p.drawRect(rect)
+        p.restore()
+
     def _paint_overlays(self, p, w, h):
+        # Per-cluster coloured frames first, so the hover border (drawn by
+        # super) and the cluster crosshairs/labels stay visible on top.
+        self._paint_cluster_frames(p)
         super()._paint_overlays(p, w, h)   # hover border
         if not self._clusters:
             return
@@ -1416,6 +1454,8 @@ class ClusterPanel(QWidget):
         # Populate table
         self._table.blockSignals(True)
         self._table.setRowCount(len(self._clusters))
+        chip_font = QFont("Monospace", 9, QFont.Weight.Bold)
+        text_black = QBrush(QColor("#000000"))
         for i, cl in enumerate(self._clusters):
             row = [
                 f"{i}",
@@ -1427,7 +1467,13 @@ class ClusterPanel(QWidget):
             ]
             for c, v in enumerate(row):
                 item = QTableWidgetItem(v)
-                if c in (0, 2, 3, 4, 5):
+                if c == 0:
+                    # Colour chip linking the row to its cluster colour.
+                    item.setBackground(QBrush(cluster_color(i)))
+                    item.setForeground(text_black)
+                    item.setFont(chip_font)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                elif c in (2, 3, 4, 5):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight
                                           | Qt.AlignmentFlag.AlignVCenter)
                 self._table.setItem(i, c, item)
