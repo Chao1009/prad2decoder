@@ -97,6 +97,7 @@ class IterData:
         self.factors:        Dict[str, dict]          = {}   # raw JSON entries
         self.expected_peaks: Dict[str, float]         = {}   # from .dat ExpectedPeak
         self._hist_cache:    Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+        self._global_hists:  dict = {}   # preloaded by worker: ratio_all etc.
 
     @property
     def json_path(self) -> Optional[Path]:
@@ -854,6 +855,7 @@ class GlobalStatsPanel(QWidget):
         self._draw_right()
 
     def set_root_path(self, path: Optional[Path]):
+        """Called when no pre-loaded cache is available (legacy / refresh path)."""
         self._root_path = path
         self._cached_hists.clear()
         if HAS_UPROOT and path is not None:
@@ -869,6 +871,13 @@ class GlobalStatsPanel(QWidget):
                                 pass
             except Exception:
                 pass
+        self._draw_ratio()
+        self._draw_right()
+
+    def set_preloaded(self, path: Optional[Path], hists: dict) -> None:
+        """Use already-loaded histogram cache from the background worker."""
+        self._root_path = path
+        self._cached_hists = hists
         self._draw_ratio()
         self._draw_right()
 
@@ -986,15 +995,33 @@ class GlobalStatsPanel(QWidget):
 # =============================================================================
 
 class _MetricsWorker(QThread):
-    """Run compute_metrics() in a background thread to keep the UI responsive."""
+    """Run compute_metrics() and preload global hists in a background thread."""
     finished = pyqtSignal(object)   # emits the IterData when done
+
+    _GLOBAL_KEYS = ("ratio_all", "h2_energy_theta",
+                    "one_cluster_energy", "recon_sigma")
 
     def __init__(self, data: "IterData", parent=None):
         super().__init__(parent)
         self._data = data
 
     def run(self) -> None:
-        compute_metrics(self._data)
+        compute_metrics(self._data)          # fills _hist_cache + metrics
+        # also preload global histograms so the main thread has zero ROOT I/O
+        if (HAS_UPROOT
+                and self._data.root_path is not None
+                and not self._data._global_hists):
+            try:
+                with uproot.open(str(self._data.root_path)) as f:
+                    avail = {k.split(";")[0] for k in f.keys()}
+                    for key in self._GLOBAL_KEYS:
+                        if key in avail:
+                            try:
+                                self._data._global_hists[key] = f[key].to_numpy()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
         self.finished.emit(self._data)
 
 
@@ -1265,24 +1292,31 @@ class EpCalibViewerWindow(QMainWindow):
         self._cur_data = data
         self._detail.set_root_path(data.root_path)
         self._detail.set_iter_data(data)
-        self._stats.set_root_path(data.root_path)
-        if not data.metrics:
-            # stop any previous worker still running
-            if self._worker is not None and self._worker.isRunning():
-                self._worker.quit()
-                self._worker.wait()
-            self.statusBar().showMessage(
-                f"Computing metrics for run {run} iter {it} …")
-            self._worker = _MetricsWorker(data, self)
-            self._worker.finished.connect(self._on_metrics_ready)
-            self._worker.start()
-        else:
+        # if metrics + global hists are already cached, update UI immediately
+        if data.metrics and data._global_hists:
+            self._stats.set_preloaded(data.root_path, data._global_hists)
             self._refresh_map()
+            return
+        if data.metrics and not data._global_hists:
+            # metrics done but global hists not yet - rare; use blocking path
+            self._stats.set_root_path(data.root_path)
+            self._refresh_map()
+            return
+        # stop any previous worker still running
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.quit()
+            self._worker.wait()
+        self.statusBar().showMessage(
+            f"Loading run {run} iter {it} …")
+        self._worker = _MetricsWorker(data, self)
+        self._worker.finished.connect(self._on_metrics_ready)
+        self._worker.start()
 
     def _on_metrics_ready(self, data: IterData) -> None:
-        """Called from background worker when compute_metrics finishes."""
+        """Called from background worker when compute_metrics + global hist load finish."""
         self.statusBar().clearMessage()
         if data is self._cur_data:
+            self._stats.set_preloaded(data.root_path, data._global_hists)
             self._refresh_map()
         self._worker = None
 
