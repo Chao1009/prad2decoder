@@ -193,7 +193,7 @@ void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
     tree->Branch("mHit_gid", ev.mHit_gid,  "mHit_gid[match_num][2]/F");
 
     // GEM part
-    //detector coordinate system (GEM plane)
+    //detector local coordinate (GEM plane)
     tree->Branch("n_gem_hits",   &ev.n_gem_hits,   "n_gem_hits/I");
     tree->Branch("det_id",       ev.det_id,        "det_id[n_gem_hits]/b");
     tree->Branch("gem_x",        ev.gem_x,         "gem_x[n_gem_hits]/F");
