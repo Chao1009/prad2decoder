@@ -471,7 +471,7 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     
     std::string run_str = get_run_str(input_evio);
     int run_num = get_run_int(input_evio);
-    gRunConfig = LoadRunConfig(db_dir + "/calibration/2p1_general.json", run_num);
+    gRunConfig = LoadRunConfig(db_dir + "/runinfo/2p1_general.json", run_num);
 
     std::string calib_file = db_dir + "/" + gRunConfig.energy_calib_file;
     int nmatched = hycal.LoadCalibration(calib_file);
