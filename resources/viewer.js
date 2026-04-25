@@ -305,6 +305,8 @@ function loadEventData(reqId, data) {
         // LMS geo doesn't change per event — no redraw needed
     } else if(activeTab==='gem'){
         fetchGemData();
+    } else if(activeTab==='gem_apv'){
+        if(typeof fetchGemApvData==='function') fetchGemApvData(currentEvent);
     } else {
         geoDq();
     }
@@ -381,7 +383,7 @@ function switchTab(tab){
     document.querySelectorAll('.tab').forEach(t=>{
         t.classList.toggle('active', t.dataset.tab===tab);
     });
-    const fullTab=tab==='epics'||tab==='physics'||tab==='gem';
+    const fullTab=tab==='epics'||tab==='physics'||tab==='gem'||tab==='gem_apv';
     document.getElementById('geo-panel').style.display        = fullTab ? 'none' : '';
     document.getElementById('div-main').style.display         = fullTab ? 'none' : '';
     document.getElementById('geo-toolbar-dq').style.display   = tab==='dq' ? 'flex' : 'none';
@@ -393,6 +395,7 @@ function switchTab(tab){
     document.getElementById('epics-outer').style.display      = tab==='epics' ? 'flex' : 'none';
     document.getElementById('physics-outer').style.display    = tab==='physics' ? 'flex' : 'none';
     document.getElementById('gem-outer').style.display        = tab==='gem' ? 'flex' : 'none';
+    document.getElementById('gem-apv-outer').style.display    = tab==='gem_apv' ? 'flex' : 'none';
 
     // --- per-tab actions: fetch data + resize after layout settles ---
     const tabActions = {
@@ -406,6 +409,8 @@ function switchTab(tab){
         physics: { fetch(){ fetchPhysics(); } },
         gem:     { fetch(){ fetchGemData(); fetchGemAccum(); },
                    after(){ resizeGem(); } },
+        gem_apv: { fetch(){ fetchGemApvData(currentEvent); },
+                   after(){ resizeGemApv(); } },
     };
     const action = tabActions[tab] || tabActions.dq;
 
@@ -552,6 +557,9 @@ function init(){
         registerPlot('epics-plot-'+i, 'epics', null, PC_EPICS);
 
     initRegisteredPlots();
+
+    // GEM APV tab toolbar (Process / Signal Only / Shared Y / sample mask).
+    if (typeof setupGemApvControls === 'function') setupGemApvControls();
 
     setupDivider('div-lms-ht','y',
         ()=>document.getElementById('lms-plot-panel'),

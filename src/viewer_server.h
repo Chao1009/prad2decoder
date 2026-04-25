@@ -51,6 +51,7 @@ struct RingEntry {
     int seq;
     std::string json_str;       // pre-encoded event JSON
     std::string cluster_str;    // pre-encoded cluster JSON
+    std::string gem_apv_str;    // pre-encoded GEM per-APV waveform JSON
 
     // Raw event copies kept so /api/hist_config can recompute cluster_str
     // (and re-encode json_str) under a new time/threshold window without

@@ -103,6 +103,9 @@ function connectWebSocket() {
                     if(activeTab==='physics') fetchPhysics();
                     if(activeTab==='gem') fetchGemAccum();
                 }
+                // gem_apv tab is per-event; loadEventData (called by
+                // loadLatestEvent above) hooks into activeTab and refetches
+                // once currentEvent has been updated.
             } else if (msg.type === 'status') {
                 setEtStatus(msg.connected, msg.waiting, msg.retries);
             } else if (msg.type === 'hist_cleared') {

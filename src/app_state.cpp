@@ -479,12 +479,18 @@ json AppState::encodeReconClustersJson(const ReconEventData &recon, int ev_id)
     return {{"event", ev_id}, {"hits", hits_j}, {"clusters", cl_arr}};
 }
 
-void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
+void AppState::prepareGemForView(const ssp::SspEventData &ssp_evt)
 {
     if (!gem_enabled || ssp_evt.nmpds == 0) return;
     gem_sys.Clear();
     gem_sys.ProcessEvent(ssp_evt);
     gem_sys.Reconstruct(gem_clusterer);
+}
+
+void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
+{
+    if (!gem_enabled || ssp_evt.nmpds == 0) return;
+    prepareGemForView(ssp_evt);
 
     // accumulate occupancy + histograms in a single pass
     std::lock_guard<std::mutex> lk(data_mtx);
@@ -639,6 +645,108 @@ nlohmann::json AppState::apiGemHist() const
         {"nclusters", histToJson(gem_nclusters_hist, (float)gem_ncl_min, (float)gem_ncl_max, (float)gem_ncl_step)},
         {"theta",     histToJson(gem_theta_hist, gem_theta_min, gem_theta_max, gem_theta_step)}
     };
+}
+
+nlohmann::json AppState::apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) const
+{
+    json result = json::object();
+    result["enabled"] = gem_enabled;
+    result["event"]   = evnum;
+    if (!gem_enabled) {
+        result["detectors"] = json::array();
+        result["apvs"]      = json::array();
+        return result;
+    }
+
+    // Detector summary — det_id → name + APV count, used by the frontend
+    // to lay out one section per GEM with consistent ordering.
+    auto &dets = gem_sys.GetDetectors();
+    json det_arr = json::array();
+    std::vector<int> apv_counts(dets.size(), 0);
+    for (int i = 0; i < gem_sys.GetNApvs(); ++i) {
+        auto &cfg = gem_sys.GetApvConfig(i);
+        if (cfg.det_id >= 0 && cfg.det_id < (int)apv_counts.size())
+            apv_counts[cfg.det_id]++;
+    }
+    for (size_t d = 0; d < dets.size(); ++d) {
+        det_arr.push_back({
+            {"id",      dets[d].id},
+            {"name",    dets[d].name},
+            {"n_apvs",  apv_counts[d]},
+        });
+    }
+    result["detectors"] = det_arr;
+
+    // Per-APV dump.  Each APV carries:
+    //   raw[128][6]        — int16 firmware samples (0 if APV not in event)
+    //   processed[128][6]  — pedestal + CM corrected float (0 if not present)
+    //   hits[128]          — ZS survivor bool, encoded as 0/1 ints to keep JSON compact
+    //   no_hit_fr          — firmware full-readout (nstrips==128) but no survivors
+    //   present            — APV showed up in this event's SSP data
+    constexpr int N_STRIPS = 128;
+    constexpr int N_TS     = 6;
+    json apvs = json::array();
+    for (int i = 0; i < gem_sys.GetNApvs(); ++i) {
+        auto &cfg = gem_sys.GetApvConfig(i);
+        if (cfg.crate_id < 0 || cfg.mpd_id < 0 || cfg.adc_ch < 0)
+            continue;   // unmapped slot
+
+        const ssp::ApvData *raw = ssp_evt.findApv(cfg.crate_id, cfg.mpd_id, cfg.adc_ch);
+        bool present = (raw != nullptr) && raw->present;
+
+        json raw_arr = json::array();
+        json proc_arr = json::array();
+        json hit_arr = json::array();
+        bool any_hit = false;
+
+        for (int s = 0; s < N_STRIPS; ++s) {
+            json raw_row  = json::array();
+            json proc_row = json::array();
+            for (int t = 0; t < N_TS; ++t) {
+                if (present)
+                    raw_row.push_back(static_cast<int>(raw->strips[s][t]));
+                else
+                    raw_row.push_back(0);
+                // 1-decimal rounding keeps payload tight without losing
+                // anything visible at the panel's sub-pixel resolution.
+                float v = present ? gem_sys.GetProcessedAdc(i, s, t) : 0.f;
+                proc_row.push_back(std::round(v * 10.f) / 10.f);
+            }
+            raw_arr.push_back(std::move(raw_row));
+            proc_arr.push_back(std::move(proc_row));
+            bool hit = present && gem_sys.IsChannelHit(i, s);
+            if (hit) any_hit = true;
+            hit_arr.push_back(hit ? 1 : 0);
+        }
+
+        std::string det_name;
+        if (cfg.det_id >= 0 && cfg.det_id < (int)dets.size())
+            det_name = dets[cfg.det_id].name;
+        const char *plane = (cfg.plane_type == 0) ? "X"
+                          : (cfg.plane_type == 1) ? "Y" : "?";
+
+        // Firmware full-readout warning: APV reported every strip but none
+        // survived ZS.  Mirrors the gem_event_viewer.py "no hits" badge.
+        bool no_hit_fr = present && raw->nstrips >= N_STRIPS && !any_hit;
+
+        apvs.push_back({
+            {"id",         i},
+            {"det_id",     cfg.det_id},
+            {"det_name",   det_name},
+            {"plane",      plane},
+            {"det_pos",    cfg.det_pos},
+            {"crate",      cfg.crate_id},
+            {"mpd",        cfg.mpd_id},
+            {"adc",        cfg.adc_ch},
+            {"present",    present},
+            {"no_hit_fr",  no_hit_fr},
+            {"raw",        std::move(raw_arr)},
+            {"processed",  std::move(proc_arr)},
+            {"hits",       std::move(hit_arr)},
+        });
+    }
+    result["apvs"] = apvs;
+    return result;
 }
 
 //=============================================================================

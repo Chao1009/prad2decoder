@@ -418,6 +418,41 @@ void ViewerServer::onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         reply(computeClusters(evnum).dump()); return;
     }
 
+    // --- gem/apv/<n> (per-event GEM APV waveforms, mode-dependent) ---
+    // Online: served from a per-ring-entry pre-encoded string so older
+    // events don't disturb the live gem_sys state.
+    // File: decode + accumulate (which fills gem_sys), then build JSON.
+    if (uri.rfind("/api/gem/apv/", 0) == 0) {
+        int evnum = std::atoi(uri.c_str() + 13);
+#ifdef WITH_ET
+        if (mode_.load() == Mode::Online) {
+            std::lock_guard<std::mutex> lk(ring_mtx_);
+            for (auto &e : ring_) {
+                if (e.seq == evnum) {
+                    if (e.gem_apv_str.empty())
+                        reply("{\"error\":\"gem apv pending\"}");
+                    else
+                        reply(e.gem_apv_str);
+                    return;
+                }
+            }
+            reply("{\"error\":\"event not in ring buffer\"}"); return;
+        }
+#endif
+        auto event_ptr = std::make_unique<fdec::EventData>();
+        auto ssp_ptr   = std::make_unique<ssp::SspEventData>();
+        std::string err = decodeRawEvent(evnum, *event_ptr, ssp_ptr.get());
+        if (!err.empty()) { reply(json({{"error", err}}).dump()); return; }
+        accumulate(evnum, *event_ptr, ssp_ptr.get());
+        // accumulate() dedupes by event id, so on a re-request gem_sys
+        // may still hold a different event's working buffers.  Force a
+        // re-process (no histogram side effects) so apiGemApv reads the
+        // requested event regardless of cache state.
+        activeApp().prepareGemForView(*ssp_ptr);
+        reply(activeApp().apiGemApv(*ssp_ptr, evnum).dump());
+        return;
+    }
+
     // --- ring buffer ---
     if (uri == "/api/ring") {
 #ifdef WITH_ET

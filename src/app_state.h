@@ -265,7 +265,14 @@ struct AppState {
 
     // ---- Per-event processing ----------------------------------------------
 
+    // Run the GEM clear + ProcessEvent + Reconstruct pipeline without
+    // touching accumulators.  Used by the on-demand APV endpoint so a
+    // re-request for an event already accumulated still leaves gem_sys
+    // populated with that event's per-APV working buffers.
+    void prepareGemForView(const ssp::SspEventData &ssp_evt);
+
     // Process GEM SSP data for one event. Call after DecodeEvent with ssp_evt.
+    // Calls prepareGemForView, then accumulates occupancy + histograms.
     void processGemEvent(const ssp::SspEventData &ssp_evt);
 
     // Process one fully-decoded event: histograms + clustering + LMS.
@@ -327,6 +334,12 @@ struct AppState {
     nlohmann::json apiGemConfig() const;
     nlohmann::json apiGemOccupancy() const;
     nlohmann::json apiGemHist() const;
+    // Per-event APV waveform dump (for the GEM APV monitor tab).
+    // Caller must have just populated gem_sys with this event (e.g. via
+    // processGemEvent or accumulate); this method only reads.  Raw ADC
+    // samples come from ssp_evt; processed values + ZS hit mask come
+    // from gem_sys's per-APV working buffer.
+    nlohmann::json apiGemApv(const ssp::SspEventData &ssp_evt, int evnum) const;
 
     // ---- Filters ---------------------------------------------------------------
     std::string loadFilter(const nlohmann::json &j);

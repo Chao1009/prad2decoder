@@ -268,6 +268,14 @@ void ViewerServer::etReaderThread()
                             event, seq, ana, wres, true).dump();
                         std::string cljson = app_online_.computeClustersJson(
                             event, seq, ana, wres).dump();
+                        // GEM per-APV waveforms — encoded here so the API
+                        // for older ring events doesn't need to re-process
+                        // gem_sys (which would clobber the live state used
+                        // by /api/gem/hits etc.).  gem_sys was just filled
+                        // by processGemEvent above for this event.
+                        std::string gemapvjson = app_online_.gem_enabled
+                            ? app_online_.apiGemApv(ssp_evt, seq).dump()
+                            : std::string("{\"enabled\":false}");
 
                         // Snapshot raw event data so /api/hist_config can
                         // recompute clusters under a new window without
@@ -279,6 +287,7 @@ void ViewerServer::etReaderThread()
                             std::lock_guard<std::mutex> lk(ring_mtx_);
                             ring_.push_back({seq, std::move(evjson),
                                              std::move(cljson),
+                                             std::move(gemapvjson),
                                              std::move(ev_copy),
                                              std::move(ssp_copy)});
                             while ((int)ring_.size() > ring_size_)

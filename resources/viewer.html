@@ -191,6 +191,7 @@
     <button class="tab" data-tab="lms">Gain Monitoring<span class="tab-dot" id="lms-dot"></span></button>
     <button class="tab" data-tab="cluster">Clustering</button>
     <button class="tab" data-tab="gem">GEM</button>
+    <button class="tab" data-tab="gem_apv">GEM APV</button>
     <button class="tab" data-tab="epics">EPICS<span class="tab-dot" id="epics-dot"></span></button>
     <button class="tab" data-tab="physics">Physics</button>
     <div id="trigger-filter-bar" class="trig-filter-inline" style="display:none">
@@ -461,6 +462,24 @@
         </div>
     </div>
 
+    <!-- GEM APV waveform panel -->
+    <div class="gem-apv-outer" id="gem-apv-outer" style="display:none">
+        <div class="gem-apv-toolbar">
+            <label><input type="checkbox" id="gem-apv-process" checked> Process</label>
+            <label><input type="checkbox" id="gem-apv-signal-only"> Signal Only</label>
+            <label><input type="checkbox" id="gem-apv-shared-y" checked> Shared Y</label>
+            <span style="margin-left:10px;color:var(--dim);font-size:11px">Samples:</span>
+            <label><input type="checkbox" id="gem-apv-t0" checked> t0</label>
+            <label><input type="checkbox" id="gem-apv-t1" checked> t1</label>
+            <label><input type="checkbox" id="gem-apv-t2" checked> t2</label>
+            <label><input type="checkbox" id="gem-apv-t3" checked> t3</label>
+            <label><input type="checkbox" id="gem-apv-t4" checked> t4</label>
+            <label><input type="checkbox" id="gem-apv-t5" checked> t5</label>
+            <span id="gem-apv-stats" style="margin-left:auto;color:var(--dim);font-size:11px"></span>
+        </div>
+        <div class="gem-apv-body" id="gem-apv-body"></div>
+    </div>
+
     <!-- Physics panel -->
     <div class="physics-outer" id="physics-outer" style="display:none">
         <div class="physics-toolbar">
@@ -507,6 +526,7 @@ function refShapes(key){ return linesToShapes(refLines[key]); }
 <script src="epics.js"></script>
 <script src="physics.js"></script>
 <script src="gem.js"></script>
+<script src="gem_apv.js"></script>
 <script src="geo.js"></script>
 <script src="waveform.js"></script>
 <script src="cluster.js"></script>
