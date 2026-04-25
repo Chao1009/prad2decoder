@@ -451,10 +451,14 @@ class HyCalGainMapWidget(HyCalMapWidget):
 
 def _chart_y_range(values: List[float], errors: List[float]) -> Tuple[float, float]:
     """Return y-axis (lo, hi): mean±20%, expanded if any data point falls outside."""
-    mean = sum(values) / len(values)
+    finite = [(j, v) for j, v in enumerate(values) if math.isfinite(v)]
+    if not finite:
+        return 0.9, 1.1
+    finite_vals = [v for _, v in finite]
+    mean = sum(finite_vals) / len(finite_vals)
     y_lo = mean * 0.8
     y_hi = mean * 1.2
-    for j, v in enumerate(values):
+    for j, v in finite:
         err = errors[j] if j < len(errors) else 0.0
         y_lo = min(y_lo, v - err)
         y_hi = max(y_hi, v + err)
@@ -567,6 +571,8 @@ class LMSLineChartWidget(QWidget):
     @staticmethod
     def _nice_ticks(lo: float, hi: float, max_ticks: int = 6):
         """Compute nice tick values for an axis range."""
+        if not math.isfinite(lo) or not math.isfinite(hi):
+            return []
         if hi <= lo:
             return [lo]
         raw = (hi - lo) / max(max_ticks - 1, 1)
@@ -629,17 +635,25 @@ class LMSLineChartWidget(QWidget):
         if self._y_range is not None:
             y_lo, y_hi = self._y_range
         else:
-            y_vals = []
+            y_vals = [r for r in ratios if math.isfinite(r)]
             for i, r in enumerate(ratios):
-                y_vals.append(r)
-                if i < len(errors):
+                if not math.isfinite(r):
+                    continue
+                if i < len(errors) and math.isfinite(errors[i]):
                     y_vals.append(r + errors[i])
                     y_vals.append(r - errors[i])
-            y_lo = min(y_vals)
-            y_hi = max(y_vals)
+            y_lo = min(y_vals) if y_vals else 0.9
+            y_hi = max(y_vals) if y_vals else 1.1
             margin = (y_hi - y_lo) * 0.1 if y_hi > y_lo else 0.05
             y_lo -= margin
             y_hi += margin
+        if not math.isfinite(y_lo) or not math.isfinite(y_hi):
+            p.setPen(QColor(THEME.TEXT_MUTED))
+            p.setFont(QFont("Consolas", 10))
+            p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter,
+                       "No valid fit data")
+            p.end()
+            return
 
         if y_hi == y_lo:
             y_lo -= 0.05
@@ -1252,7 +1266,7 @@ class IrregularTableWidget(QWidget):
 # ===========================================================================
 
 _SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "run_gain_monitor.sh")
+                             "shell", "run_gain_monitor.sh")
 
 
 class AnalyzeDialog(QDialog):
@@ -1421,8 +1435,8 @@ class AnalyzeDialog(QDialog):
 # ===========================================================================
 
 _LOCAL_DATA_BASE  = "/data/evio/data"
-_REMOTE_HOST      = "clondaq6"
-_REMOTE_DATA_BASE = "/data/stage6"
+_REMOTE_HOST      = "clondaq2"
+_REMOTE_DATA_BASE = "/data/stage2"
 
 
 def _fmt_bytes(b: int) -> str:
@@ -3015,12 +3029,12 @@ class GainMonitorWindow(QMainWindow):
 
             if self._auto_range:
                 if values:
-                    sorted_v = sorted(values.values())
+                    sorted_v = sorted(v for v in values.values() if math.isfinite(v))
                     n = len(sorted_v)
                     lo_idx = max(0, int(n * 0.02))
                     hi_idx = min(n - 1, int(n * 0.98))
-                    vmin = sorted_v[lo_idx]
-                    vmax = sorted_v[hi_idx]
+                    vmin = sorted_v[lo_idx] if sorted_v else 0.9
+                    vmax = sorted_v[hi_idx] if sorted_v else 1.1
                     if vmin == vmax:
                         vmin -= 0.01
                         vmax += 0.01

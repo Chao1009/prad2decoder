@@ -93,8 +93,10 @@ int main(int argc, char *argv[])
     for (unsigned int i = 6; i < hists.size(); i++){
         float factor[3] = {0., 0., 0.};
         for (int j = 0; j<3; j++){
-            if (results[j].mean > 1. && results[j].mean > 1.) 
-            factor[j] = results[i].mean * results[j].mean / results[j+3].mean;
+            if (results[j].mean > 1. && results[j+3].mean > 1.)
+                factor[j] = results[i].mean * results[j].mean / results[j+3].mean;
+            if (!std::isfinite(factor[j]))
+                factor[j] = 0.f;
         }
         outDatFile<<std::setw(9)<<name[i]
                   <<std::setw(15)<<results[i].mean<<std::setw(15)<<results[i].sigma<<std::setw(15)<<results[i].chi2pndf
@@ -211,8 +213,14 @@ FitResult FitHistogramWithGaussian(TH1F* h, const float & fac)
         return result;
     }
 
-    result.mean  = static_cast<float>(gausFit->GetParameter(1));
-    result.sigma = static_cast<float>(gausFit->GetParameter(2));
+    const float mean  = static_cast<float>(gausFit->GetParameter(1));
+    const float sigma = static_cast<float>(gausFit->GetParameter(2));
+    if (!std::isfinite(mean) || !std::isfinite(sigma) || sigma <= 0.f) {
+        delete gausFit;
+        return result;
+    }
+    result.mean  = mean;
+    result.sigma = sigma;
 
     const double ndf = gausFit->GetNDF();
     if (ndf > 0) {
