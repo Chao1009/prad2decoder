@@ -115,9 +115,9 @@ struct ReconEventData {
     uint32_t cl_flag[kMaxClusters]    = {};
     // Matching results
     uint32_t matchFlag[kMaxClusters] = {};
-    float    matchGEMx[kMaxClusters][2] = {};
-    float    matchGEMy[kMaxClusters][2] = {};
-    float    matchGEMz[kMaxClusters][2] = {};
+    float    matchGEMx[kMaxClusters][4] = {};
+    float    matchGEMy[kMaxClusters][4] = {};
+    float    matchGEMz[kMaxClusters][4] = {};
     int      matchNum = 0; // number of clusters with matches (for quick access, can be derived from matchFlag)
     //for quick simple access to each matched hit on HC and GEM planes
     // HC_Energy, HC_x/y/z, GEM_x/y/z (in mm, beam center and target center coordinate)

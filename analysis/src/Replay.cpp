@@ -93,6 +93,7 @@ void Replay::clearReconEvent(EventVars_Recon &ev)
     ev.n_clusters = 0;
     ev.n_gem_hits = 0;
     ev.matchNum = 0;
+    std::fill(std::begin(ev.matchFlag), std::end(ev.matchFlag), 0);
     ev.veto_nch = 0;
     ev.lms_nch = 0;
     ev.ssp_raw.clear();
@@ -175,11 +176,11 @@ void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
     tree->Branch("cl_flag",      ev.cl_flag,       "cl_flag[n_clusters]/i");
     // Matching results
     tree->Branch("matchFlag", ev.matchFlag,  "matchFlag[n_clusters]/i");
-    tree->Branch("matchGEMx", ev.matchGEMx,  "matchGEMx[n_clusters][2]/F");
-    tree->Branch("matchGEMy", ev.matchGEMy,  "matchGEMy[n_clusters][2]/F");
-    tree->Branch("matchGEMz", ev.matchGEMz,  "matchGEMz[n_clusters][2]/F");
-    tree->Branch("match_num", &ev.matchNum,  "match_num/I");
+    tree->Branch("matchGEMx", ev.matchGEMx,  "matchGEMx[n_clusters][4]/F");
+    tree->Branch("matchGEMy", ev.matchGEMy,  "matchGEMy[n_clusters][4]/F");
+    tree->Branch("matchGEMz", ev.matchGEMz,  "matchGEMz[n_clusters][4]/F");
     //quick and simple matching results for quick check
+    tree->Branch("match_num", &ev.matchNum,  "match_num/I");
     tree->Branch("mHit_E", ev.mHit_E,  "mHit_E[match_num]/F");
     tree->Branch("mHit_x", ev.mHit_x,  "mHit_x[match_num]/F");
     tree->Branch("mHit_y", ev.mHit_y,  "mHit_y[match_num]/F");
@@ -726,29 +727,24 @@ if(!prad1){
             matching.SetMatchRange(gRunConfig.matching_radius); // matching radius in mm, 15mm default
             matching.SetSquareSelection(gRunConfig.matching_use_square); // square/circular cut
             std::vector<MatchHit> matched_hits = matching.Match(hc_hits, gem_hits[0], gem_hits[1], gem_hits[2], gem_hits[3]);
-
-            //save the transformed hycal cluster positions in matchHC_x/y/z (no matter is matched or not)
-            // and the matched GEM hit positions in cl_matchGEMx/y/z (only for matched clusters, otherwise set to -999)
-            for (int i = 0; i < ev->n_clusters; ++i) {
-                for(int j = 0; j < 2; j++) {
-                    ev->matchGEMx[i][j] = -999.f;
-                    ev->matchGEMy[i][j] = -999.f;
-                    ev->matchGEMz[i][j] = -999.f;
+            std::vector<MatchHit_perChamber> matched_hits_chamber = matching.MatchPerChamber(hc_hits, gem_hits[0], gem_hits[1], gem_hits[2], gem_hits[3]); 
+            
+            for(int i = 0; i < matched_hits_chamber.size(); i++){
+                auto &m = matched_hits_chamber[i];
+                int cl_idx = m.hycal_idx;
+                if( cl_idx != i) std::cerr << "Warning: cluster index mismatch in matched_hits_chamber: " << cl_idx << " vs " << i << "\n";
+                for(int j = 0; j < 4; j++){
+                    ev->matchGEMx[i][j] = m.gem_hits[j][0];
+                    ev->matchGEMy[i][j] = m.gem_hits[j][1];
+                    ev->matchGEMz[i][j] = m.gem_hits[j][2];
                 }
-                //reset matchFlag for all clusters
-                ev->matchFlag[i] = 0; // default no match
+                ev->matchFlag[i] = 0;
+                ev->matchFlag[i] = m.mflag;
             }
+
             ev->matchNum = std::min((int)matched_hits.size(), prad2::kMaxClusters);
             for (int i = 0; i < ev->matchNum; i++){
-                //set matchFlag for hycal clusters
-                int cl_idx = matched_hits[i].hycal_idx;
-                ev->matchFlag[cl_idx] = matched_hits[i].mflag;
-                for(int j = 0; j < 2; j++) {
-                    ev->matchGEMx[cl_idx][j] = matched_hits[i].gem[j].x;
-                    ev->matchGEMy[cl_idx][j] = matched_hits[i].gem[j].y;
-                    ev->matchGEMz[cl_idx][j] = matched_hits[i].gem[j].z;
-                }
-                // also save the matched GEM hit info in mHit_ arrays for quick check
+                // save the matched GEM hit (must 2 matchings) info in mHit_ arrays for quick check
                 ev->mHit_E[i] = matched_hits[i].hycal_hit.energy;
                 ev->mHit_x[i] = matched_hits[i].hycal_hit.x;
                 ev->mHit_y[i] = matched_hits[i].hycal_hit.y;

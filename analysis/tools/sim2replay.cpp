@@ -64,9 +64,9 @@ void setupReconBranches(TTree *tree, EventVars_Recon &ev)
     // Matching results
     // the x,y,z positions in this part are in the target and beam center coordinate system
     tree->Branch("matchFlag", ev.matchFlag,  "matchFlag[n_clusters]/i");
-    tree->Branch("matchGEMx", ev.matchGEMx,  "matchGEMx[n_clusters][2]/F");
-    tree->Branch("matchGEMy", ev.matchGEMy,  "matchGEMy[n_clusters][2]/F");
-    tree->Branch("matchGEMz", ev.matchGEMz,  "matchGEMz[n_clusters][2]/F");
+    tree->Branch("matchGEMx", ev.matchGEMx,  "matchGEMx[n_clusters][4]/F");
+    tree->Branch("matchGEMy", ev.matchGEMy,  "matchGEMy[n_clusters][4]/F");
+    tree->Branch("matchGEMz", ev.matchGEMz,  "matchGEMz[n_clusters][4]/F");
     tree->Branch("match_num", &ev.matchNum,  "match_num/I");
     // quick access matching arrays (indexed by match_num)
     tree->Branch("mHit_E",   ev.mHit_E,   "mHit_E[match_num]/F");
