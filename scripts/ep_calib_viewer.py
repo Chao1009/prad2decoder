@@ -100,6 +100,7 @@ class IterData:
         self.factors:        Dict[str, dict]          = {}   # raw JSON entries
         self.expected_peaks: Dict[str, float]         = {}   # from .dat ExpectedPeak
         self.old_factors:    Dict[str, float]         = {}   # from .dat oldFactor
+        self.modified_modules: set = set()            # modules manually edited this session
         self._global_hists:  dict = {}   # preloaded by worker: ratio_all etc.
 
     @property
@@ -296,6 +297,11 @@ class CalibMapWidget(HyCalMapWidget):
     def __init__(self, parent=None):
         super().__init__(parent, enable_zoom_pan=True, min_size=(460, 460))
         self._label = ""
+        self._marked_modules: set = set()  # modules to draw red-cross on
+
+    def set_marked_modules(self, names: set) -> None:
+        self._marked_modules = set(names)
+        self.update()
 
     def set_map_label(self, label: str):
         self._label = label
@@ -306,7 +312,30 @@ class CalibMapWidget(HyCalMapWidget):
     def _tooltip_text(self, name: str) -> str:
         v = self._values.get(name)
         base = name if v is None else f"{name}: {self._fmt_value(v)}"
+        if name in self._marked_modules:
+            base += "  [☓ manually set]"
         return base
+
+    def _paint_overlays(self, p, w, h):
+        super()._paint_overlays(p, w, h)
+        if not self._marked_modules:
+            return
+        from PyQt6.QtGui import QPen, QColor
+        from PyQt6.QtCore import Qt
+        pen = QPen(QColor("#ff3b30"), 1.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for name in self._marked_modules:
+            rect = self._rects.get(name)
+            if rect is None:
+                continue
+            # shrink the X slightly inside the rect
+            m = max(rect.width(), rect.height()) * 0.18
+            x0, y0 = rect.x() + m, rect.y() + m
+            x1, y1 = rect.right() - m, rect.bottom() - m
+            p.drawLine(int(x0), int(y0), int(x1), int(y1))
+            p.drawLine(int(x1), int(y0), int(x0), int(y1))
 
 
 # =============================================================================
@@ -457,6 +486,15 @@ class ModuleDetailPanel(QWidget):
         self._sf_apply_btn.setToolTip("Apply the custom factor value and save JSON")
         self._sf_apply_btn.clicked.connect(self._do_set_factor_custom)
         sf_lay.addWidget(self._sf_apply_btn)
+        sf_lay.addSpacing(16)
+        self._restore_btn = QPushButton("↩ Restore Old Factor")
+        self._restore_btn.setToolTip("Write old_factor (from .dat) back to JSON and clear the mark")
+        self._restore_btn.clicked.connect(self._do_restore_old_factor)
+        sf_lay.addWidget(self._restore_btn)
+        self._clear_mark_btn = QPushButton("✕ Clear Mark")
+        self._clear_mark_btn.setToolTip("Remove the red-cross mark from this module (does not change factor)")
+        self._clear_mark_btn.clicked.connect(self._do_clear_mark)
+        sf_lay.addWidget(self._clear_mark_btn)
         sf_lay.addStretch()
         lay.addWidget(sf_box)
 
@@ -607,6 +645,7 @@ class ModuleDetailPanel(QWidget):
         else:
             note = "  (JSON path not found — not saved)"
 
+        self._iter_data.modified_modules.add(name)
         self._mm = mm
         self._info_lbl.setText(
             f"Factor: {mm.factor:.5f}  (was {old_factor:.5f})   "
@@ -630,6 +669,61 @@ class ModuleDetailPanel(QWidget):
             self._refit_status.setText("Factor must be positive")
             return
         self._do_set_factor(value)
+
+    def _do_restore_old_factor(self) -> None:
+        """Restore old_factor from .dat to JSON and remove the mark."""
+        name = self._cur_module_name
+        if not name or self._iter_data is None:
+            self._refit_status.setText("No module selected")
+            return
+        mm = self._iter_data.metrics.get(name)
+        if mm is None:
+            self._refit_status.setText(f"Module {name!r} not in metrics")
+            return
+        if mm.old_factor <= 0.0:
+            self._refit_status.setText("old_factor not available (.dat not loaded)")
+            return
+
+        old_cur = mm.factor
+        mm.factor = mm.old_factor
+
+        entry = self._iter_data.factors.get(name)
+        if entry is not None:
+            entry["factor"] = mm.old_factor
+
+        jpath = self._iter_data.json_path
+        if jpath is not None:
+            try:
+                entries = list(self._iter_data.factors.values())
+                with open(jpath, "w") as fj:
+                    json.dump(entries, fj, indent=2)
+                note = f"  →  saved {jpath.name}"
+            except Exception as exc:
+                self._refit_status.setText(f"Save failed: {exc}")
+                return
+        else:
+            note = "  (JSON path not found — not saved)"
+
+        self._iter_data.modified_modules.discard(name)
+        self._mm = mm
+        self._info_lbl.setText(
+            f"Factor: {mm.factor:.5f}  (restored from {old_cur:.5f})   "
+            f"Base energy: {mm.base_energy:.1f} MeV\n"
+            f"Events: {mm.stats:.0f}   "
+            f"Peak: {mm.peak:.1f} MeV   σ: {mm.sigma:.1f} MeV   "
+            f"χ²/ndf: {mm.chi2:.3f}"
+        )
+        self._refit_status.setText(f"Restored old_factor={mm.old_factor:.5f}{note}")
+        self.refitApplied.emit(name)
+
+    def _do_clear_mark(self) -> None:
+        """Remove red-cross mark without changing factor."""
+        name = self._cur_module_name
+        if not name or self._iter_data is None:
+            return
+        self._iter_data.modified_modules.discard(name)
+        self._refit_status.setText(f"Mark cleared for {name}")
+        self.refitApplied.emit(name)
 
     def _do_use_mean(self) -> None:
         """Use histogram weighted mean as peak value; chi2/ndf is fixed at 1.0."""
@@ -931,6 +1025,8 @@ class ModuleDetailPanel(QWidget):
         self._refit_status.setText(
             first_line + f"\nApplied.{save_note}{dat_note}")
         self._apply_btn.setEnabled(False)
+        if self._iter_data is not None:
+            self._iter_data.modified_modules.add(name)
         self.refitApplied.emit(name)
 
 
@@ -1403,11 +1499,13 @@ class EpCalibViewerWindow(QMainWindow):
         if data.metrics and data._global_hists:
             self._stats.set_preloaded(data.root_path, data._global_hists)
             self._refresh_map()
+            self._map.set_marked_modules(data.modified_modules)
             return
         if data.metrics and not data._global_hists:
             # metrics done but global hists not yet - rare; use blocking path
             self._stats.set_root_path(data.root_path)
             self._refresh_map()
+            self._map.set_marked_modules(data.modified_modules)
             return
         # Disconnect previous worker (if still running) without blocking the UI.
         # Keep a reference in _abandoned_workers so the QThread object stays alive
@@ -1432,6 +1530,7 @@ class EpCalibViewerWindow(QMainWindow):
         if data is self._cur_data:
             self._stats.set_preloaded(data.root_path, data._global_hists)
             self._refresh_map()
+            self._map.set_marked_modules(data.modified_modules)
         self._worker = None
 
     # ── map mode ──────────────────────────────────────────────────────────────
@@ -1524,8 +1623,10 @@ class EpCalibViewerWindow(QMainWindow):
             self._hover_lbl.setText(name)
 
     def _on_refit_applied(self, _name: str) -> None:
-        """Called after a manual refit is saved; refresh map colors."""
+        """Called after a manual refit is saved; refresh map colors and marks."""
         self._refresh_map()
+        if self._cur_data is not None:
+            self._map.set_marked_modules(self._cur_data.modified_modules)
 
 
 # =============================================================================
