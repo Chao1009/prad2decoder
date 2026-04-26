@@ -91,8 +91,8 @@
 
 #include "PhysicsTools.h"
 #include "ConfigSetup.h"      // TransformDetData, RotateDetData, gRunConfig
-
-#include <nlohmann/json.hpp>
+#include "script_helpers.h"   // resolve_db_path, extract_run_number_from_path,
+                              // discover_runinfo_path, build_*_crate_remap
 
 #include <TError.h>          // Printf() — line-flushed message output
 #include <TFile.h>
@@ -105,79 +105,15 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
-#include <regex>
 #include <string>
 #include <vector>
 
 using namespace evc;
 
 namespace {
-
-// ----- path helpers ---------------------------------------------------------
-
-static std::string resolve_db_path(const std::string &p)
-{
-    if (p.empty()) return p;
-    if (p[0] == '/' || p[0] == '\\') return p;
-    if (p.size() >= 2 && p[1] == ':') return p;       // Windows drive letter
-    const char *db = std::getenv("PRAD2_DATABASE_DIR");
-    if (!db) return p;
-    return std::string(db) + "/" + p;
-}
-
-// Sniff the run number out of an EVIO file path: the project-wide naming
-// convention is `prad_NNNNNN.evio.NNNNN` (also "run_NNNN" for legacy /
-// cosmic captures).  Returns -1 if no plausible match is found, in which
-// case LoadRunConfig falls back to the largest known runinfo entry.
-static int extract_run_number_from_path(const std::string &path)
-{
-    static const std::regex pat(R"((?:prad|run)_0*(\d+))",
-                                std::regex_constants::icase);
-    std::smatch m;
-    if (std::regex_search(path, m, pat)) {
-        try { return std::stoi(m[1].str()); } catch (...) {}
-    }
-    return -1;
-}
-
-// Reads database/config.json and returns the resolved runinfo path.
-static std::string discover_runinfo_path()
-{
-    const char *db = std::getenv("PRAD2_DATABASE_DIR");
-    std::string db_dir = db ? db : "database";
-    std::ifstream f(db_dir + "/config.json");
-    if (!f) return {};
-    auto j = nlohmann::json::parse(f, nullptr, false, true);
-    if (j.is_discarded() || !j.contains("runinfo") || !j["runinfo"].is_string())
-        return {};
-    return resolve_db_path(j["runinfo"].get<std::string>());
-}
-
-// Build the EVIO bank-tag → logical-crate remap from daq_config.roc_tags.
-// Same logic as src/app_state_init.cpp so the analysis tree matches the
-// live monitor's reconstruction.  GEM-only variant for LoadPedestals.
-static std::map<int, int> build_gem_crate_remap(const DaqConfig &cfg)
-{
-    std::map<int, int> remap;
-    for (const auto &re : cfg.roc_tags)
-        if (re.type == "gem") remap[(int)re.tag] = re.crate;
-    return remap;
-}
-
-// Same shape but covers every ROC type — used to translate roc.tag (EVIO
-// bank tag) to the logical crate index that HyCalSystem::module_by_daq()
-// expects.  Mirrors the explicit roc_to_crate map in analysis/Replay.cpp.
-static std::map<int, int> build_full_crate_remap(const DaqConfig &cfg)
-{
-    std::map<int, int> remap;
-    for (const auto &re : cfg.roc_tags)
-        remap[(int)re.tag] = re.crate;
-    return remap;
-}
 
 // Find the StripCluster in `clusters` whose (position, total_charge) match a
 // 2D GEMHit's x or y component.  Returns nullptr if none — should be rare,

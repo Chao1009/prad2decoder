@@ -60,8 +60,9 @@
 #include "PhysicsTools.h"
 #include "ConfigSetup.h"      // TransformDetData, RotateDetData, gRunConfig
 #include "MatchingTools.h"    // GetProjection
-
-#include <nlohmann/json.hpp>
+#include "script_helpers.h"   // resolve_db_path, extract_run_number_from_path,
+                              // discover_runinfo_path, build_*_crate_remap,
+                              // strip_extension
 
 #include <TCanvas.h>
 #include <TError.h>
@@ -76,81 +77,13 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
-#include <regex>
 #include <string>
 #include <vector>
 
 using namespace evc;
-
-namespace {
-
-// ----- path / config helpers ------------------------------------------------
-
-static std::string resolve_db_path(const std::string &p)
-{
-    if (p.empty()) return p;
-    if (p[0] == '/' || p[0] == '\\') return p;
-    if (p.size() >= 2 && p[1] == ':') return p;
-    const char *db = std::getenv("PRAD2_DATABASE_DIR");
-    if (!db) return p;
-    return std::string(db) + "/" + p;
-}
-
-static int extract_run_number_from_path(const std::string &path)
-{
-    static const std::regex pat(R"((?:prad|run)_0*(\d+))",
-                                std::regex_constants::icase);
-    std::smatch m;
-    if (std::regex_search(path, m, pat)) {
-        try { return std::stoi(m[1].str()); } catch (...) {}
-    }
-    return -1;
-}
-
-static std::string discover_runinfo_path()
-{
-    const char *db = std::getenv("PRAD2_DATABASE_DIR");
-    std::string db_dir = db ? db : "database";
-    std::ifstream f(db_dir + "/config.json");
-    if (!f) return {};
-    auto j = nlohmann::json::parse(f, nullptr, false, true);
-    if (j.is_discarded() || !j.contains("runinfo") || !j["runinfo"].is_string())
-        return {};
-    return resolve_db_path(j["runinfo"].get<std::string>());
-}
-
-static std::map<int, int> build_full_crate_remap(const DaqConfig &cfg)
-{
-    std::map<int, int> remap;
-    for (const auto &re : cfg.roc_tags)
-        remap[(int)re.tag] = re.crate;
-    return remap;
-}
-
-static std::map<int, int> build_gem_crate_remap(const DaqConfig &cfg)
-{
-    std::map<int, int> remap;
-    for (const auto &re : cfg.roc_tags)
-        if (re.type == "gem") remap[(int)re.tag] = re.crate;
-    return remap;
-}
-
-// Strip the directory + extension off a path so we can derive a sibling
-// .root output from the user-supplied PDF/PNG/etc.
-static std::string strip_extension(const std::string &p)
-{
-    auto dot = p.find_last_of('.');
-    auto slash = p.find_last_of("/\\");
-    if (dot == std::string::npos) return p;
-    if (slash != std::string::npos && dot < slash) return p;
-    return p.substr(0, dot);
-}
-
-} // anonymous namespace
 
 //=============================================================================
 // Forward declaration of the full 10-arg version + convenience overloads
