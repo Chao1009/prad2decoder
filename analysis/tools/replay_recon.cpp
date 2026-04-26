@@ -1,9 +1,10 @@
 //=============================================================================
 // replay_recon — convert multiple EVIO files to reconstructed ROOT trees (multi-threaded)
 //
-// Usage: replay_recon <evio_dir> -o output_dir [-f max_files] [-n max_events] [-p] [-j num_threads]
-//                                  [-D daq_config.json]
-//                                  [-g gem_pedestal.json] [-z zerosup_threshold]
+// Usage: replay_recon <evio_file_or_dir> [more files/dirs...]
+//                     -o output_dir [-f max_files] [-n max_events] [-p] [-j num_threads]
+//                     [-D daq_config.json]
+//                     [-g gem_pedestal.json] [-z zerosup_threshold]
 //   -o  output directory (REQUIRED)
 //   -f  max files to process (default: all)
 //   -n  max events per file (default: all)
@@ -39,16 +40,19 @@
 
 using namespace analysis;
 
-static std::vector<std::string> getFilesInDir(const std::string &dir_path)
+static std::vector<std::string> collectEvioFiles(const std::string &path)
 {
     std::vector<std::string> files;
-    for (auto &entry : std::filesystem::directory_iterator(dir_path)) {
-        if (entry.is_regular_file()) {
-            if (entry.path().filename().string().find(".evio") != std::string::npos)
+    if (std::filesystem::is_directory(path)) {
+        for (auto &entry : std::filesystem::directory_iterator(path)) {
+            if (entry.is_regular_file() &&
+                entry.path().filename().string().find(".evio") != std::string::npos)
                 files.push_back(entry.path().string());
         }
+        std::sort(files.begin(), files.end());
+    } else {
+        files.push_back(path);
     }
-    std::sort(files.begin(), files.end());
     return files;
 }
 
@@ -72,7 +76,7 @@ int main(int argc, char *argv[])
     TClass::GetClass("TFile");
     TClass::GetClass("TBranch");
 
-    std::string input, daq_config, gem_ped_file, output_dir;
+    std::string daq_config, gem_ped_file, output_dir;
     float zerosup_override = 0.f;
     int max_files = -1;
     int num_threads = 4;
@@ -96,11 +100,18 @@ int main(int argc, char *argv[])
             case 'p': prad1 = true; break;
         }
     }
-    if (optind < argc) input = argv[optind];
 
-    if (input.empty() || output_dir.empty()) {
-        std::cerr << "Usage: replay_recon <evio_dir> -o output_dir [-f max_files] [-j threads]"
-                  << " [-D daq_config.json] [-g gem_ped.json] [-z threshold] [-p]\n";
+    // collect input files (can be files, directories, or mixed)
+    std::vector<std::string> evio_files;
+    for (int i = optind; i < argc; ++i) {
+        auto f = collectEvioFiles(argv[i]);
+        evio_files.insert(evio_files.end(), f.begin(), f.end());
+    }
+
+    if (evio_files.empty() || output_dir.empty()) {
+        std::cerr << "Usage: replay_recon <evio_file_or_dir> [more files/dirs...] -o output_dir\n"
+                  << "       [-f max_files] [-j threads] [-D daq_config.json]\n"
+                  << "       [-g gem_ped.json] [-z threshold] [-p]\n";
         std::cerr << "  -o  output directory (REQUIRED)\n";
         std::cerr << "  -f  max files to process (default: all)\n";
         std::cerr << "  -j  number of threads (default: 4)\n";
@@ -108,12 +119,6 @@ int main(int argc, char *argv[])
         std::cerr << "  -g  GEM pedestal JSON\n";
         std::cerr << "  -z  zero-suppression threshold override\n";
         std::cerr << "  -p  PRad1 mode (no GEM)\n";
-        return 1;
-    }
-
-    std::vector<std::string> evio_files = getFilesInDir(input);
-    if (evio_files.empty()) {
-        std::cerr << "No EVIO files found in: " << input << "\n";
         return 1;
     }
     int num_files = static_cast<int>(evio_files.size());
