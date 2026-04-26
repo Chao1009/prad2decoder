@@ -572,7 +572,9 @@ class ModuleDetailPanel(QWidget):
 
         old_peak   = self._mm.peak   if (self._mm and self._mm.peak > 0.0) else 0.0
         old_factor = self._mm.factor if self._mm else 1.0
-        new_factor = old_factor * mu0 / old_peak if old_peak > 0.0 else 0.0
+        ref_peak   = old_peak if old_peak > 0.0 else (
+            self._mm.base_energy if (self._mm and self._mm.base_energy > 0.0) else 0.0)
+        new_factor = old_factor * mu0 / ref_peak if ref_peak > 0.0 else 0.0
 
         self._refit_peak       = mu0
         self._refit_sigma      = sig0
@@ -654,8 +656,10 @@ class ModuleDetailPanel(QWidget):
 
             old_peak   = self._mm.peak   if (self._mm and self._mm.peak > 0.0) else 0.0
             old_factor = self._mm.factor if self._mm else 1.0
+            ref_peak   = old_peak if old_peak > 0.0 else (
+                self._mm.base_energy if (self._mm and self._mm.base_energy > 0.0) else 0.0)
             self._refit_new_factor = (
-                old_factor * mu_f / old_peak if old_peak > 0.0 else 0.0
+                old_factor * mu_f / ref_peak if ref_peak > 0.0 else 0.0
             )
 
             msg = (
