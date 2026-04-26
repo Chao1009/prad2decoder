@@ -107,8 +107,8 @@ void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
     tree->Branch("timestamp",    &ev.timestamp,    "timestamp/L");
     tree->Branch("hycal.nch",       &ev.nch,       "hycal.nch/I");
     tree->Branch("hycal.module_id", ev.module_id,  "hycal.module_id[hycal.nch]/s");
-    tree->Branch("hycal.nsamples",  ev.nsamples,   "hycal.nsamples[hycal.nch]/I");
-    tree->Branch("hycal.samples",   ev.samples,    Form("hycal.samples[hycal.nch][%d]/s", fdec::MAX_SAMPLES));
+    //tree->Branch("hycal.nsamples",  ev.nsamples,   "hycal.nsamples[hycal.nch]/I");
+    //tree->Branch("hycal.samples",   ev.samples,    Form("hycal.samples[hycal.nch][%d]/s", fdec::MAX_SAMPLES));
     tree->Branch("hycal.ped_mean",  ev.ped_mean,   "hycal.ped_mean[hycal.nch]/F");
     tree->Branch("hycal.ped_rms",   ev.ped_rms,    "hycal.ped_rms[hycal.nch]/F");
     tree->Branch("hycal.integral",  ev.integral,   "hycal.integral[hycal.nch]/F");
@@ -121,8 +121,8 @@ void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
     //veto branches
     tree->Branch("veto.nch",       &ev.veto_nch,       "veto.nch/I");
     tree->Branch("veto.id",        ev.veto_id,        "veto.id[veto.nch]/b");
-    tree->Branch("veto.nsamples",  ev.veto_nsamples,  "veto.nsamples[veto.nch]/I");
-    tree->Branch("veto.samples",   ev.veto_samples,   Form("veto.samples[veto.nch][%d]/s", fdec::MAX_SAMPLES));
+    //tree->Branch("veto.nsamples",  ev.veto_nsamples,  "veto.nsamples[veto.nch]/I");
+    //tree->Branch("veto.samples",   ev.veto_samples,   Form("veto.samples[veto.nch][%d]/s", fdec::MAX_SAMPLES));
     tree->Branch("veto.ped_mean",  ev.veto_ped_mean,   "veto.ped_mean[veto.nch]/F");
     tree->Branch("veto.ped_rms",   ev.veto_ped_rms,    "veto.ped_rms[veto.nch]/F");
     tree->Branch("veto.integral",  ev.veto_integral,    "veto.integral[veto.nch]/F");
@@ -135,8 +135,8 @@ void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
     //LMS branches
     tree->Branch("lms.nch",       &ev.lms_nch,       "lms.nch/I");
     tree->Branch("lms.id",        ev.lms_id,        "lms.id[lms.nch]/b");
-    tree->Branch("lms.nsamples",  ev.lms_nsamples,   "lms.nsamples[lms.nch]/I");
-    tree->Branch("lms.samples",   ev.lms_samples,    Form("lms.samples[lms.nch][%d]/s", fdec::MAX_SAMPLES));
+    //tree->Branch("lms.nsamples",  ev.lms_nsamples,   "lms.nsamples[lms.nch]/I");
+    //tree->Branch("lms.samples",   ev.lms_samples,    Form("lms.samples[lms.nch][%d]/s", fdec::MAX_SAMPLES));
     tree->Branch("lms.ped_mean",  ev.lms_ped_mean,   "lms.ped_mean[lms.nch]/F");
     tree->Branch("lms.ped_rms",   ev.lms_ped_rms,    "lms.ped_rms[lms.nch]/F");
     tree->Branch("lms.integral",  ev.lms_integral,    "lms.integral[lms.nch]/F");
