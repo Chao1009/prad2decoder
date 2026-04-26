@@ -170,6 +170,38 @@ Convenience overloads (sidestep a cling default-arg-marshalling SEGV):
 Full 11-arg version (for explicit overrides — pass `""` to auto-discover any path):
 `gem_clusters_to_root(evio_path, out_path, gem_ped_file, gem_cm_file, hc_calib_file, max_events, run_num, match_nsigma, daq_config, gem_map_file, hc_map_file)`.
 
+### plot_hits_at_hycal.C
+
+Side-by-side 2D occupancy maps of **GEM hits projected to the HyCal surface** (left) and **HyCal cluster centroids on the HyCal surface** (right). Both plots share the same lab/target-centered, beam-aligned frame at z = `hycal_z`, so structure overlays directly between the two.
+
+Per event:
+- HyCal: `WaveAnalyzer` → `mod->energize` → `HyCalCluster.FormClusters / ReconstructHits`. HC hits are built with `z = 0` (no shower-depth applied) so the lab transform places them at exactly z = `hycal_z`.
+- GEM: `GemSystem.ProcessEvent` → `Reconstruct(GemCluster)` → per-detector hit list.
+- Both go through the prad2det/prad2ana transforms: `RotateDetData` (per-detector tilt) → `TransformDetData` (per-detector position offset).
+- GEM hits are then projected via `analysis::GetProjection(hits, hycal_z)` — straight line from target through each (x, y, z) intersected at z = `hycal_z`.
+- All four GEM detectors fill a single combined left histogram.
+
+Outputs the canvas in whatever format the extension implies (`.pdf`, `.png`, `.svg`, …) and a sibling `.root` file with both `TH2F`s and the canvas saved for re-plotting.
+
+```bash
+# simplest — everything auto-discovered, all events:
+.x ../analysis/scripts/plot_hits_at_hycal.C+( \
+    "/data/stage6/prad_023867/prad_023867.evio.00000", \
+    "hits_at_hycal.pdf")
+
+# subset of events:
+.x ../analysis/scripts/plot_hits_at_hycal.C+( \
+    "/data/.../prad_023867.evio.00000", "hits.png", 50000L)
+```
+
+Convenience overloads:
+- `plot_hits_at_hycal(evio, out)`
+- `plot_hits_at_hycal(evio, out, max_events)`
+- `plot_hits_at_hycal(evio, out, max_events, run_num)`
+
+Full 10-arg version (pass `""` to auto-discover any path):
+`plot_hits_at_hycal(evio_path, out_path, max_events, run_num, gem_ped_file, gem_cm_file, hc_calib_file, daq_config, gem_map_file, hc_map_file)`.
+
 ### tagger_hycal_correlation.C
 
 Two-phase study of T10R↔E49…E58 tagger pairs vs HyCal PbWO4 sums. Phase 1 caches per-event TDC tuples and fits a Gaussian to each ΔT spectrum; Phase 2 applies an N-σ timing cut per pair and fills global W-sum height/integral histograms for events with at least one matched pair plus a W channel above threshold. Outputs a 12-panel summary canvas.
