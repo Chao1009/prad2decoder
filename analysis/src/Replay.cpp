@@ -720,7 +720,7 @@ if(!prad1){
             for (int i = 0; i < ev->n_clusters; ++i)
                 hc_hits.push_back({ev->cl_x[i], ev->cl_y[i], ev->cl_z[i], ev->cl_energy[i], ev->cl_center[i], ev->cl_flag[i]});
             for (int i = 0; i < ev->n_gem_hits; ++i)
-                gem_hits[ev->det_id[i]].push_back(GEMHit{ev->gem_x[i], ev->gem_y[i], 0.f, ev->det_id[i]});
+                gem_hits[ev->det_id[i]].push_back(GEMHit{ev->gem_x[i], ev->gem_y[i], ev->gem_z[i], ev->det_id[i]});
             
             // already transform to the coordinates
 
