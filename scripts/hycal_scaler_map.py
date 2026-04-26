@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit,
+    QPushButton, QLabel,
 )
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QFont
@@ -32,6 +32,7 @@ from PyQt6.QtGui import QFont
 from hycal_geoview import (
     Module, load_modules, HyCalMapWidget, PALETTES,
     apply_theme_palette, set_theme, available_themes, THEME,
+    ColorRangeControl,
 )
 
 
@@ -119,7 +120,6 @@ class ScalerMapWindow(QMainWindow):
         self._values: Dict[str, float] = {}
         self._polling = True
         self._palette_idx = 0
-        self._auto_range_on = True
 
         self._build_ui()
 
@@ -174,23 +174,17 @@ class ScalerMapWindow(QMainWindow):
         root.addWidget(self._map, stretch=1)
 
         # -- range controls --
+        # Reusable widget from hycal_geoview: min/max edits + Auto button +
+        # Log toggle.  Starts pinned so the colormap tracks live EPICS data
+        # until the user opts out (single-click Auto, or edit a field).
         ctrl = QHBoxLayout()
-        ctrl.addWidget(self._styled_label("Range:"))
-
-        self._min_edit = self._styled_edit("0")
-        self._max_edit = self._styled_edit("1000")
-        ctrl.addWidget(self._min_edit)
-        ctrl.addWidget(self._styled_label("-"))
-        ctrl.addWidget(self._max_edit)
-        ctrl.addWidget(self._make_btn("Apply", THEME.TEXT,
-                                      self._apply_range))
-        self._auto_btn = self._make_btn("Auto Scale", THEME.WARN,
-                                        self._toggle_auto_range)
-        ctrl.addWidget(self._auto_btn)
-        self._update_auto_btn()
-        self._log_btn = self._make_btn("Log: OFF", THEME.TEXT_DIM,
-                                       self._toggle_log)
-        ctrl.addWidget(self._log_btn)
+        self._range_ctrl = ColorRangeControl(
+            self._map,
+            auto_fit="minmax",
+            include_log=True,
+            start_pinned=True,
+        )
+        ctrl.addWidget(self._range_ctrl)
         ctrl.addStretch()
 
         self._conn_lbl = QLabel("EPICS: --")
@@ -227,16 +221,6 @@ class ScalerMapWindow(QMainWindow):
         lbl.setStyleSheet(f"color:{THEME.TEXT};")
         return lbl
 
-    def _styled_edit(self, text: str) -> QLineEdit:
-        e = QLineEdit(text)
-        e.setFixedWidth(70)
-        e.setFont(QFont("Monospace", 11))
-        e.setStyleSheet(
-            f"QLineEdit{{background:{THEME.PANEL};color:{THEME.TEXT};"
-            f"border:1px solid {THEME.BORDER};border-radius:8px;"
-            f"padding:2px 6px;}}")
-        e.returnPressed.connect(self._apply_range)
-        return e
 
     # -- actions --
 
@@ -272,8 +256,9 @@ class ScalerMapWindow(QMainWindow):
         #x_COM = x_asym/(20.5*17)
         #y_COM = y_asym/(20.5*17)
 
-        if self._auto_range_on and self._values:
-            self._do_auto_range()
+        if self._values:
+            # Pin handles re-fit when on; otherwise no-op.
+            self._range_ctrl.notify_values_changed(self._values)
 
         n_ok, n_total = self._ep.connection_count()
         fg = THEME.SUCCESS if n_ok == n_total else (
@@ -305,57 +290,9 @@ class ScalerMapWindow(QMainWindow):
             self._poll_btn.setStyleSheet(
                 self._poll_btn.styleSheet().replace(THEME.SUCCESS, THEME.DANGER))
 
-    def _apply_range(self):
-        try:
-            vmin = float(self._min_edit.text())
-            vmax = float(self._max_edit.text())
-            if vmin < vmax:
-                self._map.set_range(vmin, vmax)
-                self._auto_range_on = False
-                self._update_auto_btn()
-        except ValueError:
-            pass
-
-    def _toggle_auto_range(self):
-        self._auto_range_on = not self._auto_range_on
-        self._update_auto_btn()
-        if self._auto_range_on:
-            self._do_auto_range()
-
-    def _do_auto_range(self):
-        vmin, vmax = self._map.auto_range()
-        self._min_edit.setText(f"{vmin:.0f}")
-        self._max_edit.setText(f"{vmax:.0f}")
-
-    def _update_auto_btn(self):
-        if self._auto_range_on:
-            self._auto_btn.setStyleSheet(
-                f"QPushButton{{background:{THEME.WARN};color:{THEME.BG};"
-                f"border:1px solid {THEME.WARN};padding:5px 14px;"
-                f"font:bold 11px Monospace;border-radius:8px;}}"
-                f"QPushButton:hover{{background:{THEME.WARN};}}")
-        else:
-            self._auto_btn.setStyleSheet(
-                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.WARN};"
-                f"border:1px solid {THEME.BORDER};padding:5px 14px;"
-                f"font:bold 11px Monospace;border-radius:8px;}}"
-                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}")
-
     def _cycle_palette(self):
         self._palette_idx = (self._palette_idx + 1) % len(PALETTES)
         self._map.set_palette(self._palette_idx)
-
-    def _toggle_log(self):
-        on = not self._map.is_log_scale()
-        self._map.set_log_scale(on)
-        if on:
-            self._log_btn.setText("Log: ON")
-            self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace(THEME.TEXT_DIM, THEME.ACCENT))
-        else:
-            self._log_btn.setText("Log: OFF")
-            self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace(THEME.ACCENT, THEME.TEXT_DIM))
 
     def _on_hover(self, name: str):
         parts = [name]

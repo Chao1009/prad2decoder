@@ -292,10 +292,12 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QTextEdit, QSplitter, QFileDialog,
     QDoubleSpinBox, QGroupBox, QFormLayout, QToolTip, QInputDialog,
+    QMessageBox,
 )
 from hycal_geoview import (
     HyCalMapWidget as _HyCalMapBase,
     Module as _Module,
+    ColorRangeControl,
     THEME, apply_theme_palette, set_theme, available_themes, themed,
     cmap_qcolor,
 )
@@ -601,11 +603,16 @@ class _GainEditor(QMainWindow):
         # — undoing reverts it to the base gain.
         self._history: List[List[Tuple[str, Optional[float]]]] = []
 
+        # Colormap range control built later in _build_right_panel; until
+        # then any _notify_range_values() call is a no-op.
+        self._range_ctrl: Optional[ColorRangeControl] = None
+
         self._map = _HyCalGainMap(modules)
         merged = dict(self._base_gains)
         merged.update(overrides)
         self._map.set_gains(merged, overrides)
-        self._update_range()
+        # Pre-fit so the colorbar isn't 0..1 at first paint.
+        self._fit_initial_range()
 
         self._build_right_panel()
 
@@ -653,7 +660,8 @@ class _GainEditor(QMainWindow):
                 out[name] = val
         return out
 
-    def _update_range(self) -> None:
+    def _fit_initial_range(self) -> None:
+        """One-time min/max-of-nonzero fit before the range control exists."""
         vals = [v for v in self._map.gains.values() if v > 0]
         if vals:
             vmin = min(vals)
@@ -664,6 +672,12 @@ class _GainEditor(QMainWindow):
         else:
             self._map.set_range(0.0, 1.0)
 
+    def _notify_range_values(self) -> None:
+        """Tell the range control the gain dict changed.  Re-fits if the
+        Auto button is in persistent (pinned) mode; otherwise no-op."""
+        if self._range_ctrl is not None:
+            self._range_ctrl.notify_values_changed(self._map.gains)
+
     def _rebuild_from_base(self,
                            keep_overrides: bool = True) -> None:
         """Recompute base gains and re-merge with overrides on top."""
@@ -672,7 +686,7 @@ class _GainEditor(QMainWindow):
         merged = dict(self._base_gains)
         merged.update(overrides)
         self._map.set_gains(merged, overrides)
-        self._update_range()
+        self._notify_range_values()
         self._refresh_text()
 
     # ---- right panel ----
@@ -714,6 +728,22 @@ class _GainEditor(QMainWindow):
 
         v.addWidget(src_grp)
 
+        # ---- Color Range group ----
+        # Reusable widget from hycal_geoview: min/max edits + Auto button.
+        # auto_fit="minmax_nonzero" ignores zero-valued (masked) channels.
+        # Click the Auto button for a one-shot fit; double-click to keep
+        # auto-fitting after every edit.
+        range_grp = QGroupBox("Color Range")
+        rlayout = QHBoxLayout(range_grp)
+        rlayout.setContentsMargins(8, 4, 8, 4)
+        self._range_ctrl = ColorRangeControl(
+            self._map,
+            auto_fit="minmax_nonzero",
+            orientation="horizontal",
+        )
+        rlayout.addWidget(self._range_ctrl)
+        v.addWidget(range_grp)
+
         # ---- Mask group ----
         # Default interaction is "edit": clicking a module opens a popup
         # dialog to set its gain.  Toggling "Mask" or "Set" switches to a
@@ -724,15 +754,12 @@ class _GainEditor(QMainWindow):
         mlayout = QVBoxLayout(mask_grp)
         mlayout.setSpacing(6)
 
-        # Row 1: paint-mode toggles + value for Set
-        paint_row = QHBoxLayout()
-
-        self._btn_mask = QPushButton("Mask")
-        self._btn_mask.setStyleSheet(_btn_style(checked_color=THEME.DANGER))
-        self._btn_mask.setCheckable(True)
-        self._btn_mask.setToolTip(
-            "Toggle mask mode — click or drag modules to close (gain = 0)")
-        self._btn_mask.toggled.connect(self._on_mask_toggled)
+        # Build buttons + value edit; layout is split into two rows below.
+        self._set_value_edit = QLineEdit("0.150000")
+        self._set_value_edit.setMaximumWidth(110)
+        self._set_value_edit.setValidator(
+            QDoubleValidator(0.0, 100.0, 6, self._set_value_edit))
+        self._set_value_edit.editingFinished.connect(self._on_set_value_changed)
 
         self._btn_set = QPushButton("Set")
         self._btn_set.setStyleSheet(
@@ -742,21 +769,24 @@ class _GainEditor(QMainWindow):
             "Toggle set mode — click or drag modules to apply the value")
         self._btn_set.toggled.connect(self._on_set_toggled)
 
-        self._set_value_edit = QLineEdit("0.150000")
-        self._set_value_edit.setMaximumWidth(110)
-        self._set_value_edit.setValidator(
-            QDoubleValidator(0.0, 100.0, 6, self._set_value_edit))
-        self._set_value_edit.editingFinished.connect(self._on_set_value_changed)
+        self._btn_set_all = QPushButton("Set All")
+        self._btn_set_all.setStyleSheet(_btn_style())
+        self._btn_set_all.setToolTip(
+            "Apply the Set value to every DAQ-mapped channel")
+        self._btn_set_all.clicked.connect(self._on_set_all)
 
-        paint_row.addWidget(self._btn_mask)
-        paint_row.addSpacing(6)
-        paint_row.addWidget(self._btn_set)
-        paint_row.addWidget(self._set_value_edit)
-        paint_row.addStretch()
-        mlayout.addLayout(paint_row)
+        self._btn_mask = QPushButton("Mask")
+        self._btn_mask.setStyleSheet(_btn_style(checked_color=THEME.DANGER))
+        self._btn_mask.setCheckable(True)
+        self._btn_mask.setToolTip(
+            "Toggle mask mode — click or drag modules to close (gain = 0)")
+        self._btn_mask.toggled.connect(self._on_mask_toggled)
 
-        # Row 2: history actions
-        hist_row = QHBoxLayout()
+        self._btn_mask_all = QPushButton("Mask All")
+        self._btn_mask_all.setStyleSheet(_btn_style())
+        self._btn_mask_all.setToolTip(
+            "Set every DAQ-mapped channel's gain to 0")
+        self._btn_mask_all.clicked.connect(self._on_mask_all)
 
         self._btn_undo = QPushButton("Undo")
         self._btn_undo.setStyleSheet(_btn_style())
@@ -769,10 +799,23 @@ class _GainEditor(QMainWindow):
             "Discard all manual edits, revert to loaded base")
         self._btn_reset.clicked.connect(self._reset_overrides)
 
-        hist_row.addStretch()
-        hist_row.addWidget(self._btn_undo)
-        hist_row.addWidget(self._btn_reset)
-        mlayout.addLayout(hist_row)
+        # Row 1: gain value edit + Set paint mode + Set All bulk apply.
+        set_row = QHBoxLayout()
+        set_row.addWidget(self._set_value_edit)
+        set_row.addSpacing(6)
+        set_row.addWidget(self._btn_set)
+        set_row.addWidget(self._btn_set_all)
+        set_row.addStretch()
+        mlayout.addLayout(set_row)
+
+        # Row 2: Mask paint + Mask All + Undo + Reset.
+        mask_row = QHBoxLayout()
+        mask_row.addWidget(self._btn_mask)
+        mask_row.addWidget(self._btn_mask_all)
+        mask_row.addStretch()
+        mask_row.addWidget(self._btn_undo)
+        mask_row.addWidget(self._btn_reset)
+        mlayout.addLayout(mask_row)
 
         v.addWidget(mask_grp)
 
@@ -862,6 +905,54 @@ class _GainEditor(QMainWindow):
         except ValueError:
             return None
 
+    def _on_mask_all(self) -> None:
+        if QMessageBox.question(
+                self, "Mask all channels?",
+                "Set every DAQ-mapped channel's gain to 0?\n"
+                "Use Undo to revert.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._bulk_apply(0.0, "Masked all")
+
+    def _on_set_all(self) -> None:
+        v = self._read_set_value()
+        if v is None:
+            self._status.setText("Set All: enter a numeric gain value first")
+            return
+        if QMessageBox.question(
+                self, "Set all channels?",
+                f"Set every DAQ-mapped channel's gain to {v:.6g}?\n"
+                "Use Undo to revert.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._bulk_apply(v, f"Set all to {v:.6g}")
+
+    def _bulk_apply(self, value: float, status_msg: str) -> None:
+        """Apply ``value`` to every DAQ-mapped channel; record one undo batch."""
+        gains = dict(self._map.gains)
+        overrides = dict(self._map.overrides)
+        batch: List[Tuple[str, Optional[float]]] = []
+        for name, m in self._mod_map.items():
+            if m.crate < 0:
+                continue
+            if (gains.get(name) == value and overrides.get(name) == value):
+                continue
+            batch.append((name, overrides.get(name)))
+            gains[name] = value
+            overrides[name] = value
+        if not batch:
+            self._status.setText("Nothing to change")
+            return
+        self._history.append(batch)
+        self._map.set_gains(gains, overrides)
+        self._notify_range_values()
+        self._refresh_text()
+        self._status.setText(f"{status_msg} — {len(batch)} channel(s)")
+
     def _on_default_changed(self, _) -> None:
         self._pbwo4 = self._sb_pbwo4.value()
         self._pbglass = self._sb_pbglass.value()
@@ -888,7 +979,7 @@ class _GainEditor(QMainWindow):
         overrides[name] = new_val
         self._map.set_gains(gains, overrides)
 
-        self._update_range()
+        self._notify_range_values()
         self._refresh_text()
         self._status.setText(f"Set {name} = {new_val:.6g}")
 
@@ -898,7 +989,7 @@ class _GainEditor(QMainWindow):
         if not batch:
             return
         self._history.append(list(batch))
-        self._update_range()
+        self._notify_range_values()
         self._refresh_text()
         self._status.setText(f"Masked {len(batch)} module(s)")
 
@@ -917,7 +1008,7 @@ class _GainEditor(QMainWindow):
                 overrides[name] = prior
                 gains[name] = prior
         self._map.set_gains(gains, overrides)
-        self._update_range()
+        self._notify_range_values()
         self._refresh_text()
         self._status.setText(f"Undone {len(batch)} edit(s)")
 
@@ -951,7 +1042,7 @@ class _GainEditor(QMainWindow):
     def _reset_overrides(self) -> None:
         self._map.set_gains(self._base_gains, {})
         self._history.clear()
-        self._update_range()
+        self._notify_range_values()
         self._refresh_text()
         self._status.setText("All edits cleared")
 
@@ -1003,7 +1094,7 @@ class _GainEditor(QMainWindow):
         merged.update(loaded)
         self._history.clear()
         self._map.set_gains(merged, overrides)
-        self._update_range()
+        self._notify_range_values()
         self._refresh_text()
         self._status.setText(
             f"Loaded {Path(path).name}: {len(loaded)} channels, "

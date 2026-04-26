@@ -45,7 +45,7 @@ import numpy as np
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QComboBox, QSlider, QCheckBox,
+    QPushButton, QLabel, QComboBox, QSlider, QCheckBox,
     QFileDialog, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QRectF
@@ -54,7 +54,7 @@ from PyQt6.QtGui import QColor, QFont, QPen
 from hycal_geoview import (
     Module, load_modules, HyCalMapWidget, cmap_qcolor,
     PALETTE_NAMES, apply_theme_palette, set_theme,
-    available_themes, THEME,
+    available_themes, THEME, ColorRangeControl,
 )
 
 
@@ -358,7 +358,6 @@ class MapBuilderWindow(QMainWindow):
         self._fields: List[str] = []
         self._current_field: Optional[str] = None
         self._data_path: Optional[Path] = None
-        self._auto_scale_on = True
 
         self._build_ui()
         self._map.set_modules(modules)
@@ -423,21 +422,18 @@ class MapBuilderWindow(QMainWindow):
                                       self._cycle_palette))
 
         ctrl.addSpacing(12)
-        ctrl.addWidget(self._styled_label("Range:"))
-        self._min_edit = self._styled_edit("0")
-        self._max_edit = self._styled_edit("1")
-        ctrl.addWidget(self._min_edit)
-        ctrl.addWidget(self._styled_label("-"))
-        ctrl.addWidget(self._max_edit)
-        ctrl.addWidget(self._make_btn("Apply", THEME.TEXT, self._apply_range))
-
-        self._auto_btn = self._make_btn("Auto 2-98%", THEME.WARN,
-                                        self._toggle_auto_range)
-        ctrl.addWidget(self._auto_btn)
-        self._update_auto_btn()
-
-        self._log_btn = self._make_btn("Log: OFF", THEME.TEXT_DIM, self._toggle_log)
-        ctrl.addWidget(self._log_btn)
+        # Reusable control: min/max edits, Auto button (single-click=oneshot,
+        # double-click=pin), Log toggle.  auto_fit="percentile" with (2, 98)
+        # matches the long-tail distributions in calibration histograms.
+        # Starts pinned so switching fields auto-rescales until the user opts out.
+        self._range_ctrl = ColorRangeControl(
+            self._map,
+            auto_fit="percentile",
+            auto_fit_percentile=(2.0, 98.0),
+            include_log=True,
+            start_pinned=True,
+        )
+        ctrl.addWidget(self._range_ctrl)
 
         ctrl.addSpacing(12)
         ctrl.addWidget(self._styled_label("PbGlass \u03B1:"))
@@ -506,16 +502,6 @@ class MapBuilderWindow(QMainWindow):
         lbl.setStyleSheet(f"color:{THEME.TEXT};")
         return lbl
 
-    def _styled_edit(self, text: str) -> QLineEdit:
-        e = QLineEdit(text)
-        e.setFixedWidth(90)
-        e.setFont(QFont("Monospace", 11))
-        e.setStyleSheet(
-            f"QLineEdit{{background:{THEME.PANEL};color:{THEME.TEXT};"
-            f"border:1px solid {THEME.BORDER};border-radius:8px;padding:2px 6px;}}")
-        e.returnPressed.connect(self._apply_range)
-        return e
-
     def _styled_checkbox(self, text: str, slot) -> QCheckBox:
         cb = QCheckBox(text)
         cb.setChecked(False)
@@ -576,11 +562,8 @@ class MapBuilderWindow(QMainWindow):
             return
         values = self._data.get(self._current_field, {})
         self._map.set_values(values, label=self._current_field)
-        if self._auto_scale_on:
-            self._do_auto_range()
-        else:
-            self._map.set_range(self._parse_float(self._min_edit.text(), 0.0),
-                                self._parse_float(self._max_edit.text(), 1.0))
+        # Pin handles re-fit when on; otherwise the user's manual range stays.
+        self._range_ctrl.notify_values_changed(values)
         self._update_stats()
 
     def _update_stats(self):
@@ -597,65 +580,6 @@ class MapBuilderWindow(QMainWindow):
             f"N={arr.size}  mean={_fmt(float(arr.mean()))}"
             f"  rms={_fmt(float(arr.std()))}")
 
-    @staticmethod
-    def _parse_float(s: str, default: float) -> float:
-        try:
-            return float(s)
-        except ValueError:
-            return default
-
-    def _apply_range(self):
-        try:
-            vmin = float(self._min_edit.text())
-            vmax = float(self._max_edit.text())
-        except ValueError:
-            return
-        if vmin >= vmax:
-            return
-        self._map.set_range(vmin, vmax)
-        self._auto_scale_on = False
-        self._update_auto_btn()
-
-    def _toggle_auto_range(self):
-        self._auto_scale_on = not self._auto_scale_on
-        self._update_auto_btn()
-        if self._auto_scale_on:
-            self._do_auto_range()
-
-    def _do_auto_range(self):
-        if not self._current_field:
-            return
-        vals = list(self._data.get(self._current_field, {}).values())
-        arr = np.asarray([v for v in vals
-                          if v is not None and not (isinstance(v, float) and math.isnan(v))],
-                         dtype=float)
-        if arr.size == 0:
-            vmin, vmax = 0.0, 1.0
-        else:
-            vmin = float(np.percentile(arr, 2))
-            vmax = float(np.percentile(arr, 98))
-            if vmin == vmax:
-                pad = abs(vmin) * 0.05 if vmin != 0 else 1.0
-                vmin -= pad
-                vmax += pad
-        self._map.set_range(vmin, vmax)
-        self._min_edit.setText(_fmt(vmin))
-        self._max_edit.setText(_fmt(vmax))
-
-    def _update_auto_btn(self):
-        if self._auto_scale_on:
-            self._auto_btn.setStyleSheet(
-                f"QPushButton{{background:{THEME.WARN};color:{THEME.BG};"
-                f"border:1px solid {THEME.WARN};padding:5px 14px;"
-                f"border-radius:8px;}}"
-                f"QPushButton:hover{{background:{THEME.WARN};}}")
-        else:
-            self._auto_btn.setStyleSheet(
-                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.WARN};"
-                f"border:1px solid {THEME.BORDER};padding:5px 14px;"
-                f"border-radius:8px;}}"
-                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}")
-
     def _cycle_palette(self):
         self._map.set_palette(self._map.palette_idx() + 1)
 
@@ -668,18 +592,6 @@ class MapBuilderWindow(QMainWindow):
 
     def _on_scint_toggled(self, on: bool):
         self._map.set_scint_visible(on)
-
-    def _toggle_log(self):
-        on = not self._map.is_log_scale()
-        self._map.set_log_scale(on)
-        if on:
-            self._log_btn.setText("Log: ON")
-            self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace(THEME.TEXT_DIM, THEME.ACCENT))
-        else:
-            self._log_btn.setText("Log: OFF")
-            self._log_btn.setStyleSheet(
-                self._log_btn.styleSheet().replace(THEME.ACCENT, THEME.TEXT_DIM))
 
     def _on_hover(self, name: str):
         parts = [name]

@@ -22,13 +22,18 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
-from PyQt6.QtWidgets import QWidget, QPushButton, QSizePolicy, QToolTip
-from PyQt6.QtCore import Qt, QRectF, QPointF, QSize, pyqtSignal
+from PyQt6.QtWidgets import (
+    QWidget, QPushButton, QSizePolicy, QToolTip,
+    QLineEdit, QLabel, QHBoxLayout, QVBoxLayout, QApplication,
+)
+from PyQt6.QtCore import Qt, QRectF, QPointF, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QFont, QLinearGradient, QPalette,
+    QDoubleValidator,
 )
 
 
@@ -337,6 +342,37 @@ def cmap_qcolor(t: float, stops) -> QColor:
 
 
 # ===========================================================================
+#  Per-tab view state
+# ===========================================================================
+#
+# ``MapViewState`` is a lightweight snapshot of everything that can vary
+# "per view" in a HyCalMapWidget — colormap range, palette, log/linear
+# mapping, and (optionally) the data dict itself.  Scripts that show
+# multiple tabs/modes against a single (heavy) widget keep one
+# ``MapViewState`` per tab and call ``widget.apply_view(state)`` on tab
+# switch instead of reconstructing the widget.
+#
+# See ``HyCalMapWidget.apply_view`` / ``capture_view`` and the
+# ``ColorRangeControl`` widget further down.
+
+
+@dataclass
+class MapViewState:
+    """Per-tab/per-mode profile of a HyCalMapWidget's view settings.
+
+    ``values=None`` means "leave the widget's current data dict alone" —
+    useful when several tabs share the same data and only the *display*
+    differs (range, palette, log scale).
+    """
+    values:      Optional[Dict[str, float]] = None
+    vmin:        float = 0.0
+    vmax:        float = 1.0
+    palette_idx: int   = 0
+    log_scale:   bool  = False
+    label:       str   = ""
+
+
+# ===========================================================================
 #  HyCal map base widget
 # ===========================================================================
 
@@ -507,6 +543,35 @@ class HyCalMapWidget(QWidget):
 
     def is_log_scale(self) -> bool:
         return self._log_scale
+
+    def apply_view(self, view: MapViewState) -> None:
+        """Push a per-tab view state into the widget and repaint.
+
+        ``view.values`` is skipped when ``None`` so several tabs can share
+        the underlying data dict and differ only in display settings.
+        """
+        if view.values is not None:
+            self._values = view.values
+        self._vmin = view.vmin
+        self._vmax = view.vmax
+        if PALETTES:
+            self._palette_idx = view.palette_idx % len(PALETTES)
+        self._log_scale = view.log_scale
+        self.update()
+
+    def capture_view(self, include_values: bool = False) -> MapViewState:
+        """Snapshot the widget's current view settings.
+
+        ``include_values=True`` deep-copies the data dict; default skips
+        it (callers usually keep the data dict separate per tab).
+        """
+        return MapViewState(
+            values=dict(self._values) if include_values else None,
+            vmin=self._vmin,
+            vmax=self._vmax,
+            palette_idx=self._palette_idx,
+            log_scale=self._log_scale,
+        )
 
     def auto_range(self) -> Tuple[float, float]:
         """Set vmin/vmax from current values (min..max, or min..min+1 if flat)."""
@@ -794,3 +859,430 @@ class HyCalMapWidget(QWidget):
 
     def sizeHint(self):
         return QSize(680, 680)
+
+
+# ===========================================================================
+#  Reusable colormap-range control
+# ===========================================================================
+#
+# ColorRangeControl wraps the "two min/max edit boxes + Auto button +
+# optional Log toggle" pattern that several scripts in this directory
+# duplicate.  Bind it to a HyCalMapWidget directly (simple case), to a
+# MapViewState (per-tab profile), or to ``(state, widget)`` to drive
+# both at once.
+#
+# Auto-button gestures
+# --------------------
+#   * Single click               → one-shot fit; pin state unchanged.
+#   * Double click               → one-shot fit + enter persistent mode
+#                                  (button highlights with ACCENT_STRONG).
+#   * Click while pinned         → exit persistent mode.
+#   * Double-click while pinned  → exit persistent mode (self-cancelling).
+#   * Editing a range field      → exits persistent mode automatically.
+#
+# Auto-fit strategies
+# -------------------
+# The ``auto_fit`` argument selects how the Auto button computes a range
+# from the current data dict.  Built-in presets:
+#   * ``"minmax"``           — full ``min..max``.
+#   * ``"minmax_nonzero"``   — ``min..max`` of values != 0 (use when
+#                              zero is a sentinel — e.g. masked channels).
+#   * ``"percentile"``       — ``np.percentile(values, lo, hi)`` with
+#                              ``auto_fit_percentile=(lo, hi)`` (default
+#                              ``(2, 98)``).
+# Or pass a callable ``f(values: Dict[str, float]) -> (vmin, vmax)`` for
+# anything custom.
+#
+# Migration cookbook
+# ------------------
+#   ctrl = ColorRangeControl(map_widget,
+#                            auto_fit="minmax_nonzero",
+#                            include_log=True)
+#   layout.addWidget(ctrl)
+#   # whenever the data on the map changes:
+#   map_widget.set_values(new_values)
+#   ctrl.notify_values_changed(new_values)   # re-fits if pinned
+
+
+class _AutoButton(QPushButton):
+    """QPushButton that distinguishes single-click from double-click.
+
+    Qt fires ``clicked`` for both presses of a double-click.  We use a
+    counter + ``QApplication.doubleClickInterval()`` timer to disambiguate:
+    the first ``clicked`` starts the timer; if a second ``clicked`` arrives
+    before the timer expires, it's a double-click; otherwise single.
+    """
+
+    oneshotRequested  = pyqtSignal()
+    pinToggleRequested = pyqtSignal()
+
+    def __init__(self, text: str = "Auto", parent: Optional[QWidget] = None):
+        super().__init__(text, parent)
+        self._click_count = 0
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(QApplication.doubleClickInterval())
+        self._timer.timeout.connect(self._fire_pending)
+        self.clicked.connect(self._on_clicked)
+
+    def _on_clicked(self):
+        self._click_count += 1
+        if self._click_count == 1:
+            self._timer.start()
+        else:
+            self._timer.stop()
+            self._click_count = 0
+            self.pinToggleRequested.emit()
+
+    def _fire_pending(self):
+        if self._click_count == 1:
+            self._click_count = 0
+            self.oneshotRequested.emit()
+        else:
+            self._click_count = 0
+
+
+class ColorRangeControl(QWidget):
+    """Reusable colormap-range control for HyCalMapWidget callers.
+
+    Parameters
+    ----------
+    target
+        ``HyCalMapWidget``                  — push edits straight into the widget.
+        ``MapViewState``                    — push edits into a per-tab profile.
+        ``(MapViewState, HyCalMapWidget)``  — drive both (per-tab profile that
+                                              also reflects on the live widget).
+    auto_fit
+        Strategy used by the Auto button.  Preset name (``"minmax"``,
+        ``"minmax_nonzero"``, ``"percentile"``) or a callable
+        ``f(values) -> (vmin, vmax)``.
+    auto_fit_percentile
+        ``(lo, hi)`` percentiles for the ``"percentile"`` preset.
+        Default ``(2.0, 98.0)``.
+    include_log
+        Add a Log toggle next to the Auto button.  Emits ``logToggled``
+        and (if a target widget is bound) calls ``set_log_scale`` on it.
+    orientation
+        ``"horizontal"`` (default) or ``"vertical"`` (use for narrow side
+        panels — stacks min/max on separate lines).
+    start_pinned
+        Start in persistent auto-fit mode.  Equivalent to the user
+        double-clicking the Auto button after construction; useful for
+        live monitors where the range should track incoming data until
+        the user opts out.
+
+    Signals
+    -------
+    rangeChanged(vmin, vmax)  — emitted on any range change (auto-fit or edit).
+    autoPinned(on)            — emitted when persistent auto mode flips.
+    logToggled(on)            — emitted when the Log toggle flips.
+    """
+
+    rangeChanged = pyqtSignal(float, float)
+    autoPinned   = pyqtSignal(bool)
+    logToggled   = pyqtSignal(bool)
+
+    _AUTO_FIT_PRESETS = ("minmax", "minmax_nonzero", "percentile")
+
+    AutoFit = Union[str, Callable[[Dict[str, float]], Tuple[float, float]]]
+
+    def __init__(self,
+                 target,
+                 *,
+                 auto_fit: AutoFit = "minmax",
+                 auto_fit_percentile: Tuple[float, float] = (2.0, 98.0),
+                 include_log: bool = False,
+                 orientation: str = "horizontal",
+                 start_pinned: bool = False,
+                 parent: Optional[QWidget] = None):
+        super().__init__(parent)
+
+        self._map: Optional[HyCalMapWidget] = None
+        self._state: Optional[MapViewState] = None
+        if isinstance(target, HyCalMapWidget):
+            self._map = target
+        elif isinstance(target, MapViewState):
+            self._state = target
+        elif (isinstance(target, tuple) and len(target) == 2 and
+              isinstance(target[0], MapViewState) and
+              isinstance(target[1], HyCalMapWidget)):
+            self._state, self._map = target
+        else:
+            raise TypeError(
+                "ColorRangeControl target must be HyCalMapWidget, "
+                "MapViewState, or (MapViewState, HyCalMapWidget)")
+
+        if not (callable(auto_fit) or auto_fit in self._AUTO_FIT_PRESETS):
+            raise ValueError(
+                f"auto_fit must be callable or one of {self._AUTO_FIT_PRESETS}; "
+                f"got {auto_fit!r}")
+        self._auto_fit = auto_fit
+        self._auto_pct = auto_fit_percentile
+
+        self._pinned = False
+        self._values: Dict[str, float] = {}
+
+        self._build_ui(orientation, include_log)
+        self._refresh_from_target()
+        if start_pinned:
+            self._set_pinned(True)
+
+    # ---- UI construction --------------------------------------------------
+
+    def _build_ui(self, orientation: str, include_log: bool):
+        edit_css = themed(
+            f"QLineEdit{{background:{THEME.PANEL};color:{THEME.TEXT};"
+            f"border:1px solid {THEME.BORDER};border-radius:4px;"
+            f"padding:2px 6px;}}")
+        self._min_edit = QLineEdit()
+        self._min_edit.setMaximumWidth(90)
+        self._min_edit.setValidator(
+            QDoubleValidator(-1e12, 1e12, 6, self._min_edit))
+        self._min_edit.editingFinished.connect(self._on_edit)
+        self._min_edit.setStyleSheet(edit_css)
+
+        self._max_edit = QLineEdit()
+        self._max_edit.setMaximumWidth(90)
+        self._max_edit.setValidator(
+            QDoubleValidator(-1e12, 1e12, 6, self._max_edit))
+        self._max_edit.editingFinished.connect(self._on_edit)
+        self._max_edit.setStyleSheet(edit_css)
+
+        self._auto_btn = _AutoButton("Auto", self)
+        self._auto_btn.setToolTip(
+            "Click: auto-fit once   ·   Double-click: keep auto-fitting")
+        self._auto_btn.oneshotRequested.connect(self._on_auto_oneshot)
+        self._auto_btn.pinToggleRequested.connect(self._on_auto_double)
+        self._update_auto_btn_style()
+
+        self._log_btn: Optional[QPushButton] = None
+        if include_log:
+            self._log_btn = QPushButton("Log")
+            self._log_btn.setCheckable(True)
+            self._log_btn.toggled.connect(self._on_log_toggled)
+            self._update_log_btn_style()
+
+        self.setStyleSheet(themed(
+            f"QLabel{{color:{THEME.TEXT};background:transparent;}}"))
+
+        if orientation == "vertical":
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(4)
+            r1 = QHBoxLayout(); r1.setSpacing(4)
+            r1.addWidget(QLabel("min:")); r1.addWidget(self._min_edit); r1.addStretch()
+            r2 = QHBoxLayout(); r2.setSpacing(4)
+            r2.addWidget(QLabel("max:")); r2.addWidget(self._max_edit); r2.addStretch()
+            r3 = QHBoxLayout(); r3.setSpacing(6)
+            r3.addWidget(self._auto_btn)
+            if self._log_btn is not None:
+                r3.addWidget(self._log_btn)
+            r3.addStretch()
+            outer.addLayout(r1); outer.addLayout(r2); outer.addLayout(r3)
+        else:
+            row = QHBoxLayout(self)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            row.addWidget(QLabel("Range:"))
+            row.addWidget(self._min_edit)
+            row.addWidget(QLabel("–"))
+            row.addWidget(self._max_edit)
+            row.addWidget(self._auto_btn)
+            if self._log_btn is not None:
+                row.addWidget(self._log_btn)
+            row.addStretch()
+
+    def _update_auto_btn_style(self):
+        if self._pinned:
+            self._auto_btn.setStyleSheet(themed(
+                f"QPushButton{{background:{THEME.ACCENT_STRONG};"
+                f"color:{THEME.TEXT};border:1px solid {THEME.ACCENT_STRONG};"
+                f"padding:5px 14px;font:10pt;border-radius:6px;}}"))
+        else:
+            self._auto_btn.setStyleSheet(themed(
+                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.TEXT};"
+                f"border:1px solid {THEME.BORDER};padding:5px 14px;"
+                f"font:10pt;border-radius:6px;}}"
+                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};}}"))
+
+    def _update_log_btn_style(self):
+        if self._log_btn is None:
+            return
+        if self._log_btn.isChecked():
+            self._log_btn.setStyleSheet(themed(
+                f"QPushButton{{background:{THEME.ACCENT};color:{THEME.TEXT};"
+                f"border:1px solid {THEME.ACCENT};padding:5px 14px;"
+                f"font:10pt;border-radius:6px;}}"))
+        else:
+            self._log_btn.setStyleSheet(themed(
+                f"QPushButton{{background:{THEME.BUTTON};color:{THEME.TEXT_DIM};"
+                f"border:1px solid {THEME.BORDER};padding:5px 14px;"
+                f"font:10pt;border-radius:6px;}}"
+                f"QPushButton:hover{{background:{THEME.BUTTON_HOVER};"
+                f"color:{THEME.TEXT};}}"))
+
+    # ---- target/state plumbing -------------------------------------------
+
+    def _read_target_range(self) -> Tuple[float, float]:
+        if self._state is not None:
+            return self._state.vmin, self._state.vmax
+        if self._map is not None:
+            return self._map._vmin, self._map._vmax
+        return 0.0, 1.0
+
+    def _push_range(self, vmin: float, vmax: float):
+        if self._state is not None:
+            self._state.vmin = vmin
+            self._state.vmax = vmax
+        if self._map is not None:
+            self._map.set_range(vmin, vmax)
+
+    def _set_edits(self, vmin: float, vmax: float):
+        self._min_edit.blockSignals(True)
+        self._max_edit.blockSignals(True)
+        self._min_edit.setText(f"{vmin:.6g}")
+        self._max_edit.setText(f"{vmax:.6g}")
+        self._min_edit.blockSignals(False)
+        self._max_edit.blockSignals(False)
+
+    def _refresh_from_target(self):
+        vmin, vmax = self._read_target_range()
+        self._set_edits(vmin, vmax)
+        if self._log_btn is not None and self._state is not None:
+            self._log_btn.blockSignals(True)
+            self._log_btn.setChecked(self._state.log_scale)
+            self._log_btn.blockSignals(False)
+            self._update_log_btn_style()
+
+    # ---- public API ------------------------------------------------------
+
+    def notify_values_changed(self, values: Dict[str, float]):
+        """Host calls this when the data being shown changes.  When
+        persistent auto mode is on, re-fits and pushes the new range."""
+        self._values = values or {}
+        if self._pinned:
+            self._do_auto_fit_and_apply()
+
+    def set_state(self, view: MapViewState):
+        """Rebind to a different MapViewState (per-tab profile switch).
+
+        Refreshes the edits and Log toggle from the new state.  Does
+        *not* push to the bound widget — the host typically calls
+        ``widget.apply_view(view)`` separately.
+        """
+        self._state = view
+        self._refresh_from_target()
+
+    def set_range(self, vmin: float, vmax: float):
+        """Programmatic range update.  Doesn't change pin state."""
+        if not (math.isfinite(vmin) and math.isfinite(vmax)) or vmax <= vmin:
+            return
+        self._push_range(vmin, vmax)
+        self._set_edits(vmin, vmax)
+        self.rangeChanged.emit(vmin, vmax)
+
+    def auto_fit(self, values: Optional[Dict[str, float]] = None):
+        """Programmatically run the configured auto-fit strategy and apply.
+
+        ``values`` overrides the cached value dict; useful when the host
+        wants to fit to a freshly-computed dict without first calling
+        ``notify_values_changed``.  Pin state is unchanged.
+        """
+        if values is not None:
+            self._values = values
+        self._do_auto_fit_and_apply()
+
+    def is_pinned(self) -> bool:
+        return self._pinned
+
+    # ---- handlers --------------------------------------------------------
+
+    def _on_edit(self):
+        try:
+            vmin = float(self._min_edit.text())
+            vmax = float(self._max_edit.text())
+        except ValueError:
+            return
+        if vmax <= vmin:
+            return
+        if self._pinned:
+            # Manual edit overrides persistent mode.
+            self._set_pinned(False)
+        self._push_range(vmin, vmax)
+        self.rangeChanged.emit(vmin, vmax)
+
+    def _on_auto_oneshot(self):
+        if self._pinned:
+            # Already auto-fitting; single-click means "stop pinning".
+            self._set_pinned(False)
+            return
+        self._do_auto_fit_and_apply()
+
+    def _on_auto_double(self):
+        if self._pinned:
+            # Self-cancelling gesture: double-click while pinned exits.
+            self._set_pinned(False)
+            return
+        self._do_auto_fit_and_apply()
+        self._set_pinned(True)
+
+    def _set_pinned(self, on: bool):
+        if self._pinned == on:
+            return
+        self._pinned = on
+        self._update_auto_btn_style()
+        self.autoPinned.emit(on)
+
+    def _on_log_toggled(self, on: bool):
+        self._update_log_btn_style()
+        if self._state is not None:
+            self._state.log_scale = on
+        if self._map is not None:
+            self._map.set_log_scale(on)
+        self.logToggled.emit(on)
+
+    # ---- auto-fit --------------------------------------------------------
+
+    def _do_auto_fit_and_apply(self):
+        vmin, vmax = self._compute_auto_fit()
+        if not (math.isfinite(vmin) and math.isfinite(vmax)) or vmax <= vmin:
+            pad = max(abs(vmin) * 0.05, 1e-6)
+            vmax = vmin + pad
+        self._push_range(vmin, vmax)
+        self._set_edits(vmin, vmax)
+        self.rangeChanged.emit(vmin, vmax)
+
+    def _compute_auto_fit(self) -> Tuple[float, float]:
+        values = self._values
+        if callable(self._auto_fit):
+            return tuple(self._auto_fit(values))
+        if not values:
+            return self._read_target_range()
+        if self._auto_fit == "minmax":
+            vals = [v for v in values.values()
+                    if v is not None and not (isinstance(v, float)
+                                              and math.isnan(v))]
+            if not vals:
+                return 0.0, 1.0
+            return float(min(vals)), float(max(vals))
+        if self._auto_fit == "minmax_nonzero":
+            vals = [v for v in values.values()
+                    if v is not None and v != 0.0 and
+                    not (isinstance(v, float) and math.isnan(v))]
+            if not vals:
+                return 0.0, 1.0
+            return float(min(vals)), float(max(vals))
+        if self._auto_fit == "percentile":
+            try:
+                import numpy as np
+            except ImportError:
+                vals = list(values.values())
+                return float(min(vals)), float(max(vals))
+            arr = np.asarray(list(values.values()), dtype=float)
+            arr = arr[np.isfinite(arr)]
+            if arr.size == 0:
+                return 0.0, 1.0
+            lo, hi = self._auto_pct
+            return (float(np.percentile(arr, lo)),
+                    float(np.percentile(arr, hi)))
+        return self._read_target_range()

@@ -60,6 +60,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from hycal_geoview import (          # noqa: E402  (after sys.path tweak)
     HyCalMapWidget, Module, load_modules, cmap_qcolor,
     PALETTE_NAMES, apply_theme_palette, set_theme, available_themes, THEME,
+    ColorRangeControl,
 )
 
 # ── database path  ────────────────────────────────────────────────────────────
@@ -1150,32 +1151,17 @@ class EpCalibViewerWindow(QMainWindow):
         root.addLayout(mode_bar)
 
         # ── Z-axis range / log controls ───────────────────────────────────────
+        # Reusable widget from hycal_geoview.  Click "Auto" for a one-shot
+        # range fit; double-click to keep auto-fitting on every refresh.
+        # Mode switches still trigger an explicit one-shot fit via auto_fit().
         z_bar = QHBoxLayout()
         z_bar.setSpacing(6)
-
-        self._logz_btn = QCheckBox("Log Z")
-        self._logz_btn.setChecked(False)
-        self._logz_btn.toggled.connect(self._toggle_logz)
-        z_bar.addWidget(self._logz_btn)
-
-        z_bar.addWidget(QLabel("Zmin:"))
-        self._zmin_edit = QLineEdit()
-        self._zmin_edit.setFixedWidth(80)
-        self._zmin_edit.setPlaceholderText("auto")
-        self._zmin_edit.returnPressed.connect(self._apply_z_range)
-        z_bar.addWidget(self._zmin_edit)
-
-        z_bar.addWidget(QLabel("Zmax:"))
-        self._zmax_edit = QLineEdit()
-        self._zmax_edit.setFixedWidth(80)
-        self._zmax_edit.setPlaceholderText("auto")
-        self._zmax_edit.returnPressed.connect(self._apply_z_range)
-        z_bar.addWidget(self._zmax_edit)
-
-        self._zauto_btn = QPushButton("Auto range")
-        self._zauto_btn.clicked.connect(self._do_auto_range)
-        z_bar.addWidget(self._zauto_btn)
-
+        self._range_ctrl = ColorRangeControl(
+            self._map,
+            auto_fit="minmax",
+            include_log=True,
+        )
+        z_bar.addWidget(self._range_ctrl)
         z_bar.addStretch()
         root.addLayout(z_bar)
 
@@ -1324,38 +1310,11 @@ class EpCalibViewerWindow(QMainWindow):
 
     def _set_map_mode(self, mode: str):
         self._map_mode = mode
-        self._do_auto_range()   # reset range when switching modes
-
-    def _toggle_logz(self, on: bool):
-        self._map.set_log_scale(on)
-        self._map.update()
-
-    def _apply_z_range(self):
-        """Read Zmin/Zmax edits and apply to map; empty = auto."""
-        try:
-            zmin = float(self._zmin_edit.text())
-        except ValueError:
-            zmin = None
-        try:
-            zmax = float(self._zmax_edit.text())
-        except ValueError:
-            zmax = None
-        if zmin is None or zmax is None:
-            self._do_auto_range()
-            return
-        if zmin >= zmax:
-            return
-        self._map.set_range(zmin, zmax)
-        self._map.update()
-
-    def _do_auto_range(self):
-        """Auto-range from current map values and update the edit boxes."""
-        if self._cur_data is None:
-            return
-        self._refresh_map()
-        vmin, vmax = self._map.auto_range()
-        self._zmin_edit.setText(f"{vmin:.6g}")
-        self._zmax_edit.setText(f"{vmax:.6g}")
+        # Mode switch always re-fits — different modes have wildly different
+        # value scales, so keeping the previous range would be useless.
+        if self._cur_data is not None:
+            self._refresh_map()
+            self._range_ctrl.auto_fit()
 
     def _refresh_map(self):
         data = self._cur_data
@@ -1395,19 +1354,9 @@ class EpCalibViewerWindow(QMainWindow):
 
         self._map.set_map_label(label)
         self._map.set_values(values)
-        # only auto-range when both edit boxes are empty (user hasn't set limits)
-        zmin_txt = self._zmin_edit.text().strip()
-        zmax_txt = self._zmax_edit.text().strip()
-        if values and (not zmin_txt or not zmax_txt):
-            vmin, vmax = self._map.auto_range()
-            self._zmin_edit.setText(f"{vmin:.6g}")
-            self._zmax_edit.setText(f"{vmax:.6g}")
-        elif values and zmin_txt and zmax_txt:
-            # re-apply the user-defined range (values didn't change the limits)
-            try:
-                self._map.set_range(float(zmin_txt), float(zmax_txt))
-            except ValueError:
-                pass
+        # Range control re-fits when pinned; otherwise the user's manual
+        # values stay put.
+        self._range_ctrl.notify_values_changed(values)
 
         # count "bad" modules: chi2 > 2 or |ΔE/E| > 2%
         n_bad = sum(
