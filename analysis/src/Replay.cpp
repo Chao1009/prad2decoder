@@ -165,7 +165,7 @@ void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
     tree->Branch("timestamp",    &ev.timestamp,    "timestamp/L");
     tree->Branch("total_energy", &ev.total_energy, "total_energy/F");
     // HyCal cluster branches
-    // detector coordinate system (crystal surface)
+    // lab coordinate system(beam center and target center)
     tree->Branch("n_clusters",   &ev.n_clusters,   "n_clusters/I");
     tree->Branch("cl_x",         ev.cl_x,          "cl_x[n_clusters]/F");
     tree->Branch("cl_y",         ev.cl_y,          "cl_y[n_clusters]/F");
@@ -191,7 +191,7 @@ void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
     tree->Branch("mHit_gid", ev.mHit_gid,  "mHit_gid[match_num][2]/F");
 
     // GEM part
-    //detector local coordinate (GEM plane)
+    //lab coordinate(beam center and target center) (GEM plane)
     tree->Branch("n_gem_hits",   &ev.n_gem_hits,   "n_gem_hits/I");
     tree->Branch("det_id",       ev.det_id,        "det_id[n_gem_hits]/b");
     tree->Branch("gem_x",        ev.gem_x,         "gem_x[n_gem_hits]/F");
