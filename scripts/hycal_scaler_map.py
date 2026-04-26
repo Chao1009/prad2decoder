@@ -26,8 +26,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel,
 )
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QFont, QColor, QPen
 
 from hycal_geoview import (
     Module, load_modules, HyCalMapWidget, PALETTES,
@@ -94,14 +94,44 @@ class SimulatedScalerEPICS:
 # ===========================================================================
 
 class ScalerMapWidget(HyCalMapWidget):
-    """Simple value → colour map with palette cycle and log scale."""
+    """Simple value → colour map with palette cycle and log scale.
+
+    Adds a center-of-gravity crosshair overlay: call ``set_cog(x, y)``
+    with the rate-weighted centroid (mm, in the same coords as the
+    Module x/y); pass ``None`` to hide.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent, min_size=(500, 500), include_lms=True)
         self._vmax = 1000.0   # sensible default for kHz rates
+        self._cog: Optional[Tuple[float, float]] = None
 
     def _fmt_value(self, v: float) -> str:
         return f"{v:.0f}"
+
+    def set_cog(self, xy: Optional[Tuple[float, float]]):
+        self._cog = xy
+        self.update()
+
+    def _paint_overlays(self, p, w, h):
+        # Hover highlight first so the crosshair sits on top of it.
+        super()._paint_overlays(p, w, h)
+        if self._cog is None:
+            return
+        cx, cy = self.geo_to_canvas(self._cog[0], self._cog[1]).x(), \
+                 self.geo_to_canvas(self._cog[0], self._cog[1]).y()
+        # Crosshair: white outline + ACCENT inner so it's readable on any
+        # palette.  Length = 18 px arms; small filled center dot.
+        L = 18
+        for color, width in ((QColor("#000000"), 4.0),
+                             (QColor(THEME.ACCENT), 2.0)):
+            p.setPen(QPen(color, width, Qt.PenStyle.SolidLine,
+                          Qt.PenCapStyle.RoundCap))
+            p.drawLine(int(cx - L), int(cy), int(cx + L), int(cy))
+            p.drawLine(int(cx), int(cy - L), int(cx), int(cy + L))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(THEME.ACCENT))
+        p.drawEllipse(int(cx - 3), int(cy - 3), 6, 6)
 
 
 # ===========================================================================
@@ -225,36 +255,34 @@ class ScalerMapWindow(QMainWindow):
     # -- actions --
 
     def _refresh(self):
-        W_totalSum = 0
-        topSum = 0
-        botSum = 0
-        leftSum = 0
-        rightSum = 0
+        # Collect rates and compute the rate-weighted center of gravity
+        # over all calorimeter crystals (PbWO4 + PbGlass).  LMS pulses
+        # don't represent beam hits so they're excluded from the CoG.
+        w_total_hz = 0.0           # PbWO4-only sum (for status line)
+        cog_w  = 0.0               # weight sum (Σ rate)
+        cog_xw = 0.0               # Σ rate · x
+        cog_yw = 0.0               # Σ rate · y
         for m in self._scalable:
             v = self._ep.get(m.name)
-            if v is not None:
-                self._values[m.name] = float(v)
-                if "W" in m.name and int(m.name.strip("W")!=1125):
-                    W_totalSum += v
-                    if(int(m.name.strip("W"))<578):
-                        topSum += v
-                    else:
-                        botSum += v
-                    if(int(((float(m.name.strip("W"))/34.0)%1)*100)<=50):
-                        leftSum += v
-                    else:
-                        rightSum += v
-
+            if v is None:
+                continue
+            self._values[m.name] = float(v)
+            if m.mod_type in ("PbWO4", "PbGlass") and v > 0.0:
+                cog_w  += v
+                cog_xw += v * m.x
+                cog_yw += v * m.y
+                if m.mod_type == "PbWO4":
+                    w_total_hz += v
 
         self._map.set_values(self._values)
 
-        #Convert Sums of rates to kHz
-        W_totalSum = W_totalSum/1000.0
-        y_asym = (topSum-botSum)/1000.0
-        x_asym = (rightSum-leftSum)/1000.0
-        #Get Center of the Rate Relative to the center of the beam hole
-        #x_COM = x_asym/(20.5*17)
-        #y_COM = y_asym/(20.5*17)
+        if cog_w > 0.0:
+            cog_x = cog_xw / cog_w
+            cog_y = cog_yw / cog_w
+            self._map.set_cog((cog_x, cog_y))
+        else:
+            cog_x = cog_y = float("nan")
+            self._map.set_cog(None)
 
         if self._values:
             # Pin handles re-fit when on; otherwise no-op.
@@ -267,15 +295,18 @@ class ScalerMapWindow(QMainWindow):
         self._conn_lbl.setStyleSheet(f"color:{fg};font:10px Monospace;")
 
         if self._values:
-            lo = min(self._values.values())/1000.0
-            hi = max(self._values.values())/1000.0
+            lo = min(self._values.values()) / 1000.0
+            hi = max(self._values.values()) / 1000.0
+            w_total_khz = w_total_hz / 1000.0
+            ave_khz = w_total_khz / 1152.0
+            cog_str = (f"[{cog_x:+.1f}, {cog_y:+.1f}] mm"
+                       if cog_w > 0 else "[—, —]")
             self.statusBar().showMessage(
                 f"Data: {lo:.0f}kHz .. {hi:.0f}kHz  "
                 f"Channels: {len(self._values)}  "
-                f"PbWO4 Total: {W_totalSum:.2f}kHz  "
-                f"Ave: {W_totalSum/1152:3f}kHz  "
-                f"Asym (kHz): [{x_asym:.3f}, {y_asym:.3f}]")
-                #f"CoR (mm): [{x_COM:.3f},{y_COM:.3f}]")
+                f"PbWO4 Total: {w_total_khz:.2f}kHz  "
+                f"Ave: {ave_khz:.3f}kHz  "
+                f"CoG: {cog_str}")
 
     def _toggle_polling(self):
         self._polling = not self._polling

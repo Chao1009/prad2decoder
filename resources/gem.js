@@ -89,6 +89,11 @@ function plotGemHits(data) {
     GEM_PLANES.forEach((plane) => {
         const traces = [];
         const shapes = [];
+        // Compute the plane's geometric bounds from the static detector
+        // outlines (NOT from this event's hits) so the axes don't snap
+        // around as hits move from event to event.
+        let xMin = +Infinity, xMax = -Infinity;
+        let yMin = +Infinity, yMax = -Infinity;
 
         plane.dets.forEach((detId) => {
             const det = detectors.find(d => d.id === detId);
@@ -113,10 +118,17 @@ function plotGemHits(data) {
 
             // detector outline — offset to lab frame position
             const info = gemDetInfo(detId);
+            const x0 = info.xOff - info.xSize / 2;
+            const x1 = info.xOff + info.xSize / 2;
+            const y0 = info.yOff - info.ySize / 2;
+            const y1 = info.yOff + info.ySize / 2;
+            if (x0 < xMin) xMin = x0;
+            if (x1 > xMax) xMax = x1;
+            if (y0 < yMin) yMin = y0;
+            if (y1 > yMax) yMax = y1;
             shapes.push({
                 type: 'rect',
-                x0: info.xOff - info.xSize / 2, y0: info.yOff - info.ySize / 2,
-                x1: info.xOff + info.xSize / 2, y1: info.yOff + info.ySize / 2,
+                x0, y0, x1, y1,
                 line: { color: color, width: 1.5, dash: 'dot' },
                 fillcolor: 'rgba(0,0,0,0)',
             });
@@ -127,11 +139,25 @@ function plotGemHits(data) {
                           name: 'No data', marker: { size: 0 } });
         }
 
+        // Pad the bounds slightly so outline strokes aren't clipped, and
+        // fall back to a sane default if no detector is present on the
+        // plane (gemConfig late-arriving).
+        let xRange = null, yRange = null;
+        if (isFinite(xMin) && isFinite(xMax)) {
+            const xPad = (xMax - xMin) * 0.04;
+            const yPad = (yMax - yMin) * 0.04;
+            xRange = [xMin - xPad, xMax + xPad];
+            yRange = [yMin - yPad, yMax + yPad];
+        }
+
         const layout = Object.assign({}, PL_GEM(), {
             title: { text: plane.name, font: { size: 13, color: THEME.text } },
             xaxis: { title: 'X (mm)', scaleanchor: 'y', scaleratio: 1,
+                     range: xRange, autorange: xRange ? false : true,
                      gridcolor: THEME.grid, zerolinecolor: THEME.border },
-            yaxis: { title: 'Y (mm)', gridcolor: THEME.grid, zerolinecolor: THEME.border },
+            yaxis: { title: 'Y (mm)',
+                     range: yRange, autorange: yRange ? false : true,
+                     gridcolor: THEME.grid, zerolinecolor: THEME.border },
             shapes: shapes,
             showlegend: true,
             legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(0,0,0,0.3)', font: { size: 10 } },

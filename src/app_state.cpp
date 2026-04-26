@@ -495,7 +495,9 @@ void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
     // accumulate occupancy + histograms in a single pass
     std::lock_guard<std::mutex> lk(data_mtx);
     int total_clusters = 0;
-    for (int d = 0; d < gem_sys.GetNDetectors(); ++d) {
+    const int n_dets = std::min<int>(gem_sys.GetNDetectors(),
+                                     (int)gem_transforms.size());
+    for (int d = 0; d < n_dets; ++d) {
         auto &det = gem_sys.GetDetectors()[d];
         float xSize = det.planes[0].size;
         float ySize = det.planes[1].size;
@@ -509,11 +511,17 @@ void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
             float ox, oy;
             xform.rotate(h.x, h.y, ox, oy);
             gem_occupancy[d].fill(ox, oy, -xSize/2, xStep, -ySize/2, yStep);
-            // full transform for theta (lab frame)
+            // theta from the target vertex — same convention as the HyCal
+            // cluster theta a few hundred lines up (subtract target_*).
             float lx, ly, lz;
             xform.toLab(h.x, h.y, lx, ly, lz);
-            float r = std::sqrt(lx*lx + ly*ly);
-            float theta = std::atan2(r, lz) * (180.f / 3.14159265f);
+            float dx = lx - target_x, dy = ly - target_y, dz = lz - target_z;
+            float r = std::sqrt(dx*dx + dy*dy);
+            // dz must be > 0 for a forward-going particle; clamp to avoid
+            // atan2(r, ≤0) pushing every fill into overflow when the GEM
+            // z is mis-configured.
+            if (dz <= 0.f) continue;
+            float theta = std::atan2(r, dz) * (180.f / 3.14159265f);
             gem_theta_hist.fill(theta, gem_theta_min, gem_theta_step);
         }
     }
