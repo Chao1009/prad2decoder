@@ -209,7 +209,7 @@ function applyConfig(data){
         }
 
         updateHeaderStats();
-        if(histEnabled) { fetchOccupancy(); fetchClHist(); }
+        if(histEnabled) { fetchOccupancy(); fetchClHist(); fetchGemResiduals(); }
         fetchEpicsChannels(); fetchEpicsLatest();
         if(activeTab==='epics') fetchAllEpicsSlots();
         if(activeTab==='physics') fetchPhysics();

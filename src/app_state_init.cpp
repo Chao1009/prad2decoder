@@ -475,6 +475,17 @@ void AppState::init(const std::string &db_dir,
                     if (xy.contains("y_step")) hxy_y_step = xy["y_step"];
                 }
             }
+            if (ph.contains("gem_hycal_match")) {
+                auto &gm = ph["gem_hycal_match"];
+                if (gm.contains("require_ep_candidate")) gem_match_require_ep = gm["require_ep_candidate"];
+                if (gm.contains("window_mm"))            gem_match_window_mm  = gm["window_mm"];
+                if (gm.contains("residual_hist")) {
+                    auto &rh = gm["residual_hist"];
+                    if (rh.contains("min"))  gem_resid_min  = rh["min"];
+                    if (rh.contains("max"))  gem_resid_max  = rh["max"];
+                    if (rh.contains("step")) gem_resid_step = rh["step"];
+                }
+            }
             std::cerr << "Physics   : " << physics_trigger
                       << " Moller: tol=" << moller_energy_tol
                       << " angle=[" << moller_angle_min << "," << moller_angle_max << "]"
@@ -547,6 +558,16 @@ void AppState::init(const std::string &db_dir,
     int hxy_nx = std::max(1, (int)std::ceil((hxy_x_max - hxy_x_min) / hxy_x_step));
     int hxy_ny = std::max(1, (int)std::ceil((hxy_y_max - hxy_y_min) / hxy_y_step));
     hycal_xy_hist.init(hxy_nx, hxy_ny);
+    // GEM↔HyCal residual histograms — one per GEM detector for each axis.
+    {
+        int n_gem = gem_enabled ? (int)gem_transforms.size() : 0;
+        int resid_nbins = std::max(1, (int)std::ceil((gem_resid_max - gem_resid_min) / gem_resid_step));
+        gem_dx_hist.assign(n_gem, Histogram{});
+        gem_dy_hist.assign(n_gem, Histogram{});
+        gem_match_hits.assign(n_gem, 0);
+        for (auto &h : gem_dx_hist) h.init(resid_nbins);
+        for (auto &h : gem_dy_hist) h.init(resid_nbins);
+    }
     gem_nclusters_hist.init(std::max(1, (gem_ncl_max - gem_ncl_min) / gem_ncl_step));
     gem_theta_hist.init(std::max(1, (int)std::ceil((gem_theta_max - gem_theta_min) / gem_theta_step)));
 

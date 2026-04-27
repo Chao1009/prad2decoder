@@ -102,6 +102,7 @@ function connectWebSocket() {
                     if(histEnabled) { fetchOccupancy(); fetchClHist(); }
                     if(activeTab==='physics') fetchPhysics();
                     if(activeTab==='gem') fetchGemAccum();
+                    if(activeTab==='cluster') fetchGemResiduals();
                 }
                 // gem_apv tab is per-event; loadEventData (called by
                 // loadLatestEvent above) hooks into activeTab and refetches
@@ -111,6 +112,7 @@ function connectWebSocket() {
             } else if (msg.type === 'hist_cleared') {
                 occData={}; occTcutData={}; occTotal=0;
                 initClHist(); plotClHist(); plotClStatHists();
+                gemResidData=null; plotGemResiduals();
                 if (selectedModule) showHistograms(selectedModule);
                 clearPhysicsFrontend();
                 redrawGeo();

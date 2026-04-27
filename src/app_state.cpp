@@ -109,6 +109,23 @@ json AppState::encodeWaveformJson(fdec::EventData &event, const std::string &cha
     return {{"error", "channel not found"}};
 }
 
+void AppState::projectToHyCalLocal(float Gx, float Gy, float Gz,
+                                   float &px, float &py) const
+{
+    // Transform target and source points into HyCal-local frame, then linearly
+    // interpolate along the line to the local z=0 plane.  Equivalent to
+    // intersecting the lab-frame line with the tilted HyCal plane, but cleaner
+    // because the math reduces to a 1D parametric solve.
+    float Tx, Ty, Tz, gx, gy, gz;
+    hycal_transform.labToLocal(target_x, target_y, target_z, Tx, Ty, Tz);
+    hycal_transform.labToLocal(Gx, Gy, Gz, gx, gy, gz);
+    float dz = gz - Tz;
+    if (std::abs(dz) < 1e-6f) { px = gx; py = gy; return; }
+    float s = -Tz / dz;
+    px = Tx + s * (gx - Tx);
+    py = Ty + s * (gy - Ty);
+}
+
 json AppState::computeClustersJson(fdec::EventData &event, int ev_id,
                                    fdec::WaveAnalyzer &ana, fdec::WaveResult &wres)
 {
@@ -415,15 +432,42 @@ void AppState::processEvent(fdec::EventData &event,
                 }
             }
             // HyCal cluster-hit XY: single-cluster ep-elastic candidates.
+            // Same gate is reused (when configured) for GEM↔HyCal residuals.
+            bool ep_cand = false;
             if ((int)reco_hits.size() == hxy_n_clusters && Eb > 0) {
                 const auto &cl = reco_hits[0];
                 bool nb_ok = cl.nblocks >= hxy_nblocks_min && cl.nblocks <= hxy_nblocks_max;
                 bool e_ok  = cl.energy  >= hxy_energy_frac_min * Eb;
                 if (nb_ok && e_ok) {
+                    ep_cand = true;
                     hycal_xy_hist.fill(cinfo[0].lx, cinfo[0].ly,
                         hxy_x_min, hxy_x_step, hxy_y_min, hxy_y_step);
                     hycal_xy_events++;
                 }
+            }
+            // GEM↔HyCal matching residuals.  Reference is the FIRST cluster's
+            // HyCal-local xy — for ep candidates that's the only cluster, for
+            // multi-cluster events it's the leading reconstructed hit.
+            if (gem_enabled && (ep_cand || !gem_match_require_ep) && !reco_hits.empty()) {
+                const float ref_x = reco_hits[0].x, ref_y = reco_hits[0].y;
+                const int n_dets = std::min<int>(gem_sys.GetNDetectors(),
+                                                 (int)gem_dx_hist.size());
+                for (int d = 0; d < n_dets; ++d) {
+                    auto &xform = gem_transforms[d];
+                    for (auto &h : gem_sys.GetHits(d)) {
+                        float lx, ly, lz;
+                        xform.toLab(h.x, h.y, lx, ly, lz);
+                        float px, py;
+                        projectToHyCalLocal(lx, ly, lz, px, py);
+                        float dxr = px - ref_x, dyr = py - ref_y;
+                        if (std::sqrt(dxr*dxr + dyr*dyr) < gem_match_window_mm) {
+                            gem_dx_hist[d].fill(dxr, gem_resid_min, gem_resid_step);
+                            gem_dy_hist[d].fill(dyr, gem_resid_min, gem_resid_step);
+                            gem_match_hits[d]++;
+                        }
+                    }
+                }
+                gem_match_events++;
             }
         }
     }
@@ -499,15 +543,39 @@ void AppState::processReconEvent(const ReconEventData &recon)
             }
         }
         // HyCal cluster-hit XY: single-cluster ep-elastic candidates.
+        bool ep_cand = false;
         if ((int)recon.clusters.size() == hxy_n_clusters && Eb > 0) {
             const auto &cl = recon.clusters[0];
             bool nb_ok = cl.nblocks >= hxy_nblocks_min && cl.nblocks <= hxy_nblocks_max;
             bool e_ok  = cl.energy  >= hxy_energy_frac_min * Eb;
             if (nb_ok && e_ok) {
+                ep_cand = true;
                 hycal_xy_hist.fill(cinfo[0].lx, cinfo[0].ly,
                     hxy_x_min, hxy_x_step, hxy_y_min, hxy_y_step);
                 hycal_xy_events++;
             }
+        }
+        // GEM↔HyCal matching residuals (ROOT recon path uses recon.gem_hits,
+        // which carry detector-local x,y just like the live gem_sys hits).
+        if (gem_enabled && (ep_cand || !gem_match_require_ep) && !recon.clusters.empty()) {
+            const float ref_x = recon.clusters[0].x, ref_y = recon.clusters[0].y;
+            const int n_dets = (int)gem_dx_hist.size();
+            for (auto &gh : recon.gem_hits) {
+                if (gh.det_id < 0 || gh.det_id >= n_dets) continue;
+                if (gh.det_id >= (int)gem_transforms.size()) continue;
+                auto &xform = gem_transforms[gh.det_id];
+                float lx, ly, lz;
+                xform.toLab(gh.x, gh.y, lx, ly, lz);
+                float px, py;
+                projectToHyCalLocal(lx, ly, lz, px, py);
+                float dxr = px - ref_x, dyr = py - ref_y;
+                if (std::sqrt(dxr*dxr + dyr*dyr) < gem_match_window_mm) {
+                    gem_dx_hist[gh.det_id].fill(dxr, gem_resid_min, gem_resid_step);
+                    gem_dy_hist[gh.det_id].fill(dyr, gem_resid_min, gem_resid_step);
+                    gem_match_hits[gh.det_id]++;
+                }
+            }
+            gem_match_events++;
         }
     }
 }
@@ -565,10 +633,10 @@ void AppState::processGemEvent(const ssp::SspEventData &ssp_evt)
         auto &hits = gem_sys.GetHits(d);
         total_clusters += static_cast<int>(hits.size());
         for (auto &h : hits) {
-            // rotation only for occupancy (local detector coords)
-            float ox, oy;
-            xform.rotate(h.x, h.y, ox, oy);
-            gem_occupancy[d].fill(ox, oy, -xSize/2, xStep, -ySize/2, yStep);
+            // Occupancy is a strip-level diagnostic — fill with raw local
+            // detector coords so bin edges line up with the readout grid.
+            // Lab-frame orientation lives in the matching plot, not here.
+            gem_occupancy[d].fill(h.x, h.y, -xSize/2, xStep, -ySize/2, yStep);
             // theta from the target vertex — same convention as the HyCal
             // cluster theta a few hundred lines up (subtract target_*).
             float lx, ly, lz;
@@ -623,19 +691,25 @@ nlohmann::json AppState::apiGemHits() const
             dj[pname] = clusters;
         }
 
-        // 2D hits (transformed to lab frame) — build per-det and all_hits in one pass
+        // 2D hits (transformed to lab frame) — build per-det and all_hits in one pass.
+        // proj_x/proj_y are the lab→target line projected onto the HyCal local
+        // plane; the cluster tab overlays these on the geo view.
         auto &xform = gem_transforms[d];
         json hits = json::array();
         for (auto &h : gem_sys.GetHits(d)) {
             float lx, ly, lz;
             xform.toLab(h.x, h.y, lx, ly, lz);
+            float px, py;
+            projectToHyCalLocal(lx, ly, lz, px, py);
             hits.push_back({
                 {"x", lx}, {"y", ly},
+                {"proj_x", px}, {"proj_y", py},
                 {"x_charge", h.x_charge}, {"y_charge", h.y_charge},
                 {"x_size", h.x_size}, {"y_size", h.y_size}
             });
             all_hits.push_back({
-                {"x", lx}, {"y", ly}, {"det", d},
+                {"x", lx}, {"y", ly},
+                {"proj_x", px}, {"proj_y", py}, {"det", d},
                 {"x_charge", h.x_charge}, {"y_charge", h.y_charge}
             });
         }
@@ -893,6 +967,10 @@ void AppState::clearHistograms()
     moller_events = 0;
     hycal_xy_hist.clear();
     hycal_xy_events = 0;
+    for (auto &h : gem_dx_hist) h.clear();
+    for (auto &h : gem_dy_hist) h.clear();
+    for (auto &n : gem_match_hits) n = 0;
+    gem_match_events = 0;
     cluster_events_processed = 0;
     for (auto &h : gem_occupancy) h.clear();
     gem_nclusters_hist.clear();

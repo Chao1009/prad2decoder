@@ -182,6 +182,11 @@ struct AppState {
     float hxy_x_min=-600.f, hxy_x_max=600.f, hxy_x_step=5.f;  // mm
     float hxy_y_min=-600.f, hxy_y_max=600.f, hxy_y_step=5.f;  // mm
 
+    // GEM↔HyCal matching: per-detector residuals filled when ep candidate fires
+    bool  gem_match_require_ep = true;    // gate on hxy_* selection (clean track)
+    float gem_match_window_mm  = 10.f;    // only fill if sqrt(dx²+dy²) < this (mm)
+    float gem_resid_min = -50.f, gem_resid_max = 50.f, gem_resid_step = 0.5f;  // mm
+
     // EPICS config
     int   epics_max_history = 5000;
     float epics_warn_thresh  = 0.1f;
@@ -263,6 +268,13 @@ struct AppState {
     Histogram   moller_energy_hist;
     Histogram2D hycal_xy_hist;       // single-cluster ep-elastic candidates (cuts in hxy_*)
     int         hycal_xy_events = 0; // events passing hycal_cluster_hit cuts
+
+    // GEM↔HyCal residuals (one Histogram per GEM detector for each axis).
+    // gem_match_events = events that contributed; gem_match_hits[d] = matched hits per det.
+    std::vector<Histogram> gem_dx_hist;   // size = nDetectors
+    std::vector<Histogram> gem_dy_hist;
+    int                    gem_match_events = 0;
+    std::vector<int>       gem_match_hits;  // per-det count of in-window hits
     int         moller_events = 0;
     int       cluster_events_processed = 0;
 
@@ -322,6 +334,12 @@ struct AppState {
     // Fills cluster/physics histograms from pre-computed clusters.
     void processReconEvent(const struct ReconEventData &recon);
 
+    // Project a lab-frame point through the target onto the HyCal local
+    // plane (z_local = 0). Returns HyCal-local (px, py).
+    // Used for GEM hit overlays and matching residuals.
+    void projectToHyCalLocal(float Gx, float Gy, float Gz,
+                             float &px, float &py) const;
+
     // Encode one decoded event as JSON.
     // include_samples=false: summaries only (peaks + pedestal, ~20KB).
     // include_samples=true:  full waveforms included (~800KB, used for ring buffer).
@@ -364,6 +382,7 @@ struct AppState {
     nlohmann::json apiEnergyAngle() const;
     nlohmann::json apiMoller() const;
     nlohmann::json apiHycalXY() const;
+    nlohmann::json apiGemResiduals() const;
     nlohmann::json apiEpicsChannels() const;
     nlohmann::json apiEpicsChannel(const std::string &name) const;
     nlohmann::json apiEpicsBatch(const std::vector<std::string> &names) const;

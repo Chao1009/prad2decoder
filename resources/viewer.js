@@ -315,7 +315,7 @@ function loadEventData(reqId, data) {
 
     // refresh histograms from server (on-demand accumulation in non-preprocessed mode)
     if(mode==='file' && !histEnabled){
-        fetchOccupancy(); fetchClHist();
+        fetchOccupancy(); fetchClHist(); fetchGemResiduals();
     }
 }
 
@@ -505,6 +505,8 @@ function init(){
     registerPlot('cl-energy-hist',  'cluster', 'Cluster Energy');
     registerPlot('cl-nclust-hist', 'cluster', 'Clusters per Event');
     registerPlot('cl-nblocks-hist','cluster', 'Blocks per Cluster');
+    for (let d = 0; d < 4; d++)
+        registerPlot('gem-resid-' + d, 'cluster', null);
     registerPlot('gem-ncl-hist',   'gem',     'GEM Clusters / Event');
     registerPlot('gem-theta-hist', 'gem',     'GEM Hit Angle');
     setupCopyBtn('btn-copy-cl-hist', ()=>currentClHist);

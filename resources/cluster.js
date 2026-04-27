@@ -5,6 +5,14 @@ let clusterData=null;  // {hits:{}, clusters:[]}
 let selectedCluster=-1;  // -1 = all
 let clusterEvent=-1;  // event number for cached cluster data
 
+// per-event GEM hits (lab xy + projected to HyCal-local) for the geo overlay
+let gemHits=null;     // {detectors:[{id,name,hits_2d:[{x,y,proj_x,proj_y,...}]}]}
+let gemHitsEvent=-1;
+// accumulated GEM↔HyCal residuals for the 4 small panels
+let gemResidData=null;
+// per-detector palette for the geo overlay
+const GEM_DOT_COLORS=['#ff6b6b','#51cf66','#00b4d8','#ffa500'];
+
 // cluster energy histogram (accumulated on frontend)
 let clHistBins=null, clHistEvents=0;
 let clHistMin=0, clHistMax=3000, clHistStep=10;
@@ -67,8 +75,33 @@ function geoCluster(){
                 ctx.beginPath();ctx.moveTo(cx-sz,cy);ctx.lineTo(cx+sz,cy);ctx.stroke();
                 ctx.beginPath();ctx.moveTo(cx,cy-sz);ctx.lineTo(cx,cy+sz);ctx.stroke();
             });
+            // GEM 2D hits projected onto HyCal local plane.  Draw all hits;
+            // any that fall outside the canvas just clip naturally.
+            if(gemHits && gemHits.detectors){
+                const ringColor=THEME.text;
+                gemHits.detectors.forEach(det=>{
+                    const fill=GEM_DOT_COLORS[det.id % GEM_DOT_COLORS.length];
+                    (det.hits_2d||[]).forEach(h=>{
+                        if(h.proj_x==null||h.proj_y==null) return;
+                        const [px,py]=d2c(h.proj_x,h.proj_y);
+                        ctx.fillStyle=fill;
+                        ctx.beginPath();ctx.arc(px,py,4,0,2*Math.PI);ctx.fill();
+                        ctx.strokeStyle=ringColor; ctx.lineWidth=1;
+                        ctx.stroke();
+                    });
+                });
+            }
         }
     );
+}
+
+function loadGemHits(evnum){
+    if(gemHitsEvent===evnum && gemHits) { geoCluster(); return; }
+    fetch('/api/gem/hits').then(r=>r.json()).then(data=>{
+        gemHits=data;
+        gemHitsEvent=evnum;
+        geoCluster();
+    }).catch(()=>{ gemHits=null; });
 }
 
 // build a set of module indices belonging to a cluster
@@ -80,7 +113,11 @@ function clusterModuleSet(clIdx){
 }
 
 function loadClusterData(evnum){
-    if(clusterEvent===evnum && clusterData) { geoCluster(); updateClusterTable(); return; }
+    if(clusterEvent===evnum && clusterData) {
+        geoCluster(); updateClusterTable();
+        loadGemHits(evnum);
+        return;
+    }
     document.getElementById('status-bar').textContent=`Loading clusters for sample ${evnum}...`;
     fetch(`/api/clusters/${evnum}`).then(r=>{
         if(!r.ok) throw new Error('not available');
@@ -95,6 +132,8 @@ function loadClusterData(evnum){
         updateGeoTooltip();
         // refresh cluster histograms from server (accumulated there)
         fetchClHist();
+        fetchGemResiduals();
+        loadGemHits(evnum);
         updateStatusBar();
     }).catch(err=>{ document.getElementById('status-bar').textContent=`Error: ${err}`; });
 }
@@ -358,5 +397,75 @@ function plotClStatHists(){
             plotClStatHists();
         });
         nclDiv._nclickBound = true;
+    }
+}
+
+// =========================================================================
+// GEM↔HyCal residuals (4 small panels at the top of the cluster tab)
+// =========================================================================
+
+function fetchGemResiduals(){
+    fetch('/api/gem/residuals').then(r=>r.json()).then(data=>{
+        if(!data.enabled) return;
+        gemResidData=data;
+        plotGemResiduals();
+    }).catch(()=>{});
+}
+
+// Mean/sigma from a binned 1D histogram using bin centers.
+function _residStats(h){
+    if(!h||!h.bins||!h.bins.length) return {n:0,mean:0,sigma:0};
+    let n=0,sum=0,sumSq=0;
+    for(let i=0;i<h.bins.length;i++){
+        const x=h.min+(i+0.5)*h.step;
+        const c=h.bins[i];
+        n+=c; sum+=c*x; sumSq+=c*x*x;
+    }
+    if(n===0) return {n:0,mean:0,sigma:0};
+    const mean=sum/n;
+    const variance=sumSq/n-mean*mean;
+    return {n,mean,sigma:Math.sqrt(Math.max(0,variance))};
+}
+
+function _residTrace(h, color, name){
+    const x=[],y=[];
+    for(let i=0;i<h.bins.length;i++){
+        x.push(h.min+(i+0.5)*h.step);
+        y.push(h.bins[i]);
+    }
+    return {x,y,type:'scatter',mode:'lines',line:{shape:'hvh',color,width:1.5},
+        name,hovertemplate:`${name}=%{x:.2f} mm: %{y}<extra></extra>`};
+}
+
+function plotGemResiduals(){
+    for(let d=0;d<4;d++){
+        const div='gem-resid-'+d;
+        const det=gemResidData && gemResidData.detectors && gemResidData.detectors[d];
+        if(!det || !det.dx_hist || !det.dx_hist.bins || !det.dx_hist.bins.length){
+            Plotly.react(div,[],{...PL,
+                title:{text:`GEM ${d+1} — No data`,font:{size:10,color:THEME.textDim}},
+                margin:{l:35,r:8,t:24,b:24}},PC2);
+            continue;
+        }
+        const events=gemResidData.events||0;
+        const sx=_residStats(det.dx_hist), sy=_residStats(det.dy_hist);
+        const meanN=events>0 ? (det.matched_hits||0)/events : 0;
+        const fmt=v=>(v>=0?' ':'')+v.toFixed(2);
+        const titleText=
+            `${det.name||'GEM '+(d+1)} `
+            +`<span style="color:#4dabf7">μₓ${fmt(sx.mean)} σₓ${sx.sigma.toFixed(2)}</span>  `
+            +`<span style="color:#ff6b6b">μᵧ${fmt(sy.mean)} σᵧ${sy.sigma.toFixed(2)}</span>  `
+            +`⟨N⟩=${meanN.toFixed(2)}`;
+        Plotly.react(div,[
+            _residTrace(det.dx_hist,'#4dabf7','ΔX'),
+            _residTrace(det.dy_hist,'#ff6b6b','ΔY'),
+        ],{...PL,
+            title:{text:titleText,font:{size:10,color:THEME.text}},
+            xaxis:{...PL.xaxis,title:'Residual (mm)',
+                range:[det.dx_hist.min, det.dx_hist.min+det.dx_hist.bins.length*det.dx_hist.step]},
+            yaxis:{...PL.yaxis,title:'Counts'},
+            margin:{l:38,r:8,t:24,b:30},
+            showlegend:false,
+        },PC2);
     }
 }

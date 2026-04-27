@@ -105,6 +105,31 @@ json AppState::apiHycalXY() const
                       {"nblocks_max", hxy_nblocks_max}}}};
 }
 
+json AppState::apiGemResiduals() const
+{
+    std::lock_guard<std::mutex> lk(data_mtx);
+    json dets = json::array();
+    int n = (int)gem_dx_hist.size();
+    int n_dets_runtime = std::min(n, gem_sys.GetNDetectors());
+    for (int d = 0; d < n; ++d) {
+        std::string name = (d < n_dets_runtime)
+            ? gem_sys.GetDetectors()[d].name
+            : ("GEM" + std::to_string(d));
+        dets.push_back({
+            {"id", d},
+            {"name", name},
+            {"dx_hist", histToJson(gem_dx_hist[d], gem_resid_min, gem_resid_max, gem_resid_step)},
+            {"dy_hist", histToJson(gem_dy_hist[d], gem_resid_min, gem_resid_max, gem_resid_step)},
+            {"matched_hits", gem_match_hits[d]},
+        });
+    }
+    return {{"enabled", gem_enabled},
+            {"detectors", dets},
+            {"events", gem_match_events},
+            {"cuts", {{"window_mm", gem_match_window_mm},
+                      {"require_ep_candidate", gem_match_require_ep}}}};
+}
+
 json AppState::apiOccupancy() const
 {
     std::lock_guard<std::mutex> lk(data_mtx);
@@ -427,6 +452,13 @@ void AppState::fillConfigJson(json &cfg) const
             {"nblocks_min", hxy_nblocks_min},
             {"nblocks_max", hxy_nblocks_max},
         }},
+        {"gem_hycal_match", {
+            {"require_ep_candidate", gem_match_require_ep},
+            {"window_mm", gem_match_window_mm},
+            {"residual_hist", {
+                {"min", gem_resid_min}, {"max", gem_resid_max}, {"step", gem_resid_step},
+            }},
+        }},
     };
     cfg["elog"] = {
         {"url", elog_url}, {"logbook", elog_logbook},
@@ -451,6 +483,8 @@ AppState::ApiResult AppState::handleReadApi(const std::string &uri) const
         return {true, apiMoller().dump()};
     if (uri == "/api/physics/hycal_xy")
         return {true, apiHycalXY().dump()};
+    if (uri == "/api/gem/residuals")
+        return {true, apiGemResiduals().dump()};
     if (uri == "/api/cluster_hist")
         return {true, apiClusterHist().dump()};
     if (uri.rfind("/api/hist/", 0) == 0)
