@@ -214,12 +214,12 @@ private:
     void etReaderThread();
     void sleepMs(int ms);
 
-    // LIVETIME — temporary: poll external command for live time
-    std::string livetime_cmd_ = "tcpClient trig0 tsBusy 2>/dev/null";
-    static constexpr int livetime_poll_sec_ = 5;
-    std::atomic<double> livetime_{-1.0};   // <0 = not available
-    std::thread livetime_thread_;
-    void livetimePollThread();
+    // DAQ livetime (percent).  <0 = not available.
+    // Intended to be written by the data-stream consumer when a TI scaler
+    // bank carrying trig0/tsBusy counters is decoded.  The previous
+    // popen("tcpClient trig0 tsBusy ...") poller was removed because it
+    // interrupted the DAQ.
+    std::atomic<double> livetime_{-1.0};
 #endif
 
     void joinAll();      // join all background threads (safe to call multiple times)
