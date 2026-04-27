@@ -367,7 +367,8 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                                         ev->lms_peak_height[lms_nch][p]   = wres.peaks[p].height;
                                         ev->lms_peak_time[lms_nch][p]     = wres.peaks[p].time;
                                         ev->lms_peak_integral[lms_nch][p] = wres.peaks[p].integral;
-                                        if(wres.peaks[p].time > 100.f && wres.peaks[p].time < 200.f
+                                        if(wres.peaks[p].time > gRunConfig.hc_time_win_lo &&
+                                           wres.peaks[p].time < gRunConfig.hc_time_win_hi
                                             && wres.peaks[p].height > best_h) {
                                             best_h = wres.peaks[p].height; best = p;
                                         }
@@ -403,7 +404,8 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                                 ev->peak_height[nch][p]   = wres.peaks[p].height;
                                 ev->peak_time[nch][p]     = wres.peaks[p].time;
                                 ev->peak_integral[nch][p] = wres.peaks[p].integral;
-                                if(wres.peaks[p].time > 100.f && wres.peaks[p].time < 200.f
+                                if(wres.peaks[p].time > gRunConfig.hc_time_win_lo &&
+                                   wres.peaks[p].time < gRunConfig.hc_time_win_hi
                                     && wres.peaks[p].height > best_h) {
                                     best_h = wres.peaks[p].height; best = p;
                                 }
@@ -662,7 +664,8 @@ if(!prad1){
                             int bestIdx = -1;
                             float bestHeight = -1.f;
                             for(int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; ++p){
-                                if(wres.peaks[p].time > 100. && wres.peaks[p].time < 200.) {
+                                if(wres.peaks[p].time > gRunConfig.hc_time_win_lo &&
+                                   wres.peaks[p].time < gRunConfig.hc_time_win_hi) {
                                     if(wres.peaks[p].height > bestHeight) {
                                         bestHeight = wres.peaks[p].height;
                                         bestIdx = p;
