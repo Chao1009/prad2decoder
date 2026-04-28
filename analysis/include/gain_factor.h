@@ -54,13 +54,20 @@ struct GainFactorTable {
 };
 
 // Returns the path to the best-matching gain factor file for run_num.
-// Returns an empty string if no suitable file exists.
+// Selection rule:
+//   run_num >= 0 -> file whose run number is the largest that is <= run_num;
+//                   if no such file exists, falls back to the nearest available file.
+//   run_num <  0 -> file with the largest run number ("latest")
+// Returns an empty string if the directory is empty or inaccessible.
 inline std::string FindGainFactorFile(const std::string &dir, int run_num)
 {
     const std::regex pat(R"(prad_(\d{6})_LMS\.dat)");
 
-    int    best_run  = -1;
+    int    best_run   = -1;
     std::string best_path;
+    // fallback: nearest file when no file satisfies run <= run_num
+    int    near_run   = -1;
+    std::string near_path;
 
     std::error_code ec;
     for (auto &entry : std::filesystem::directory_iterator(dir, ec)) {
@@ -75,10 +82,19 @@ inline std::string FindGainFactorFile(const std::string &dir, int run_num)
         } else if (rn <= run_num && rn > best_run) {
             best_run = rn; best_path = entry.path().string();
         }
+        // Track nearest file regardless of direction (for fallback)
+        if (near_run < 0 || std::abs(rn - run_num) < std::abs(near_run - run_num))
+        { near_run = rn; near_path = entry.path().string(); }
     }
     if (ec) {
         std::cerr << "Warning: cannot iterate gain_factor dir " << dir
                   << ": " << ec.message() << "\n";
+    }
+
+    if (run_num >= 0 && best_path.empty() && !near_path.empty()) {
+        std::cerr << "Warning: no gain factor file with run <= " << run_num
+                  << " in " << dir << "; using nearest run " << near_run << " instead.\n";
+        return near_path;
     }
     return best_path;
 }
