@@ -14,6 +14,7 @@
 
 #include "Replay.h"
 #include "InstallPaths.h"
+#include "ConfigSetup.h"
 
 #include <iostream>
 #include <string>
@@ -33,6 +34,8 @@
 #ifndef DATABASE_DIR
 #define DATABASE_DIR "."
 #endif
+
+using namespace analysis;
 
 static std::vector<std::string> collectEvioFiles(const std::string &path)
 {
@@ -119,6 +122,10 @@ int main(int argc, char *argv[])
 
     std::cout << "Processing " << num_files << " files with "
               << num_threads << " threads\n";
+    
+    std::string run_str = get_run_str(evio_files[0]);
+    int run_num = get_run_int(evio_files[0]);
+    gRunConfig = LoadRunConfig(db_dir + "/runinfo/2p1_general.json", run_num);
 
     // shared work queue: atomic index into file list
     std::atomic<int> next_file{0};
@@ -137,7 +144,7 @@ int main(int argc, char *argv[])
             if (idx >= num_files) break;
 
             std::string out = output_dir + "/" + makeOutputFile(evio_files[idx]);
-            bool ok = replay.Process(evio_files[idx], out, db_dir, max_events, peaks, daq_config);
+            bool ok = replay.Process(evio_files[idx], out, gRunConfig, db_dir, max_events, peaks, daq_config);
 
             std::lock_guard<std::mutex> lk(io_mtx);
             if (ok) {

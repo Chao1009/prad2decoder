@@ -28,6 +28,10 @@
             "matching": {
                 "radius": 15.0,
                 "use_square_cut": true
+            },
+            "gain_factor": {
+                "data_dir": "gain_factor",
+                "ref_run": 23915
             }
         }
     ]

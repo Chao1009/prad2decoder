@@ -11,6 +11,7 @@
 #include "MatchingTools.h"
 #include "ConfigSetup.h"
 #include "InstallPaths.h"
+#include "gain_factor.h"
 
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -222,7 +223,8 @@ void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
     tree->Branch("ssp_raw", &ev.ssp_raw);
 }
 
-bool Replay::Process(const std::string &input_evio, const std::string &output_root, const std::string &db_dir,
+bool Replay::Process(const std::string &input_evio, const std::string &output_root, RunConfig &gRunConfig,
+                     const std::string &db_dir,
                      int max_events, bool write_peaks , const std::string &daq_config_file)
 {
     // build ROC tag → crate index mapping from DAQ config JSON
@@ -270,9 +272,8 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
     fdec::WaveResult wres;
     int total = 0;
 
-    fdec::HyCalSystem hycal;
-    hycal.Init(db_dir + "/hycal_modules.json", db_dir + "/daq_map.json");
-    analysis::PhysicsTools physics(hycal);
+    int run_num = get_run_int(input_evio);
+    auto gain_correction = prad2::ComputeGainCorrection(db_dir + "/" + gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
 
     while (ch.Read() == evc::status::success) {
         if (!ch.Scan()) continue;
@@ -379,7 +380,9 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                         ev->ped_mean[nch] = wres.ped.mean;
                         ev->ped_rms[nch]  = wres.ped.rms;
                         ev->integral[nch] = computeIntegral(cd, wres.ped.mean);
-
+                        if(mod_id > 1000) ev->gain_factor[nch] = gain_correction.w[mod_id-1000].avg;
+                        else ev->gain_factor[nch] = gain_correction.g[mod_id].avg;
+                        
                         if (write_peaks) {
                             ev->npeaks[nch] = wres.npeaks;
                             for (int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; ++p) {
@@ -543,6 +546,9 @@ if(!prad1){
     
     int total = 0;
 
+    int run_num = get_run_int(input_evio);
+    auto gain_correction = prad2::ComputeGainCorrection(db_dir + "/" + gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
+
     while (ch.Read() == evc::status::success) {
         if (!ch.Scan()) continue;
         if (ch.GetEventType() != evc::EventType::Physics) continue;
@@ -650,10 +656,10 @@ if(!prad1){
                             if (bestIdx < 0) continue;
                             adc = wres.peaks[bestIdx].integral;
                         }
-                        // TODO: use real calibration constants from database.
-                        // Currently using a flat 0.1 MeV/ADC for all modules as placeholder.
-                        // PbWO4 and lead-glass have different gains — load from hycal_calibration.json.
-                        //hycal.SetCalibConstant(mod->id, 0.1);
+                        //gain correction for HyCal modules
+                        if(mod->id > 1000) adc *= gain_correction.w[mod->id-1000].avg;
+                        else adc *= gain_correction.g[mod->id].avg;
+
                         float energy = static_cast<float>(mod->energize(adc));
                         clusterer.AddHit(mod->index, energy);
                         ev->total_energy += energy;
