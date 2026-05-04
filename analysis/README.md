@@ -13,8 +13,8 @@ The configuration produces three artefacts:
 | Artefact | Location |
 |----------|----------|
 | `prad2ana_*` executables (replay, calibration, …) | `<build>/bin/`, installed to `<prefix>/bin/` |
-| `libprad2ana.a` — static library exposing `analysis::*` (`Replay`, `PhysicsTools`, `MatchingTools`) | `<build>/analysis/`, installed to `<prefix>/lib/` |
-| Headers (`PhysicsTools.h`, `MatchingTools.h`, `Replay.h`, `ConfigSetup.h`) | installed to `<prefix>/include/prad2ana/` |
+| `libprad2ana.a` — static library exposing `analysis::*` (`Replay`, `PhysicsTools`).  HyCal↔GEM matching lives in `prad2::trk::TrackMatcher` (header `prad2det/TrackMatcher.h`). | `<build>/analysis/`, installed to `<prefix>/lib/` |
+| Headers (`PhysicsTools.h`, `Replay.h`, `ConfigSetup.h`) | installed to `<prefix>/include/prad2ana/` |
 
 The static library is what makes ACLiC scripts work in installed mode —
 without it, `analysis::*` symbols would be unresolved at link time.

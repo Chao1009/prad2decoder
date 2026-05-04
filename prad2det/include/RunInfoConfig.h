@@ -7,7 +7,7 @@
 //
 //     {
 //       "defaults": {                         // invariants — merged under
-//         "target": [...], "matching": {...}, // every configurations entry.
+//         "target": [...],                    // every configurations entry.
 //         "gem": {"detectors": [{"id":0,"tilting":[...]}, ...]}
 //       },
 //       "configurations": [                   // sparse period entries.
@@ -81,8 +81,6 @@ struct RunConfig {
     // Analysis-specific extras (viewer ignores).
     float hc_time_win_lo = 100.f;  // ns
     float hc_time_win_hi = 200.f;  // ns
-    float matching_radius     = 15.f;
-    bool  matching_use_square = true;
     // For gain correction: which run to use as reference for computing the correction factors.  If negative, use the latest run with gain factors available.
     std::string gain_data_dir = "";
     int gain_ref_run = 23915;
@@ -231,11 +229,10 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
             if (tc.contains("hycal_module_file"))
                 result.hycal_time_cut_file = tc["hycal_module_file"].get<std::string>();
         }
-        if (c.contains("matching")) {
-            const auto &m = c["matching"];
-            if (m.contains("radius"))         result.matching_radius     = m["radius"].get<float>();
-            if (m.contains("use_square_cut")) result.matching_use_square = m["use_square_cut"].get<bool>();
-        }
+        // The legacy "matching": { radius, use_square_cut } block is no longer
+        // honoured — matching now goes through prad2::trk::TrackMatcher with
+        // σ_GEM and σ_HC(E) coefficients sourced from
+        // reconstruction_config.json:matching.  Keys silently ignored.
         if (c.contains("gain_factor") && c["gain_factor"].is_object()) {
             const auto &gf = c["gain_factor"];
             if (gf.contains("data_dir")) result.gain_data_dir = gf["data_dir"].get<std::string>();
@@ -339,8 +336,6 @@ inline bool WriteRunConfig(const std::string &path, int run_num,
         entry["gem"] = gem;
     }
     entry["time_cuts"]["hc_time_window"] = nlohmann::json::array({geo.hc_time_win_lo, geo.hc_time_win_hi});
-    entry["matching"]["radius"]          = geo.matching_radius;
-    entry["matching"]["use_square_cut"]  = geo.matching_use_square;
     if (!geo.gain_data_dir.empty() || geo.gain_ref_run >= 0) {
         if (!geo.gain_data_dir.empty()) entry["gain_factor"]["data_dir"] = geo.gain_data_dir;
         if (geo.gain_ref_run >= 0)      entry["gain_factor"]["ref_run"]  = geo.gain_ref_run;
