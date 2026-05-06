@@ -321,6 +321,7 @@ function passesTriggerFilter(triggerBits){
 
 let autoPostEnabled=false;     // server-controlled, from /api/config
 let autoIsReporting=false;     // true while we're handling a capture_request
+let pendingPrestartClear=false; // PRESTART arrived mid-capture; flush on done
 
 function autoStatusEl(){ return document.getElementById('auto-status'); }
 
@@ -346,8 +347,16 @@ function autoUpdateStatus(){
 }
 
 function autoSetReporting(on){
+    const wasReporting = autoIsReporting;
     autoIsReporting = !!on;
     autoUpdateStatus();
+    // Capture finished (success, failure, or auto_capture_done from
+    // server-side timeout): if PRESTART for the next run arrived while
+    // we were busy, run the clear now that the screenshots are safe.
+    // doClearAll() resets pendingPrestartClear itself.
+    if(wasReporting && !autoIsReporting && pendingPrestartClear){
+        doClearAll();
+    }
 }
 
 // Called from initReport() once /api/config has arrived.
@@ -357,9 +366,15 @@ function applyAutoReportConfig(cfg){
     autoUpdateStatus();
 }
 
-// Centralised Clear All — used by both the manual button and the
-// PRESTART control event.
+// Centralised Clear All — used by the manual button.  PRESTART goes
+// through prestartClearAll() so the chosen reporter can defer the
+// clear until its in-flight capture finishes (otherwise the screenshots
+// would land on freshly-wiped histograms).  The manual button has higher
+// priority than the deferred prestart-clear: any direct doClearAll()
+// supersedes a parked deferral so we don't fire it again later and wipe
+// the new run's freshly-accumulating data.
 function doClearAll(){
+    pendingPrestartClear = false;
     return Promise.all([
         fetch('/api/hist/clear').then(r=>r.json()),
         fetch('/api/lms/clear').then(r=>r.json()),
@@ -367,6 +382,18 @@ function doClearAll(){
     ]).then(clearFrontend).catch(()=>{
         document.getElementById('status-bar').textContent='Error clearing data';
     });
+}
+
+// PRESTART entry point.  Non-reporter clients clear immediately (their
+// autoIsReporting is always false); the chosen reporter parks the clear
+// until autoSetReporting(false) flushes it.  Manual button still calls
+// doClearAll() directly so operators are never gated on auto-report.
+function prestartClearAll(){
+    if(autoIsReporting){
+        pendingPrestartClear = true;
+        return;
+    }
+    return doClearAll();
 }
 
 function initAutoReport(){

@@ -236,8 +236,12 @@ function connectWebSocket() {
                 // PRESTART → clear all data so the new run starts blank.
                 // END is handled server-side: the server dispatches a
                 // 'capture_request' below to one chosen client.
-                if (msg.kind === 'prestart' && typeof doClearAll === 'function') {
-                    doClearAll();
+                // prestartClearAll() defers the clear on the chosen
+                // reporter until its capture finishes — otherwise the
+                // screenshots would race against a wiped canvas.
+                if (msg.kind === 'prestart' &&
+                    typeof prestartClearAll === 'function') {
+                    prestartClearAll();
                 }
             } else if (msg.type === 'capture_request') {
                 // Server picked us as the on-demand reporter for this
