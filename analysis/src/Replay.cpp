@@ -949,6 +949,17 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                                     ev->total_energy += energy;
                                     nch++;
                                 }
+                                    adc = wres.peaks[bestIdx].integral;
+                                    time = wres.peaks[bestIdx].time;
+                                }
+                                //gain correction for HyCal modules
+                                if(mod->id > 1000) adc *= gain_correction.w[mod->id-1000].corr[1]; // Use g2-based correction for PbWO4 (matches LMS2)
+                                else adc *= gain_correction.g[mod->id].corr[1]; // Use g2-based correction for PbGlass (matches LMS2)
+
+                                float energy = static_cast<float>(mod->energize(adc));
+                                clusterer.AddHit(mod->index, energy, time);
+                                ev->total_energy += energy;
+                                nch++;
                             }
                         }
                     }
