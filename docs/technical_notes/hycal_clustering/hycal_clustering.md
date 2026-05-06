@@ -325,6 +325,118 @@ original Step 1 by construction:
 Existing analyses that pass $t = 0$ for every hit are therefore
 unaffected.
 
+## Validation on PRad-II beam data
+
+To verify that the timing-coincidence path neither distorts well-formed
+clusters nor invents new ones, we run both code paths on the same EVIO
+input and compare a clean physics observable: the cluster energy spectrum
+of single-cluster events with $E_{\mathrm{cluster}} > 3$ GeV.
+[`analysis/pyscripts/benchmark_hycal_timing.py`](../../../analysis/pyscripts/benchmark_hycal_timing.py)
+runs the wave analyser once per channel per event, then drives two
+`HyCalCluster` instances from the same peak set:
+
+* **legacy** — `seed_time_window = -1` ns; one `AddHit` per module with
+  the largest-integral peak in $[t_{\mathrm{lo}}, t_{\mathrm{hi}}]$ (the
+  per-run window from `RunInfoConfig`, here $[130, 200]$ ns for run
+  24386).
+* **new** — `seed_time_window = W`; every peak in
+  $[t_{\mathrm{lo}}, t_{\mathrm{hi}}]$ pushed as a separate `AddHit`,
+  with the seed-anchored coincidence cut applied during BFS.
+
+The selection is intentionally simple: count events with **exactly one**
+reconstructed cluster of $E > 3$ GeV, histogram those single cluster
+energies, and fit a Gaussian to the peak. The PRad-II elastic kinematic
+for run 24386 places the expected peak near 3.45 GeV.
+
+### Run 24386 (100 000 physics events, 98 001 triggered, $W = 16$ ns)
+
+The 10-ns physical timing jitter for HyCal puts $W = 16$ ns comfortably
+beyond the signal core, leaving ~6 ns of margin per side. With this
+margin the gate is expected to be inert on a clean data set and to
+activate only when out-of-time pulses sit outside $\pm 16$ ns of the
+seed.
+
+![bench W=16](plots/bench_024386_w16.png)
+
+| metric | legacy | new ($W = 16$ ns) | Δ |
+|---|---:|---:|---:|
+| events with $E > 3$ GeV (single cluster) | 59 890 | 59 886 | $-0.0\,\%$ |
+| Gaussian peak $\mu$ (MeV) | 3491.7 | 3491.6 | $-0.1$ |
+| Gaussian width $\sigma$ (MeV) | 80.3 | 80.3 | $\pm 0$ |
+| events inside fit window | 51 207 | 51 223 | $+16$ |
+
+The two paths agree at the per-mille level. This is the desired regime:
+the timing cut is wide enough to admit every legitimate shower pulse,
+and the data set has no significant out-of-window pile-up, so the new
+method coincides with legacy.
+
+### Calibration-equalised resolution
+
+The first comparison above leaves the per-module calibration constants
+fixed; those constants were determined under legacy clustering and are
+therefore implicitly biased toward whatever energy reconstruction the
+legacy path produced. To remove that bias from the comparison, the
+benchmark accepts a `--calibrate` flag that frees the per-seed-module
+gain on a high-statistics inner-ring sample (radius < 200 mm, seed
+energy ≥ 200 MeV, ≥ 30 events per module) and refines each module's
+multiplicative correction iteratively so that
+
+$$
+\mathrm{median}\bigl\{ g_M \cdot E_{\mathrm{cluster}} \,:\,
+\mathrm{seed} = M \bigr\} \;\to\; \mu_{\mathrm{target}} = 3488.5\ \mathrm{MeV},
+$$
+
+starting from $g_M = 1$. After two passes a stable correction is
+reached for every qualifying module; the recalibrated cluster energies
+are then re-fitted with the same Gaussian.
+
+![bench W=16 calibration](plots/bench_024386_w16cal_calibrated.png)
+
+| metric (inner ring, 148 modules, 56.6k events) | legacy | new ($W = 16$ ns) |
+|---|---:|---:|
+| Gaussian $\sigma$ before recal (MeV) | 80.2 | 80.2 |
+| Gaussian $\sigma$ after recal  (MeV) | 69.2 | 69.2 |
+| **fractional resolution $\sigma_E / E$** | **1.98 %** | **1.98 %** |
+
+The two paths give the same resolution to the second decimal — the
+timing-coincidence extension is benign on a clean run with the gate
+sized for the physical jitter.
+
+### What does an over-tight gate cost?
+
+Repeating the calibration test at $W = 8$ ns — half the physical
+jitter — shows what happens when the gate is mechanically active on
+real signal:
+
+| metric (inner ring, 147 modules, 55.8k events) | legacy | new ($W = 8$ ns) |
+|---|---:|---:|
+| Gaussian $\sigma$ before recal (MeV) | 80.2 | 88.2 |
+| Gaussian $\sigma$ after recal  (MeV) | 69.2 | 78.5 |
+| **fractional resolution $\sigma_E / E$** | 1.98 % | **2.25 %** |
+
+The earlier ~47 MeV apparent peak shift at $W = 8$ ns was therefore
+not noise rejection but real signal being clipped: the per-module
+recalibration brings the peak back to the target, and the residual
+resolution is $\sim 0.3$ percentage points worse than legacy because
+some genuine shower tail pulses outside $\pm 8$ ns are dropped.
+
+Putting these together fixes the recommendation: the gate must be
+wider than the physical timing jitter — set $W$ to roughly
+$\sigma_t^{\mathrm{HyCal}} + (\text{a few ns margin})$. With
+$\sigma_t^{\mathrm{HyCal}} \approx 10$ ns we recommend $W = 16$ ns as
+the production default. The value of the timing extension shows up on
+data sets with significant out-of-time pile-up, where legacy would
+pull a wrong pulse into the cluster while the gate excludes it; on a
+clean elastic run such as 24386 the cut is correctly inert, and that
+inertness is itself a useful validation result.
+
+The benchmark script writes a TSV summary plus the energy-spectrum PNG;
+when run with `--calibrate` it additionally writes
+`<out>_calibrated.png` showing the inner-ring spectra before and after
+per-module gain refinement, and extends the TSV with per-method
+$\mu_{\mathrm{pre}}, \sigma_{\mathrm{pre}}, \mu_{\mathrm{post}},
+\sigma_{\mathrm{post}}, \sigma_E/E$ rows.
+
 ## Position reconstruction — parameter sensitivity
 
 The shower-depth and the log-weighted-centroid threshold are the two
@@ -452,6 +564,9 @@ sample size for figure 7.
   per-run cluster-config defaults including `seed_time_window`.
 - [`analysis/pyscripts/study_hycal_timing.py`](../../../analysis/pyscripts/study_hycal_timing.py) —
   EVIO-driven dt study tool that wraps `CollectNeighborTiming`.
+- [`analysis/pyscripts/benchmark_hycal_timing.py`](../../../analysis/pyscripts/benchmark_hycal_timing.py) —
+  legacy-vs-gated single-cluster benchmark used to produce the
+  validation plots in [Validation on PRad-II beam data](#validation-on-prad-ii-beam-data).
 - [`docs/REPLAYED_DATA.md`](../../REPLAYED_DATA.md) —
   branch layout for the recon tree (where `ClusterHit` lands as `cl_*`).
 - PRad-I lineage: `PRadIslandCluster` / `PRadHyCalReconstructor` in
