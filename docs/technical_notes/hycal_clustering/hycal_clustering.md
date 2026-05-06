@@ -327,232 +327,150 @@ unaffected.
 
 ## Validation on PRad-II beam data
 
-To verify that the timing-coincidence path neither distorts well-formed
-clusters nor invents new ones, we run both code paths on the same EVIO
-input and compare a clean physics observable: the cluster energy spectrum
-of single-cluster events with $E_{\mathrm{cluster}} > 3$ GeV.
+We benchmark the timing-coincidence path against legacy on run 24386
+(100 000 physics events, 98 001 triggered) using a deliberately simple
+elastic-photon proxy: events with **exactly one** reconstructed cluster
+above 3 GeV. The PRad-II elastic kinematic for this run places the
+expected peak at 3488.5 MeV.
 [`analysis/pyscripts/benchmark_hycal_timing.py`](../../../analysis/pyscripts/benchmark_hycal_timing.py)
-runs the wave analyser once per channel per event, then drives two
-`HyCalCluster` instances from the same peak set:
+runs the wave analyser once per channel and feeds the same peak set
+into two `HyCalCluster` instances:
 
-* **legacy** — `seed_time_window = -1` ns; one `AddHit` per module with
-  the largest-integral peak in $[t_{\mathrm{lo}}, t_{\mathrm{hi}}]$ (the
-  per-run window from `RunInfoConfig`, here $[130, 200]$ ns for run
-  24386).
-* **new** — `seed_time_window = W`; every peak in
-  $[t_{\mathrm{lo}}, t_{\mathrm{hi}}]$ pushed as a separate `AddHit`,
-  with the seed-anchored coincidence cut applied during BFS.
+* **legacy** — `seed_time_window = -1` ns; one `AddHit` per module
+  with the largest-integral peak in the per-run window
+  $[t_{\mathrm{lo}}, t_{\mathrm{hi}}]$ (here $[130, 200]$ ns from
+  `RunInfoConfig`).
+* **gated** — `seed_time_window = W`; every in-window peak pushed as a
+  separate `AddHit`, with the seed-anchored coincidence cut applied
+  during BFS.
 
-The selection is intentionally simple: count events with **exactly one**
-reconstructed cluster of $E > 3$ GeV, histogram those single cluster
-energies, and fit a Gaussian to the peak. The PRad-II elastic kinematic
-for run 24386 places the expected peak near 3.45 GeV.
+### Headline ($W = 16$ ns)
 
-### Run 24386 (100 000 physics events, 98 001 triggered, $W = 16$ ns)
-
-The 10-ns physical timing jitter for HyCal puts $W = 16$ ns comfortably
-beyond the signal core, leaving ~6 ns of margin per side. With this
-margin the gate is expected to be inert on a clean data set and to
-activate only when out-of-time pulses sit outside $\pm 16$ ns of the
-seed.
+The HyCal timing jitter is $\sigma_t \approx 10$ ns; setting $W = 16$ ns
+leaves $\sim$6 ns of margin per side. With that margin the gate is
+expected to be inert on a clean run and to activate only when
+out-of-time pulses sit outside $\pm W$ of the seed.
 
 ![bench W=16](plots/bench_024386_w16.png)
 
-| metric | legacy | new ($W = 16$ ns) | Δ |
+| metric | legacy | gated ($W = 16$ ns) | Δ |
 |---|---:|---:|---:|
 | events with $E > 3$ GeV (single cluster) | 59 890 | 59 886 | $-0.0\,\%$ |
 | Gaussian peak $\mu$ (MeV) | 3491.7 | 3491.6 | $-0.1$ |
 | Gaussian width $\sigma$ (MeV) | 80.3 | 80.3 | $\pm 0$ |
-| events inside fit window | 51 207 | 51 223 | $+16$ |
 
-The two paths agree at the per-mille level. This is the desired regime:
-the timing cut is wide enough to admit every legitimate shower pulse,
-and the data set has no significant out-of-window pile-up, so the new
-method coincides with legacy.
+The two paths agree at the per-mille level — the desired regime for a
+clean run.
+
+### $W = 8$ ns: the gate must exceed the jitter
+
+A tighter gate of $\pm 8$ ns ($< \sigma_t$) clips into the signal core
+and degrades performance: 59 890 → 59 045 events ($-1.4\,\%$), Gaussian
+$\sigma$ 80.3 → 88.2 MeV, peak shifted by $\sim$47 MeV. After
+calibration-equalisation (next subsection) the residual $\sigma_E/E$ is
+worse than legacy by $\sim$0.3 pp. The recommendation is therefore
+$W \gtrsim \sigma_t + \mathrm{margin}$, with $W = 16$ ns the production
+default.
 
 ### Calibration-equalised resolution
 
-The first comparison above leaves the per-module calibration constants
-fixed; those constants were determined under legacy clustering and are
-therefore implicitly biased toward whatever energy reconstruction the
-legacy path produced. To remove that bias from the comparison, the
-benchmark accepts a `--calibrate` flag that frees the per-seed-module
-gain on a high-statistics inner-ring sample (radius < 200 mm, seed
-energy ≥ 200 MeV, ≥ 30 events per module) and refines each module's
-multiplicative correction iteratively so that
+The current per-module calibration was set under legacy clustering, so
+absolute energies under either path inherit a method-specific bias. To
+isolate the **intrinsic resolution** the benchmark accepts a
+`--calibrate` flag that frees per-seed-module gains $g_M$ on an inner
+ring (radius < 200 mm, seed energy $\geq$ 200 MeV, $\geq$ 30 events per
+module) and iteratively refines them so that
 
 $$
-\mathrm{median}\bigl\{ g_M \cdot E_{\mathrm{cluster}} \,:\,
-\mathrm{seed} = M \bigr\} \;\to\; \mu_{\mathrm{target}} = 3488.5\ \mathrm{MeV},
+\mathrm{ref}\bigl\{ g_M \cdot E_{\mathrm{cluster}} \,:\, \mathrm{seed} = M \bigr\}
+\;\to\; \mu_{\mathrm{target}} = 3488.5\ \mathrm{MeV},
 $$
 
-starting from $g_M = 1$. After two passes a stable correction is
-reached for every qualifying module; the recalibrated cluster energies
-are then re-fitted with the same Gaussian.
+starting from $g_M = 1$. The per-module reference is selectable via
+`--cal-method`: `median` is cheap but biased low by the radiative
+tail; `cb-peak` (recommended) fits a Crystal-Ball to each module's
+energy spectrum on a $\pm 200$ MeV window and uses the fitted $\mu$,
+falling back to a narrow Gaussian and the bare argmax for
+low-statistics modules. Two refinement passes converge for every
+qualifying module.
 
-![bench W=16 calibration](plots/bench_024386_w16cal_calibrated.png)
-
-| metric (inner ring, 148 modules, 56.6k events) | legacy | new ($W = 16$ ns) |
-|---|---:|---:|
-| Gaussian $\sigma$ before recal (MeV) | 80.2 | 80.2 |
-| Gaussian $\sigma$ after recal  (MeV) | 69.2 | 69.2 |
-| **fractional resolution $\sigma_E / E$** | **1.98 %** | **1.98 %** |
-
-The two paths give the same resolution to the second decimal — the
-timing-coincidence extension is benign on a clean run with the gate
-sized for the physical jitter.
-
-The remaining ~2 % spread is dominated by the innermost PbWO₄ modules,
-where shower leakage into the beam hole reduces the effective response
-and broadens the per-module distribution. Repeating the calibration
-test while dropping seed modules within the central 4 × 4 PbWO₄ block
-([row, col] ∈ [16, 19]) and then within the central 6 × 6 block
-([row, col] ∈ [15, 20]) confirms this picture and shows the
-underlying single-cluster resolution improving by $\sim$3 % per layer
-removed:
-
-| inner-block exclusion | modules used | events | $\sigma_E / E$ legacy | $\sigma_E / E$ new ($W=16$) |
-|---|---:|---:|---:|---:|
-| none (full $r < 200$ mm) | 148 | 56 617 | 1.98 % | 1.98 % |
-| 4 × 4 around beam hole ([16, 19]) | 141 | 43 129 | 1.96 % | 1.96 % |
-| 6 × 6 around beam hole ([15, 20]) | 128 | 34 997 | **1.92 %** | **1.92 %** |
-
-In every configuration the legacy and gated paths agree to the second
-decimal — the ~6 % improvement from peeling off the leakage-prone
-inner ring is independent of the clustering method, and the gating
-adds neither signal nor noise to the contained-shower sample. To
-attempt to invoke `--exclude-rowcol R_LO R_HI C_LO C_HI`:
-
-```bash
-python analysis/pyscripts/benchmark_hycal_timing.py \
-    /mnt/hgfs/Data/PRad2/prad_024386 out_024386_w16cal_excl15_20 \
-    --max-events 100000 --window 16 --calibrate --exclude-rowcol 15 20 15 20
-```
-
-### Crystal-Ball fit and the residual gap to the design resolution
-
-The PbWO₄ stochastic term from beam tests is parametrised as
-$\sigma_E / E \approx 2.6\,\% / \sqrt{E\,[\mathrm{GeV}]}$, which gives
-$1.39\,\%$ at $E = 3.49$ GeV. The Gaussian fit on the recalibrated
-inner ring lands at $1.92\,\%$ — well above this design value. The
-discrepancy raises two questions:
-
-1. is the Gaussian width inflated by the long low-side tail (radiative
-   and shower-leakage), and
-2. what residual systematics drive the rest of the gap?
-
-The benchmark therefore overlays a **single-sided Crystal-Ball** fit
-(power-law continuation on the low-energy side) on the same
-recalibrated histogram:
+The recalibrated cluster-energy spectrum is then fit with both a
+Gaussian (sensitive to the FWHM) and a single-sided Crystal-Ball
+(left-tail power law),
 
 $$
 f(x;\,\mu,\sigma,\alpha,n) =
 \begin{cases}
 \exp\!\left(-\tfrac{1}{2}\bigl(\tfrac{x-\mu}{\sigma}\bigr)^{2}\right)
-   & \tfrac{x-\mu}{\sigma} > -\alpha \\[4pt]
+   & \tfrac{x-\mu}{\sigma} > -\alpha, \\[4pt]
 \left(\tfrac{n}{|\alpha|}\right)^{n}\!e^{-\alpha^{2}/2}
 \left(\tfrac{n}{|\alpha|}-|\alpha|-\tfrac{x-\mu}{\sigma}\right)^{-n}
-   & \text{otherwise}
+   & \text{otherwise},
 \end{cases}
 $$
 
 with $\alpha > 0$ the transition point in $\sigma$ units and $n > 1$
-the tail exponent. The Crystal-Ball gives a slightly tighter width
-(67.1 MeV $\to$ 66.7 MeV in the [15, 20] exclusion case, $\sigma_E/E$
-1.92 % $\to$ 1.91 %) — but the fit converges with $n = 1.3$ (at the
-lower physical bound) and $\alpha = 1.59$, indicating the low-side
-tail in this run is heavier than a single-sided CB can absorb. Most of
-the observed width is the FWHM of the core, not asymmetry.
+the tail exponent.
 
-![bench W=16 calibration with CB](plots/bench_024386_w16cal_excl15_20_cb_calibrated.png)
+![bench W=16 calibration with CB](plots/bench_024386_w16cal_excl15_20_cbpeak_calibrated.png)
 
-Closing the remaining $\sim 0.5$ percentage-point gap to the design
-$\sigma_E/E$ likely needs one or more of the following — none of which
-the timing-coincidence path on its own can address:
+The recalibration tightens the inner-ring single-cluster spectrum
+substantially. Excluding the inner PbWO₄ block around the beam hole —
+where shower leakage broadens every module's response — sharpens the
+result further:
+
+| inner-block exclusion | modules used | events | $\sigma_E/E$ legacy | $\sigma_E/E$ gated |
+|---|---:|---:|---:|---:|
+| none (full $r < 200$ mm) | 148 | 56 617 | 1.98 % | 1.98 % |
+| 4 × 4 around beam hole ([16, 19]) | 141 | 43 129 | 1.96 % | 1.96 % |
+| 6 × 6 around beam hole ([15, 20]) | 128 | 34 997 | **1.92 %** | **1.92 %** |
+
+(Gaussian fits, `--cal-method cb-peak`. Legacy and gated agree to two
+decimals across every configuration.) For the [15, 20] exclusion the
+Crystal-Ball fit narrows the width by another $\sim$0.01 pp to
+$\sigma_E/E = 1.90\,\%$, and the calibrated peak lands within 1.3 MeV
+of $\mu_{\mathrm{target}}$ (vs.\ 6 MeV high under `--cal-method median`).
+The CB fit converges with $n \to 1.3$ at the lower physical bound,
+indicating the low-side tail is heavier than a single-sided
+Crystal-Ball can absorb — most of the residual width is the FWHM of
+the core, not asymmetry.
+
+```bash
+python analysis/pyscripts/benchmark_hycal_timing.py \
+    /mnt/hgfs/Data/PRad2/prad_024386 out_024386 \
+    --max-events 100000 --window 16 \
+    --calibrate --cal-method cb-peak --exclude-rowcol 15 20 15 20
+```
+
+### Residual gap to the stochastic-term design
+
+The PbWO₄ stochastic term from beam tests,
+$\sigma_E/E \approx 2.6\,\%/\sqrt{E\,[\mathrm{GeV}]}$, gives 1.39 % at
+$E = 3.49$ GeV. The measured 1.90 % therefore leaves $\sim$0.5 pp
+unaccounted for. The relative impact of the diagnostics already in
+the benchmark sets a hierarchy:
+
+| diagnostic | $\sigma_E/E$ shift |
+|---|---:|
+| inner-block exclusion ([15, 20]) | $-0.06$ pp |
+| `--cal-method cb-peak` over `median` | $-0.01$ pp |
+| Crystal-Ball fit over Gaussian | $-0.01$ pp |
+
+Closing the remaining $\sim$0.5 pp likely needs effects the benchmark
+cannot address from the per-event records alone:
 
 | candidate effect | how to test |
 |---|---|
-| Per-module gain reference is the **median** of a tailed distribution → bias the per-module correction low → inflate spread | Replace the median with the fitted Crystal-Ball peak position per module — see immediately below |
-| No GEM-tagged elastic selection → bremsstrahlung accidentals + pile-up under the elastic peak | Require a matched GEM hit at the projected vertex |
-| Shower leakage outside the cluster envelope (dead material, beam-hole edge) | Apply a cluster-flag mask (`kDeadNeighbor`, `kInnerBound`, `kTransition`) and/or an $E$-dependent leakage correction |
-| Module non-linearity (`cal_non_linear`) not populated for this run | Audit the per-run calibration JSON |
-| Both-sided tails (pile-up adding energy on the high side too) | Switch to a **double-sided** Crystal Ball |
+| No GEM-tagged elastic selection — bremsstrahlung accidentals + pile-up sit under the elastic peak | Require a matched GEM hit at the projected vertex |
+| Shower leakage outside the cluster envelope (dead material, beam-hole edge) | Mask `kDeadNeighbor` / `kInnerBound` / `kTransition` clusters; or fit an $E$-dependent leakage correction |
+| Module non-linearity (`cal_non_linear`) possibly not populated in the per-run calibration JSON | Audit `database/calibration/<run>.json` |
+| Two-sided pile-up (extra energy on the high side) | Switch to a double-sided Crystal-Ball |
 
-`benchmark_hycal_timing.py` writes both the Gaussian and Crystal-Ball
-parameters to the TSV in every `--calibrate` run, so any of these
-follow-ups can re-use the same per-event records collected here.
-
-#### Per-module reference: median vs. Crystal-Ball peak
-
-The first item in the table — replacing the per-module median with a
-Crystal-Ball-fitted peak — is wired into the benchmark via
-`--cal-method {median, cb-peak}` (default `median` for backwards
-compatibility). With `cb-peak` the gain refinement loop fits a
-single-sided CB to the per-module energy histogram on a $\pm 200$ MeV
-window around the argmax (with narrow-Gaussian and bare-argmax
-fall-throughs for low-statistics modules) and uses the fitted $\mu$ as
-the reference instead of `np.median`.
-
-Re-running the [15, 20]-exclusion configuration with `--cal-method cb-peak`:
-
-| per-module reference | $\mu$ post (MeV) | $\sigma_G$ (MeV) | $\sigma_E/E$ (G) | $\sigma_{CB}$ (MeV) | $\sigma_E/E$ (CB) |
-|---|---:|---:|---:|---:|---:|
-| `median` | 3494.5 | 67.1 | 1.92 % | 66.7 | 1.91 % |
-| `cb-peak` | **3487.2** | 66.5 | 1.91 % | 66.2 | **1.90 %** |
-
-Two things to read off the table:
-
-1. The **calibration $\mu$** now lands within 1.3 MeV of the
-   3488.5 MeV elastic target (vs. 6 MeV high under median) — the
-   median was being pulled low by the radiative tail and the gain
-   refinement was over-correcting by the same $\sim$0.2 %. The CB-peak
-   reference removes that bias.
-2. The $\sigma_E/E$ improvement is small (~0.01 pp). The per-module
-   median bias was therefore a real but minor contributor to the
-   $\sim$0.5 pp gap to the $2.6\,\%/\sqrt{E}$ design value. The
-   remaining width is dominated by effects the recalibration cannot
-   touch — GEM-tagged elastic selection, shower-leakage correction,
-   and (possibly) module non-linearity calibration are the natural
-   next places to look.
-
-The headline observation that legacy and the timing-coincidence path
-agree to the second decimal is unchanged across all four
-configurations (median + Gaussian/CB, cb-peak + Gaussian/CB).
-
-### What does an over-tight gate cost?
-
-Repeating the calibration test at $W = 8$ ns — half the physical
-jitter — shows what happens when the gate is mechanically active on
-real signal:
-
-| metric (inner ring, 147 modules, 55.8k events) | legacy | new ($W = 8$ ns) |
-|---|---:|---:|
-| Gaussian $\sigma$ before recal (MeV) | 80.2 | 88.2 |
-| Gaussian $\sigma$ after recal  (MeV) | 69.2 | 78.5 |
-| **fractional resolution $\sigma_E / E$** | 1.98 % | **2.25 %** |
-
-The earlier ~47 MeV apparent peak shift at $W = 8$ ns was therefore
-not noise rejection but real signal being clipped: the per-module
-recalibration brings the peak back to the target, and the residual
-resolution is $\sim 0.3$ percentage points worse than legacy because
-some genuine shower tail pulses outside $\pm 8$ ns are dropped.
-
-Putting these together fixes the recommendation: the gate must be
-wider than the physical timing jitter — set $W$ to roughly
-$\sigma_t^{\mathrm{HyCal}} + (\text{a few ns margin})$. With
-$\sigma_t^{\mathrm{HyCal}} \approx 10$ ns we recommend $W = 16$ ns as
-the production default. The value of the timing extension shows up on
-data sets with significant out-of-time pile-up, where legacy would
-pull a wrong pulse into the cluster while the gate excludes it; on a
-clean elastic run such as 24386 the cut is correctly inert, and that
-inertness is itself a useful validation result.
-
-The benchmark script writes a TSV summary plus the energy-spectrum PNG;
-when run with `--calibrate` it additionally writes
-`<out>_calibrated.png` showing the inner-ring spectra before and after
-per-module gain refinement, and extends the TSV with per-method
-$\mu_{\mathrm{pre}}, \sigma_{\mathrm{pre}}, \mu_{\mathrm{post}},
-\sigma_{\mathrm{post}}, \sigma_E/E$ rows.
+The headline observation across every configuration is unchanged:
+the timing-coincidence path matches legacy to the second decimal of
+$\sigma_E/E$ on this clean run, so the extension neither gains nor
+loses resolution here. Its value is reserved for runs with significant
+out-of-time pile-up.
 
 ## Position reconstruction — parameter sensitivity
 

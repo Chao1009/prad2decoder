@@ -1,32 +1,31 @@
 #!/usr/bin/env python3
-"""
-benchmark_hycal_timing.py — legacy vs. timing-coincident HyCal clustering.
+"""benchmark_hycal_timing.py — legacy vs. timing-coincident HyCal clustering.
 
-For every physics event in the input EVIO splits, runs WaveAnalyzer per
-HyCal channel ONCE, then drives two HyCalCluster instances from the same
-peak set:
+Runs WaveAnalyzer once per HyCal channel and feeds the same peak set
+into two HyCalCluster instances:
 
-  legacy : `seed_time_window <= 0`, one ModuleHit per module — the
+  legacy : seed_time_window ≤ 0, one ModuleHit per module — the
            largest-integral peak within [pre_lo, pre_hi] ns.
-  new    : `seed_time_window =  W`, every peak within [pre_lo, pre_hi] ns
-           pushed as a separate ModuleHit.  HyCalCluster applies the
-           seed-anchored coincidence cut.
+  gated  : seed_time_window = W, every in-window peak pushed as a
+           separate ModuleHit; HyCalCluster applies the seed-anchored
+           coincidence cut during BFS.
 
-Selection: events with exactly ONE reconstructed cluster of energy
-> --signal-min MeV (default 3000).  For each path:
-  * count matching events,
-  * histogram the single cluster's energy,
-  * fit a Gaussian to the peak (initial guess from histogram argmax)
-    and report (μ, σ, N_in_fit).
+Headline selection: events with exactly one reconstructed cluster of
+energy > --signal-min MeV (default 3000).  Per path the script counts
+matches, histograms the cluster energy, and fits a Gaussian.
 
-Usage
------
-  python benchmark_hycal_timing.py /mnt/hgfs/Data/PRad2/prad_024386 \\
-      out_024386 --window 8 --max-events 200000
+With --calibrate the script also fits per-seed-module gain corrections
+on an inner-ring high-statistics sample (radius < --inner-radius mm,
+seed energy ≥ --min-seed-energy MeV, ≥ --min-per-module events) and
+re-fits the recalibrated spectrum with both Gaussian and Crystal-Ball
+shapes — the headline observable is then σ_E/E, comparable across the
+two paths under matched per-module calibration.  See the technical
+note in docs/technical_notes/hycal_clustering for the methodology.
 
-Writes:
-  out_024386.tsv  — per-path summary + Gaussian fit parameters
-  out_024386.png  — overlaid energy histograms with fit curves
+Outputs:
+  <out>.tsv               — summary + histogram bins
+  <out>.png               — energy spectrum + Gaussian fits
+  <out>_calibrated.png    — recalibrated spectrum + CB fit (--calibrate only)
 """
 
 from __future__ import annotations
@@ -67,12 +66,10 @@ def crystal_ball(x, A, mu, sigma, alpha, n):
 
 
 def fit_peak_cb(values, e_lo, e_hi, bin_width, mu0_hint=None):
-    """Crystal-Ball fit of the histogram of `values` in [e_lo, e_hi].
-    Returns (mu, sigma, alpha, n, A, n_in_fit, edges, counts).
-
-    `mu0_hint` (optional): seed value for μ; otherwise the histogram
-    argmax is used.  A wide window (~±400 MeV) is taken so the tail
-    region is included in the fit."""
+    """Crystal-Ball fit of values in [e_lo, e_hi].  Returns
+    (mu, sigma, alpha, n, A, n_in_fit, edges, counts).  μ seeded from
+    `mu0_hint` (else histogram argmax); a wide ±400 MeV window
+    includes the low-side tail."""
     edges = np.arange(e_lo, e_hi + bin_width, bin_width)
     counts, _ = np.histogram(values, bins=edges)
     centres = 0.5 * (edges[:-1] + edges[1:])
@@ -103,63 +100,52 @@ def fit_peak_cb(values, e_lo, e_hi, bin_width, mu0_hint=None):
 
 
 def per_module_peak(values, bin_width):
-    """Robust per-module peak position for the gain refinement.
-
-    Tries (in order): Crystal-Ball fit on a narrow window around the
-    histogram argmax → narrow-window Gaussian → bare argmax → median.
-    Each fall-through happens only when the previous step raised or did
-    not converge.
-
-    The narrow window (±200 MeV around the argmax) is essential: the
-    per-module radiative tail can extend much further, and including it
-    pulls a global Gaussian peak away from the actual elastic position.
-    The CB shape lets us include some of the tail without that bias."""
+    """Per-module peak position for the gain refinement.  The narrow
+    ±200 MeV window keeps the per-module radiative tail from pulling
+    the fit away from the elastic position; CB lets us include a
+    little of the tail without bias.  Tries in order: Crystal-Ball →
+    narrow Gaussian → histogram argmax → median (each fall-through
+    only on the previous step's failure)."""
     vals = np.asarray(values, dtype=float)
-    n = len(vals)
-    if n == 0:
+    if len(vals) == 0:
         return float('nan')
     med = float(np.median(vals))
-    if n < 10 or not HAVE_SCIPY:
+    if len(vals) < 10 or not HAVE_SCIPY:
         return med
 
-    # Coarse histogram centred on the median; the argmax inside it is
-    # the seed for the fits.
     e_lo, e_hi = med - 600.0, med + 600.0
-    edges = np.arange(e_lo, e_hi + bin_width, bin_width)
+    edges  = np.arange(e_lo, e_hi + bin_width, bin_width)
     counts, _ = np.histogram(vals, bins=edges)
     if counts.sum() < 10:
         return med
     centres = 0.5 * (edges[:-1] + edges[1:])
     mu0 = float(centres[int(np.argmax(counts))])
 
-    win = 200.0
+    win  = 200.0
     mask = (centres > mu0 - win) & (centres < mu0 + 0.5 * win)
-    x = centres[mask]
-    y = counts[mask].astype(float)
+    x, y = centres[mask], counts[mask].astype(float)
     if y.sum() < 10:
         return mu0
 
-    # 1) Crystal Ball
     try:
-        p0     = [float(y.max()), mu0, 50.0, 1.5, 2.0]
-        bounds = ([0,        e_lo, 5.0,  0.1,  1.01],
-                  [np.inf,   e_hi, win,  20.0, 50.0])
-        popt, _ = curve_fit(crystal_ball, x, y, p0=p0, bounds=bounds,
-                            maxfev=5000)
+        popt, _ = curve_fit(
+            crystal_ball, x, y,
+            p0     = [float(y.max()), mu0, 50.0, 1.5, 2.0],
+            bounds = ([0, e_lo, 5.0, 0.1, 1.01],
+                      [np.inf, e_hi, win, 20.0, 50.0]),
+            maxfev = 5000)
         return float(popt[1])
     except Exception:
         pass
-
-    # 2) narrow Gaussian
     try:
-        p0     = [float(y.max()), mu0, 50.0]
-        bounds = ([0, e_lo, 5.0], [np.inf, e_hi, win])
-        popt, _ = curve_fit(gauss, x, y, p0=p0, bounds=bounds, maxfev=2000)
+        popt, _ = curve_fit(
+            gauss, x, y,
+            p0     = [float(y.max()), mu0, 50.0],
+            bounds = ([0, e_lo, 5.0], [np.inf, e_hi, win]),
+            maxfev = 2000)
         return float(popt[1])
     except Exception:
         pass
-
-    # 3) histogram argmax (which is already mu0)
     return mu0
 
 
@@ -167,49 +153,27 @@ def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
                          min_per_mod, n_iter=2, exclude_rowcol=None,
                          method='median', bin_width=20.0):
     """Per-seed-module gain refinement on the inner-ring high-statistics
-    sample.
+    sample.  See the technical note for the methodology.
 
-    `events` is a list of (seed_id, x, y, row, col, seed_E, cluster_E).
-    `exclude_rowcol` (optional) is (R_LO, R_HI, C_LO, C_HI); seed modules
-    whose (row, col) falls inside that rectangle are dropped from the
-    sample BEFORE per-module gains are fit (used to remove the inner
-    PbWO4 ring around the beam hole, where shower leakage biases the
-    per-module mean).
+    `events`         list of (seed_id, x, y, row, col, seed_E, cluster_E).
+    `exclude_rowcol` (R_LO, R_HI, C_LO, C_HI): drop seeds whose row/col
+                     falls inside the rectangle (used to peel the
+                     leakage-prone ring around the beam hole).
+    `method`         'median' (cheap, biased low by the radiative tail)
+                     or 'cb-peak' (per_module_peak()).
 
-    `method` selects the per-module reference:
-      'median'  — np.median of the per-module energies (cheap, but the
-                  radiative tail biases it low).
-      'cb-peak' — Crystal-Ball fit per module via per_module_peak().
-                  Robust against the tail; falls back to a narrow
-                  Gaussian or argmax for low-statistics modules.
-
-    Returns (gains, raw_inner, corrected_inner, n_modules):
-      gains            — dict mapping seed_id → multiplicative correction.
-                         Initialized to 1.0; iteratively refined so that
-                         median(gain * cluster_E) per module → target_peak
-                         within the inner ring.
-      raw_inner        — np.array of cluster_E for events in the inner
-                         sample whose seed module has a converged gain.
-      corrected_inner  — same length, with gains applied.
-      n_modules        — number of modules with a fitted gain.
-
-    The current calibration enters as the implicit initial guess (gains
-    start at 1.0, so medians reflect the existing constants).  Two
-    refinement passes are sufficient when the per-event RMS is small
-    compared to the per-module bias.
-    """
+    Returns (gains, raw, corrected, n_modules) where `raw` and
+    `corrected` are aligned numpy arrays of cluster energies for the
+    events whose seed module had ≥ min_per_mod entries."""
     inner_r2 = inner_r * inner_r
+    excl = exclude_rowcol
 
     def keep(e):
-        sid, x, y, row, col, se, ce = e
-        if (x * x + y * y) >= inner_r2:
+        _sid, x, y, row, col, se, _ce = e
+        if (x * x + y * y) >= inner_r2 or se < min_seed_E:
             return False
-        if se < min_seed_E:
+        if excl is not None and excl[0] <= row <= excl[1] and excl[2] <= col <= excl[3]:
             return False
-        if exclude_rowcol is not None:
-            r_lo, r_hi, c_lo, c_hi = exclude_rowcol
-            if r_lo <= row <= r_hi and c_lo <= col <= c_hi:
-                return False
         return True
 
     pool = [e for e in events if keep(e)]
@@ -221,58 +185,53 @@ def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
 
     for _ in range(n_iter):
         per_mod = {sid: [] for sid in seed_ids}
-        for sid, _x, _y, _row, _col, _se, ce in pool:
+        for sid, *_, ce in pool:
             per_mod[sid].append(ce * gains[sid])
         for sid, vals in per_mod.items():
             if len(vals) < min_per_mod:
                 continue
-            if method == 'cb-peak':
-                ref = per_module_peak(vals, bin_width)
-            else:
-                ref = float(np.median(vals))
+            ref = (per_module_peak(vals, bin_width) if method == 'cb-peak'
+                   else float(np.median(vals)))
             if ref and ref > 0 and not math.isnan(ref):
                 gains[sid] *= target_peak / ref
 
+    counts = {sid: 0 for sid in seed_ids}
+    for sid, *_ in pool:
+        counts[sid] += 1
     converged = {sid: g for sid, g in gains.items()
-                 if len([e for e in pool if e[0] == sid]) >= min_per_mod}
-    raw, corr = [], []
-    for e in pool:
-        sid = e[0]; ce = e[6]
-        if sid not in converged:
-            continue
-        raw.append(ce)
-        corr.append(ce * converged[sid])
-    return converged, np.array(raw), np.array(corr), len(converged)
+                 if counts[sid] >= min_per_mod}
+    raw  = np.array([e[6] for e in pool if e[0] in converged])
+    corr = np.array([e[6] * converged[e[0]] for e in pool if e[0] in converged])
+    return converged, raw, corr, len(converged)
 
 
 def fit_peak(values, e_lo, e_hi, bin_width):
-    """Bin `values` in [e_lo, e_hi] with `bin_width` (MeV), fit a Gaussian
-    around the histogram maximum.  Returns (mu, sigma, A, n_in_fit, edges,
-    counts).  mu/sigma are NaN if the fit failed (or scipy missing)."""
-    edges = np.arange(e_lo, e_hi + bin_width, bin_width)
+    """Gaussian fit around the histogram argmax in a ±150 MeV window.
+    Returns (mu, sigma, A, n_in_fit, edges, counts); mu/sigma NaN if
+    the fit failed."""
+    edges  = np.arange(e_lo, e_hi + bin_width, bin_width)
     counts, _ = np.histogram(values, bins=edges)
     centres = 0.5 * (edges[:-1] + edges[1:])
-
+    nan = float('nan')
     if not HAVE_SCIPY or counts.sum() == 0:
-        return float('nan'), float('nan'), float('nan'), 0, edges, counts
+        return nan, nan, nan, 0, edges, counts
 
-    imax = int(np.argmax(counts))
-    mu0  = float(centres[imax])
-    win  = max(150.0, 4.0 * bin_width)        # ±150 MeV around the peak
+    mu0  = float(centres[int(np.argmax(counts))])
+    win  = max(150.0, 4.0 * bin_width)
     mask = (centres > mu0 - win) & (centres < mu0 + win)
-    x = centres[mask]
-    y = counts[mask].astype(float)
+    x, y = centres[mask], counts[mask].astype(float)
     if y.sum() < 20:
-        return float('nan'), float('nan'), float('nan'), int(y.sum()), edges, counts
+        return nan, nan, nan, int(y.sum()), edges, counts
     try:
-        p0 = [float(y.max()), mu0, max(bin_width, 60.0)]
-        popt, _ = curve_fit(gauss, x, y, p0=p0,
-                            bounds=([0, e_lo, 1.0], [np.inf, e_hi, win]))
+        popt, _ = curve_fit(
+            gauss, x, y,
+            p0     = [float(y.max()), mu0, max(bin_width, 60.0)],
+            bounds = ([0, e_lo, 1.0], [np.inf, e_hi, win]))
         A, mu, sig = popt
         return float(mu), abs(float(sig)), float(A), int(y.sum()), edges, counts
     except Exception as e:
         sys.stderr.write(f"[WARN] gauss fit failed: {e}\n")
-        return float('nan'), float('nan'), float('nan'), int(y.sum()), edges, counts
+        return nan, nan, nan, int(y.sum()), edges, counts
 
 
 def main(argv=None):
@@ -347,34 +306,27 @@ def main(argv=None):
     print(f"[setup] signal cut  : single cluster E > {args.signal_min:.0f} MeV",
           flush=True)
 
-    # Two clusterers sharing the geometry but with distinct configs.
+    # Two clusterers sharing the geometry; differ only in seed_time_window.
     base_cfg = p.hc_clusterer.get_config()
-    cfg_legacy = det.HyCalClusterConfig()
-    cfg_new    = det.HyCalClusterConfig()
-    for f in ("min_module_energy", "min_center_energy", "min_cluster_energy",
-              "min_cluster_size", "corner_conn", "split_iter",
-              "least_split", "log_weight_thres"):
-        setattr(cfg_legacy, f, getattr(base_cfg, f))
-        setattr(cfg_new,    f, getattr(base_cfg, f))
-    cfg_legacy.seed_time_window = -1.0
-    cfg_new.seed_time_window    = W
+    def _make_cluster(seed_window):
+        cfg = det.HyCalClusterConfig()
+        for f in ("min_module_energy", "min_center_energy", "min_cluster_energy",
+                  "min_cluster_size", "corner_conn", "split_iter",
+                  "least_split", "log_weight_thres"):
+            setattr(cfg, f, getattr(base_cfg, f))
+        cfg.seed_time_window = seed_window
+        cl = det.HyCalCluster(p.hycal)
+        cl.set_config(cfg)
+        return cl
+    cl_legacy = _make_cluster(-1.0)
+    cl_new    = _make_cluster(W)
 
-    cl_legacy = det.HyCalCluster(p.hycal)
-    cl_legacy.set_config(cfg_legacy)
-    cl_new    = det.HyCalCluster(p.hycal)
-    cl_new.set_config(cfg_new)
-
-    # Energies of single-cluster events (E > signal_min) for the bulk fit.
-    energies_legacy = []
-    energies_new    = []
-    # Per-event records used by the optional --calibrate mode.  Each entry:
-    # (seed_id, seed_x, seed_y, seed_energy, cluster_energy).  Populated only
-    # when args.calibrate is set so we don't pay the memory in normal use.
-    events_legacy = []
-    events_new    = []
-    n_legacy = n_new = 0
-    n_phys = n_kept = n_read = 0
-    n_files_open = 0
+    # Bulk: single-cluster energies for the bulk Gaussian fit.
+    # Per-event: (seed_id, x, y, row, col, seed_E, cluster_E) — populated
+    # only when --calibrate is set, so the memory cost is opt-in.
+    energies_legacy, energies_new = [], []
+    events_legacy,   events_new   = [], []
+    n_legacy = n_new = n_phys = n_kept = n_read = n_files_open = 0
 
     ch = dec.EvChannel()
     ch.set_config(p.cfg)
@@ -449,48 +401,33 @@ def main(argv=None):
 
                     cl_legacy.form_clusters()
                     cl_new.form_clusters()
-                    if args.calibrate:
-                        # Use reconstruct_matched so we have the seed
-                        # energy + center module without an extra lookup.
-                        rec_l = cl_legacy.reconstruct_matched()
-                        rec_n = cl_new.reconstruct_matched()
-                        big_l = [r for r in rec_l
-                                 if r.hit.energy > args.signal_min]
-                        big_n = [r for r in rec_n
-                                 if r.hit.energy > args.signal_min]
-                        if len(big_l) == 1:
-                            r = big_l[0]
-                            seed_mod = p.hycal.module_by_id(r.hit.center_id)
-                            n_legacy += 1
-                            energies_legacy.append(r.hit.energy)
-                            events_legacy.append((r.hit.center_id,
-                                                  seed_mod.x, seed_mod.y,
-                                                  seed_mod.row, seed_mod.column,
+                    # reconstruct_matched gives us seed energy + center
+                    # module without a second lookup; needed only by the
+                    # --calibrate branch but cheap enough to use always.
+                    rec_l = cl_legacy.reconstruct_matched()
+                    rec_n = cl_new.reconstruct_matched()
+                    big_l = [r for r in rec_l if r.hit.energy > args.signal_min]
+                    big_n = [r for r in rec_n if r.hit.energy > args.signal_min]
+                    if len(big_l) == 1:
+                        r = big_l[0]
+                        n_legacy += 1
+                        energies_legacy.append(r.hit.energy)
+                        if args.calibrate:
+                            sm = p.hycal.module_by_id(r.hit.center_id)
+                            events_legacy.append((r.hit.center_id, sm.x, sm.y,
+                                                  sm.row, sm.column,
                                                   r.cluster.center.energy,
                                                   r.hit.energy))
-                        if len(big_n) == 1:
-                            r = big_n[0]
-                            seed_mod = p.hycal.module_by_id(r.hit.center_id)
-                            n_new += 1
-                            energies_new.append(r.hit.energy)
-                            events_new.append((r.hit.center_id,
-                                               seed_mod.x, seed_mod.y,
-                                               seed_mod.row, seed_mod.column,
+                    if len(big_n) == 1:
+                        r = big_n[0]
+                        n_new += 1
+                        energies_new.append(r.hit.energy)
+                        if args.calibrate:
+                            sm = p.hycal.module_by_id(r.hit.center_id)
+                            events_new.append((r.hit.center_id, sm.x, sm.y,
+                                               sm.row, sm.column,
                                                r.cluster.center.energy,
                                                r.hit.energy))
-                    else:
-                        hits_legacy = cl_legacy.reconstruct_hits()
-                        hits_new    = cl_new.reconstruct_hits()
-                        big_l = [h.energy for h in hits_legacy
-                                 if h.energy > args.signal_min]
-                        big_n = [h.energy for h in hits_new
-                                 if h.energy > args.signal_min]
-                        if len(big_l) == 1:
-                            n_legacy += 1
-                            energies_legacy.append(big_l[0])
-                        if len(big_n) == 1:
-                            n_new += 1
-                            energies_new.append(big_n[0])
 
                     if args.max_events > 0 and n_phys >= args.max_events:
                         done = True; break
@@ -517,21 +454,17 @@ def main(argv=None):
         energies_new,    e_lo, e_hi, args.bin_width)
     centres = 0.5 * (edges[:-1] + edges[1:])
 
+    rate = n_phys / max(elapsed, 1e-3)
     print()
     print("=" * 72)
     print("benchmark_hycal_timing — legacy vs. seed-time-gated clustering")
     print("=" * 72)
-    print(f"  EVIO files opened     : {n_files_open} / {len(p.evio_files)}")
-    print(f"  EVIO records read     : {n_read}")
-    print(f"  physics events        : {n_phys}")
-    print(f"  trigger-passed events : {n_kept}")
-    print(f"  elapsed (s)           : {elapsed:.1f}  "
-          f"({n_phys/max(elapsed,1e-3):.1f} ev/s)")
+    print(f"  files {n_files_open}/{len(p.evio_files)},  "
+          f"records {n_read},  physics {n_phys},  triggered {n_kept}")
+    print(f"  elapsed {elapsed:.1f} s  ({rate:.1f} ev/s)")
+    print(f"  selection: single cluster E > {args.signal_min:.0f} MeV")
     print()
-    print(f"  selection: events with EXACTLY one cluster E > "
-          f"{args.signal_min:.0f} MeV")
-    print()
-    print(f"               | legacy        | new (W={W:g} ns)")
+    print(f"               | legacy        | gated (W={W:g} ns)")
     print(f"  events kept  | {n_legacy:>13d} | {n_new:>13d}    "
           f"({(n_new-n_legacy)/max(n_legacy,1)*100:+.1f} % vs. legacy)")
     if HAVE_SCIPY:
@@ -568,35 +501,31 @@ def main(argv=None):
             exclude_rowcol=excl, method=args.cal_method,
             bin_width=args.bin_width)
 
-        # Wide enough fit window for the recalibrated peak (it'll sit near
-        # target_peak, but pre-cal medians may be elsewhere).
+        # Fit window wider than the post-cal peak so a poorly-calibrated
+        # pre-cal histogram still falls inside.
         cal_lo, cal_hi = args.target_peak - 800, args.target_peak + 800
-        rmu_l_pre,  rsig_l_pre,  _, _, _, _ = fit_peak(raw_l,  cal_lo, cal_hi, args.bin_width)
-        rmu_n_pre,  rsig_n_pre,  _, _, _, _ = fit_peak(raw_n,  cal_lo, cal_hi, args.bin_width)
-        rmu_l_post, rsig_l_post, _, _, edges_cal, counts_l_post = fit_peak(corr_l, cal_lo, cal_hi, args.bin_width)
-        rmu_n_post, rsig_n_post, _, _, _,         counts_n_post = fit_peak(corr_n, cal_lo, cal_hi, args.bin_width)
-        # Pre-cal histograms for the plot
-        _, _, _, _, _, counts_l_pre = fit_peak(raw_l, cal_lo, cal_hi, args.bin_width)
-        _, _, _, _, _, counts_n_pre = fit_peak(raw_n, cal_lo, cal_hi, args.bin_width)
+        bw = args.bin_width
+        mu_l_pre,  sig_l_pre,  _, _, _,         counts_l_pre  = fit_peak(raw_l,  cal_lo, cal_hi, bw)
+        mu_n_pre,  sig_n_pre,  _, _, _,         counts_n_pre  = fit_peak(raw_n,  cal_lo, cal_hi, bw)
+        mu_l_post, sig_l_post, _, _, edges_cal, counts_l_post = fit_peak(corr_l, cal_lo, cal_hi, bw)
+        mu_n_post, sig_n_post, _, _, _,         counts_n_post = fit_peak(corr_n, cal_lo, cal_hi, bw)
         cal_centres = 0.5 * (edges_cal[:-1] + edges_cal[1:])
 
-        # Crystal-ball fit on the recalibrated distributions.  Resolves the
-        # Gaussian-σ inflation caused by the long low-side radiative /
-        # leakage tail in the raw histogram.
-        cb_l = fit_peak_cb(corr_l, cal_lo, cal_hi, args.bin_width,
-                           mu0_hint=rmu_l_post)
-        cb_n = fit_peak_cb(corr_n, cal_lo, cal_hi, args.bin_width,
-                           mu0_hint=rmu_n_post)
-        mu_cb_l, sig_cb_l, alpha_l, n_l, A_cb_l, _, _, _ = cb_l
-        mu_cb_n, sig_cb_n, alpha_n, n_n, A_cb_n, _, _, _ = cb_n
+        cb_l = fit_peak_cb(corr_l, cal_lo, cal_hi, bw, mu0_hint=mu_l_post)
+        cb_n = fit_peak_cb(corr_n, cal_lo, cal_hi, bw, mu0_hint=mu_n_post)
+        mu_cb_l, sig_cb_l, alpha_l, n_l, A_cb_l, *_ = cb_l
+        mu_cb_n, sig_cb_n, alpha_n, n_n, A_cb_n, *_ = cb_n
+
+        def _ratio(s, m):
+            return s / m if (m and m > 0 and not math.isnan(m)) else float('nan')
 
         cal = dict(
             n_modules_l=nmod_l, n_modules_n=nmod_n,
             n_events_l=len(raw_l), n_events_n=len(raw_n),
-            mu_l_pre=rmu_l_pre, sig_l_pre=rsig_l_pre,
-            mu_n_pre=rmu_n_pre, sig_n_pre=rsig_n_pre,
-            mu_l_post=rmu_l_post, sig_l_post=rsig_l_post,
-            mu_n_post=rmu_n_post, sig_n_post=rsig_n_post,
+            mu_l_pre=mu_l_pre, sig_l_pre=sig_l_pre,
+            mu_n_pre=mu_n_pre, sig_n_pre=sig_n_pre,
+            mu_l_post=mu_l_post, sig_l_post=sig_l_post,
+            mu_n_post=mu_n_post, sig_n_post=sig_n_post,
             mu_cb_l=mu_cb_l, sig_cb_l=sig_cb_l, alpha_l=alpha_l, n_l=n_l, A_cb_l=A_cb_l,
             mu_cb_n=mu_cb_n, sig_cb_n=sig_cb_n, alpha_n=alpha_n, n_n=n_n, A_cb_n=A_cb_n,
             edges=edges_cal, centres=cal_centres,
@@ -604,24 +533,22 @@ def main(argv=None):
             counts_l_post=counts_l_post, counts_n_post=counts_n_post,
         )
 
-        sigE_l_g  = rsig_l_post / rmu_l_post if rmu_l_post > 0 else float('nan')
-        sigE_n_g  = rsig_n_post / rmu_n_post if rmu_n_post > 0 else float('nan')
-        sigE_l_cb = sig_cb_l    / mu_cb_l    if mu_cb_l    and mu_cb_l > 0    else float('nan')
-        sigE_n_cb = sig_cb_n    / mu_cb_n    if mu_cb_n    and mu_cb_n > 0    else float('nan')
+        sigE_l_g, sigE_n_g  = _ratio(sig_l_post, mu_l_post), _ratio(sig_n_post, mu_n_post)
+        sigE_l_cb, sigE_n_cb = _ratio(sig_cb_l, mu_cb_l),    _ratio(sig_cb_n, mu_cb_n)
         print()
-        print(f"                  | legacy        | new (W={W:g} ns)")
+        print(f"                  | legacy        | gated (W={W:g} ns)")
         print(f"  inner events    | {len(raw_l):>13d} | {len(raw_n):>13d}")
         print(f"  modules used    | {nmod_l:>13d} | {nmod_n:>13d}")
-        print(f"  μ before  (MeV) | {rmu_l_pre:>13.1f} | {rmu_n_pre:>13.1f}")
-        print(f"  σ before  (MeV) | {rsig_l_pre:>13.1f} | {rsig_n_pre:>13.1f}")
-        print(f"  μ  after  (MeV) | {rmu_l_post:>13.1f} | {rmu_n_post:>13.1f}  "
+        print(f"  μ before  (MeV) | {mu_l_pre:>13.1f} | {mu_n_pre:>13.1f}")
+        print(f"  σ before  (MeV) | {sig_l_pre:>13.1f} | {sig_n_pre:>13.1f}")
+        print(f"  μ  after  (MeV) | {mu_l_post:>13.1f} | {mu_n_post:>13.1f}  "
               f"(target {args.target_peak:.1f})")
-        print(f"  σ  Gaussian     | {rsig_l_post:>13.1f} | {rsig_n_post:>13.1f}")
-        print(f"  σ_E / E  (G)    | {sigE_l_g*100:>12.2f}% | {sigE_n_g*100:>12.2f}%")
+        print(f"  σ  Gaussian     | {sig_l_post:>13.1f} | {sig_n_post:>13.1f}")
+        print(f"  σ_E / E (G)     | {sigE_l_g*100:>12.2f}% | {sigE_n_g*100:>12.2f}%")
         print(f"  μ  Crystal Ball | {mu_cb_l:>13.1f} | {mu_cb_n:>13.1f}")
         print(f"  σ  Crystal Ball | {sig_cb_l:>13.1f} | {sig_cb_n:>13.1f}  "
               f"(α_l={alpha_l:.2f} n_l={n_l:.1f}  α_n={alpha_n:.2f} n_n={n_n:.1f})")
-        print(f"  σ_E / E  (CB)   | {sigE_l_cb*100:>12.2f}% | {sigE_n_cb*100:>12.2f}%  "
+        print(f"  σ_E / E (CB)    | {sigE_l_cb*100:>12.2f}% | {sigE_n_cb*100:>12.2f}%  "
               f"(Δ = {(sigE_n_cb - sigE_l_cb)*100:+.2f} pp)")
 
     # ---- TSV output --------------------------------------------------------
