@@ -84,6 +84,7 @@ void apply_hycal_cluster_overrides(const json &j, fdec::ClusterConfig &cfg)
     if (j.contains("split_iter"))         cfg.split_iter         = j["split_iter"];
     if (j.contains("least_split"))        cfg.least_split        = j["least_split"];
     if (j.contains("log_weight_thres"))   cfg.log_weight_thres   = j["log_weight_thres"];
+    if (j.contains("seed_time_window"))   cfg.seed_time_window   = j["seed_time_window"];
 }
 
 } // namespace
@@ -327,7 +328,9 @@ Pipeline PipelineBuilder::build()
         oss << "[setup] HC cluster : min_mod_E=" << out.hycal_cluster_cfg.min_module_energy
             << "  min_ctr_E=" << out.hycal_cluster_cfg.min_center_energy
             << "  min_cl_E=" << out.hycal_cluster_cfg.min_cluster_energy
-            << "  split_iter=" << out.hycal_cluster_cfg.split_iter;
+            << "  split_iter=" << out.hycal_cluster_cfg.split_iter
+            << "  seed_t_win=" << out.hycal_cluster_cfg.seed_time_window << "ns"
+            << (out.hycal_cluster_cfg.seed_time_window > 0.f ? " (gated)" : " (off)");
         LOG(oss.str());
     }
 

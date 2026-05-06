@@ -801,36 +801,59 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                             else{
                                 const auto *mod = hycal.module_by_daq(crate, s, c);
                                 if (!mod || !mod->is_hycal()) continue;
-                                float adc = 0.f, time = 0.f;
-                                if(prad1 == true) 
-                                    adc = cd.samples[0] * 0.543; //0.543 for prad1 run1308,correct to 1.1GeV
-                                else{
-                                    ana.SetChannelKey(roc.tag, s, c);
-                                    ana.Analyze(cd.samples, cd.nsamples, wres);
-                                    if (wres.npeaks <= 0) continue;
+                                // Per-ID gain correction (g2-based, matches LMS2).
+                                const float gain = (mod->id > 1000)
+                                    ? gain_correction.w[mod->id - 1000].corr[1]
+                                    : gain_correction.g[mod->id].corr[1];
+
+                                if (prad1 == true) {
+                                    float adc = cd.samples[0] * 0.543f * gain; //0.543 for prad1 run1308, correct to 1.1GeV
+                                    float energy = static_cast<float>(mod->energize(adc));
+                                    clusterer.AddHit(mod->index, energy, 0.f);
+                                    ev->total_energy += energy;
+                                    nch++;
+                                    continue;
+                                }
+
+                                ana.SetChannelKey(roc.tag, s, c);
+                                ana.Analyze(cd.samples, cd.nsamples, wres);
+                                if (wres.npeaks <= 0) continue;
+
+                                if (cluster_cfg.seed_time_window > 0.f) {
+                                    // Multi-pulse mode: push every peak inside the trigger
+                                    // window into the clusterer; the seed-anchored timing
+                                    // coincidence cut is applied inside HyCalCluster.
+                                    for (int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; ++p) {
+                                        const auto &pk = wres.peaks[p];
+                                        if (pk.time <= gRunConfig.hc_time_win_lo) continue;
+                                        if (pk.time >= gRunConfig.hc_time_win_hi) continue;
+                                        float adc = pk.integral * gain;
+                                        float energy = static_cast<float>(mod->energize(adc));
+                                        clusterer.AddHit(mod->index, energy, pk.time);
+                                        ev->total_energy += energy;
+                                        nch++;
+                                    }
+                                } else {
+                                    // Legacy: pick the largest in-window peak as the single
+                                    // module hit, time field unused downstream.
                                     int bestIdx = -1;
                                     float bestHeight = -1.f;
-                                    for(int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; ++p){
-                                        if(wres.peaks[p].time > gRunConfig.hc_time_win_lo &&
-                                        wres.peaks[p].time < gRunConfig.hc_time_win_hi) {
-                                            if(wres.peaks[p].height > bestHeight) {
-                                                bestHeight = wres.peaks[p].height;
-                                                bestIdx = p;
-                                            }
+                                    for (int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; ++p) {
+                                        const auto &pk = wres.peaks[p];
+                                        if (pk.time > gRunConfig.hc_time_win_lo &&
+                                            pk.time < gRunConfig.hc_time_win_hi &&
+                                            pk.height > bestHeight) {
+                                            bestHeight = pk.height;
+                                            bestIdx = p;
                                         }
                                     }
                                     if (bestIdx < 0) continue;
-                                    adc = wres.peaks[bestIdx].integral;
-                                    time = wres.peaks[bestIdx].time;
+                                    float adc = wres.peaks[bestIdx].integral * gain;
+                                    float energy = static_cast<float>(mod->energize(adc));
+                                    clusterer.AddHit(mod->index, energy, wres.peaks[bestIdx].time);
+                                    ev->total_energy += energy;
+                                    nch++;
                                 }
-                                //gain correction for HyCal modules
-                                if(mod->id > 1000) adc *= gain_correction.w[mod->id-1000].corr[1]; // Use g2-based correction for PbWO4 (matches LMS2)
-                                else adc *= gain_correction.g[mod->id].corr[1]; // Use g2-based correction for PbGlass (matches LMS2)
-
-                                float energy = static_cast<float>(mod->energize(adc));
-                                clusterer.AddHit(mod->index, energy, time);
-                                ev->total_energy += energy;
-                                nch++;
                             }
                         }
                     }

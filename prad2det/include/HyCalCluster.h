@@ -39,6 +39,26 @@ struct ClusterConfig {
 
     // position reconstruction
     float log_weight_thres   = 3.6f;      // W = max(0, thres + ln(E_i/E_tot))
+
+    // --- multi-pulse / timing coincidence ------------------------------------
+    // Waveform data can produce more than one pulse per module per event.
+    // When `seed_time_window > 0`, AddHit() may be called multiple times for
+    // the same module (once per pulse); FormClusters() then:
+    //   * sorts pulses by energy descending;
+    //   * picks the largest unconsumed pulse satisfying min_center_energy as
+    //     a cluster seed;
+    //   * grows an island via BFS where each neighbour module contributes
+    //     ONLY its LARGEST-energy unconsumed pulse whose time lies within
+    //     ±seed_time_window of the seed (largest-amplitude is more reliable
+    //     than closest-in-time — small pulses have noisy peak times);
+    //   * marks every contributing pulse as consumed and repeats from the
+    //     next-largest unconsumed pulse — so unmatched pulses stay eligible
+    //     to seed additional clusters at different timings within the same
+    //     event.
+    // When `seed_time_window <= 0` (default), the time field is ignored and
+    // the legacy single-pulse-per-module behaviour applies — callers that
+    // only ever push one hit per module see no change.
+    float seed_time_window   = -1.f;      // ns, ≤ 0 disables timing gating
 };
 
 // --- per-event hit ----------------------------------------------------------
@@ -152,6 +172,9 @@ public:
 
     // --- per-event interface ------------------------------------------------
     void Clear();
+    // Push one pulse for `module_index`.  May be called multiple times for
+    // the same module — each call records a separate ModuleHit.  See
+    // ClusterConfig::seed_time_window for how multi-pulse input is grouped.
     void AddHit(int module_index, float energy, float time);
     void FormClusters();
     void ReconstructHits(std::vector<ClusterHit> &out) const;
@@ -167,11 +190,33 @@ public:
     // access results
     const std::vector<ModuleCluster> &GetClusters() const { return clusters_; }
 
+    // --- timing-coincidence study tool --------------------------------------
+    // For each event, identify seed candidates (the largest pulse passing
+    // min_center_energy that hasn't already been claimed by a previous
+    // seed in this scan) and emit one row per neighbouring pulse within
+    // `max_quantized_dist` of the seed module — WITHOUT applying any
+    // timing cut and WITHOUT consuming neighbour pulses across seeds.
+    // Use this to histogram dt vs. spatial distance / energy on real
+    // data and pick a value for ClusterConfig::seed_time_window before
+    // turning the production cut on.
+    struct SeedNeighborTiming {
+        int    seed_module;     // HyCalSystem module index of the seed
+        int    neighbor_module; // HyCalSystem module index of the neighbour
+        float  seed_time;       // ns
+        float  neighbor_time;   // ns
+        float  dt;              // neighbor_time − seed_time (ns)
+        float  seed_energy;     // MeV
+        float  neighbor_energy; // MeV
+        double dx_q;            // quantized distance from seed (module units)
+        double dy_q;            // quantized distance from seed (module units)
+    };
+    void CollectNeighborTiming(std::vector<SeedNeighborTiming> &out,
+                               double max_quantized_dist = 5.0) const;
+
 private:
     // island algorithm steps
     void group_hits();
-    void dfs_group(std::vector<int> &group, int group_id, int hit_idx,
-                   std::vector<bool> &visited);
+    void grow_island(int seed_idx, int group_id, std::vector<int> &group);
     void split_cluster(const std::vector<int> &group);
     std::vector<int> find_maxima(const std::vector<int> &group) const;
     void split_hits(const std::vector<int> &maxima,
@@ -198,8 +243,9 @@ private:
     std::vector<ModuleHit>              hits_;
     std::vector<std::vector<int>>       groups_;        // groups of hit indices
     std::vector<ModuleCluster>          clusters_;
-    std::vector<int>                    mod_to_hit_;    // module_index → hit_index (-1 if not hit)
+    std::vector<std::vector<int>>       mod_to_hits_;   // module_index → hit indices
     std::vector<int>                    hit_group_id_;  // hit_index → group_id
+    std::vector<bool>                   consumed_;      // hit_index → seeded/claimed
 };
 
 } // namespace fdec

@@ -288,13 +288,21 @@ def reconstruct_hycal(p: Pipeline, fadc_evt,
     """Run HyCal waveform → energy → cluster on one decoded EventData.
     Returns a list of det.ClusterHit (detector frame).
 
-    Per-channel peak selection mirrors the C++ server's clustering input
-    (`AppState::processEvent`): pick the peak with the largest integral
-    across all detected peaks (no time gate), then feed the integral as
-    the channel's clustering energy.  Pass `time_window=(lo, hi)` to also
-    require the chosen peak's time within those bounds — useful when an
-    analysis wants to restrict to triggered peaks only, but NOT what the
-    online monitor does."""
+    Two pulse-selection modes, switched by `seed_time_window` on the
+    HyCal cluster config:
+
+    * `seed_time_window > 0` (multi-pulse): every analyzer-detected peak
+      passing `time_window` (when provided) is fed into the clusterer
+      with its time stamp.  HyCalCluster groups them via seed-anchored
+      timing coincidence — one or more clusters per event, each with
+      time-coherent constituents.
+    * `seed_time_window <= 0` (legacy / default): one ModuleHit per
+      module — the largest-integral peak passing `time_window` (or any
+      detected peak when `time_window` is None) — matches `bestPeak()`
+      in viewer_utils.h."""
+    cfg = p.hc_clusterer.get_config()
+    multi_pulse = cfg.seed_time_window > 0.0
+
     p.hc_clusterer.clear()
     for ri in range(fadc_evt.nrocs):
         roc = fadc_evt.roc(ri)
@@ -313,23 +321,30 @@ def reconstruct_hycal(p: Pipeline, fadc_evt,
                 if cd.nsamples <= 0:
                     continue
                 _, _, peaks = p.wave_ana.analyze(cd.samples)
-                # Best peak by INTEGRAL across all detected peaks — matches
-                # `bestPeak()` in viewer_utils.h, which the server feeds into
-                # HyCalCluster::AddHit.
-                best = None
-                best_i = -1.0
-                for pk in peaks:
-                    if time_window is not None:
-                        if not (time_window[0] < pk.time < time_window[1]):
-                            continue
-                    if pk.integral > best_i:
-                        best = pk
-                        best_i = pk.integral
-                if best is None:
-                    continue
-                p.hc_clusterer.add_hit(mod.index,
-                                        mod.energize(best.integral),
-                                        float(best.time))
+
+                if multi_pulse:
+                    for pk in peaks:
+                        if time_window is not None:
+                            if not (time_window[0] < pk.time < time_window[1]):
+                                continue
+                        p.hc_clusterer.add_hit(mod.index,
+                                               mod.energize(pk.integral),
+                                               float(pk.time))
+                else:
+                    best = None
+                    best_i = -1.0
+                    for pk in peaks:
+                        if time_window is not None:
+                            if not (time_window[0] < pk.time < time_window[1]):
+                                continue
+                        if pk.integral > best_i:
+                            best = pk
+                            best_i = pk.integral
+                    if best is None:
+                        continue
+                    p.hc_clusterer.add_hit(mod.index,
+                                           mod.energize(best.integral),
+                                           float(best.time))
     p.hc_clusterer.form_clusters()
     return p.hc_clusterer.reconstruct_hits()
 
