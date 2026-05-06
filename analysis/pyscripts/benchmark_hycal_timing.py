@@ -102,8 +102,70 @@ def fit_peak_cb(values, e_lo, e_hi, bin_width, mu0_hint=None):
         return nan, nan, nan, nan, nan, int(y.sum()), edges, counts
 
 
+def per_module_peak(values, bin_width):
+    """Robust per-module peak position for the gain refinement.
+
+    Tries (in order): Crystal-Ball fit on a narrow window around the
+    histogram argmax → narrow-window Gaussian → bare argmax → median.
+    Each fall-through happens only when the previous step raised or did
+    not converge.
+
+    The narrow window (±200 MeV around the argmax) is essential: the
+    per-module radiative tail can extend much further, and including it
+    pulls a global Gaussian peak away from the actual elastic position.
+    The CB shape lets us include some of the tail without that bias."""
+    vals = np.asarray(values, dtype=float)
+    n = len(vals)
+    if n == 0:
+        return float('nan')
+    med = float(np.median(vals))
+    if n < 10 or not HAVE_SCIPY:
+        return med
+
+    # Coarse histogram centred on the median; the argmax inside it is
+    # the seed for the fits.
+    e_lo, e_hi = med - 600.0, med + 600.0
+    edges = np.arange(e_lo, e_hi + bin_width, bin_width)
+    counts, _ = np.histogram(vals, bins=edges)
+    if counts.sum() < 10:
+        return med
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    mu0 = float(centres[int(np.argmax(counts))])
+
+    win = 200.0
+    mask = (centres > mu0 - win) & (centres < mu0 + 0.5 * win)
+    x = centres[mask]
+    y = counts[mask].astype(float)
+    if y.sum() < 10:
+        return mu0
+
+    # 1) Crystal Ball
+    try:
+        p0     = [float(y.max()), mu0, 50.0, 1.5, 2.0]
+        bounds = ([0,        e_lo, 5.0,  0.1,  1.01],
+                  [np.inf,   e_hi, win,  20.0, 50.0])
+        popt, _ = curve_fit(crystal_ball, x, y, p0=p0, bounds=bounds,
+                            maxfev=5000)
+        return float(popt[1])
+    except Exception:
+        pass
+
+    # 2) narrow Gaussian
+    try:
+        p0     = [float(y.max()), mu0, 50.0]
+        bounds = ([0, e_lo, 5.0], [np.inf, e_hi, win])
+        popt, _ = curve_fit(gauss, x, y, p0=p0, bounds=bounds, maxfev=2000)
+        return float(popt[1])
+    except Exception:
+        pass
+
+    # 3) histogram argmax (which is already mu0)
+    return mu0
+
+
 def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
-                         min_per_mod, n_iter=2, exclude_rowcol=None):
+                         min_per_mod, n_iter=2, exclude_rowcol=None,
+                         method='median', bin_width=20.0):
     """Per-seed-module gain refinement on the inner-ring high-statistics
     sample.
 
@@ -113,6 +175,13 @@ def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
     sample BEFORE per-module gains are fit (used to remove the inner
     PbWO4 ring around the beam hole, where shower leakage biases the
     per-module mean).
+
+    `method` selects the per-module reference:
+      'median'  — np.median of the per-module energies (cheap, but the
+                  radiative tail biases it low).
+      'cb-peak' — Crystal-Ball fit per module via per_module_peak().
+                  Robust against the tail; falls back to a narrow
+                  Gaussian or argmax for low-statistics modules.
 
     Returns (gains, raw_inner, corrected_inner, n_modules):
       gains            — dict mapping seed_id → multiplicative correction.
@@ -157,9 +226,12 @@ def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
         for sid, vals in per_mod.items():
             if len(vals) < min_per_mod:
                 continue
-            med = float(np.median(vals))
-            if med > 0:
-                gains[sid] *= target_peak / med
+            if method == 'cb-peak':
+                ref = per_module_peak(vals, bin_width)
+            else:
+                ref = float(np.median(vals))
+            if ref and ref > 0 and not math.isnan(ref):
+                gains[sid] *= target_peak / ref
 
     converged = {sid: g for sid, g in gains.items()
                  if len([e for e in pool if e[0] == sid]) >= min_per_mod}
@@ -247,6 +319,14 @@ def main(argv=None):
                          "calibration sample (e.g. --exclude-rowcol 16 19 "
                          "16 19 removes the 4x4 PbWO4 block surrounding the "
                          "beam hole, where leakage biases the per-module mean).")
+    ap.add_argument("--cal-method", choices=['median', 'cb-peak'],
+                    default='median',
+                    help="Per-module reference for the gain refinement: "
+                         "'median' (legacy, biased by the radiative tail) "
+                         "or 'cb-peak' (Crystal-Ball fitted peak per module, "
+                         "robust against the tail).  cb-peak falls back to a "
+                         "narrow-window Gaussian and then the histogram "
+                         "argmax for low-statistics modules.")
     args = ap.parse_args(argv)
 
     p = C.setup_pipeline(
@@ -474,16 +554,19 @@ def main(argv=None):
         if excl:
             print(f"                      exclude rows {excl[0]}..{excl[1]} "
                   f"AND cols {excl[2]}..{excl[3]}")
+        print(f"                      per-module reference: {args.cal_method}")
         gains_l, raw_l, corr_l, nmod_l = fit_per_module_gains(
             events_legacy,
             target_peak=args.target_peak, inner_r=args.inner_radius,
             min_seed_E=args.min_seed_energy, min_per_mod=args.min_per_module,
-            exclude_rowcol=excl)
+            exclude_rowcol=excl, method=args.cal_method,
+            bin_width=args.bin_width)
         gains_n, raw_n, corr_n, nmod_n = fit_per_module_gains(
             events_new,
             target_peak=args.target_peak, inner_r=args.inner_radius,
             min_seed_E=args.min_seed_energy, min_per_mod=args.min_per_module,
-            exclude_rowcol=excl)
+            exclude_rowcol=excl, method=args.cal_method,
+            bin_width=args.bin_width)
 
         # Wide enough fit window for the recalibrated peak (it'll sit near
         # target_peak, but pre-cal medians may be elsewhere).

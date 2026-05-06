@@ -429,6 +429,96 @@ python analysis/pyscripts/benchmark_hycal_timing.py \
     --max-events 100000 --window 16 --calibrate --exclude-rowcol 15 20 15 20
 ```
 
+### Crystal-Ball fit and the residual gap to the design resolution
+
+The PbWO₄ stochastic term from beam tests is parametrised as
+$\sigma_E / E \approx 2.6\,\% / \sqrt{E\,[\mathrm{GeV}]}$, which gives
+$1.39\,\%$ at $E = 3.49$ GeV. The Gaussian fit on the recalibrated
+inner ring lands at $1.92\,\%$ — well above this design value. The
+discrepancy raises two questions:
+
+1. is the Gaussian width inflated by the long low-side tail (radiative
+   and shower-leakage), and
+2. what residual systematics drive the rest of the gap?
+
+The benchmark therefore overlays a **single-sided Crystal-Ball** fit
+(power-law continuation on the low-energy side) on the same
+recalibrated histogram:
+
+$$
+f(x;\,\mu,\sigma,\alpha,n) =
+\begin{cases}
+\exp\!\left(-\tfrac{1}{2}\bigl(\tfrac{x-\mu}{\sigma}\bigr)^{2}\right)
+   & \tfrac{x-\mu}{\sigma} > -\alpha \\[4pt]
+\left(\tfrac{n}{|\alpha|}\right)^{n}\!e^{-\alpha^{2}/2}
+\left(\tfrac{n}{|\alpha|}-|\alpha|-\tfrac{x-\mu}{\sigma}\right)^{-n}
+   & \text{otherwise}
+\end{cases}
+$$
+
+with $\alpha > 0$ the transition point in $\sigma$ units and $n > 1$
+the tail exponent. The Crystal-Ball gives a slightly tighter width
+(67.1 MeV $\to$ 66.7 MeV in the [15, 20] exclusion case, $\sigma_E/E$
+1.92 % $\to$ 1.91 %) — but the fit converges with $n = 1.3$ (at the
+lower physical bound) and $\alpha = 1.59$, indicating the low-side
+tail in this run is heavier than a single-sided CB can absorb. Most of
+the observed width is the FWHM of the core, not asymmetry.
+
+![bench W=16 calibration with CB](plots/bench_024386_w16cal_excl15_20_cb_calibrated.png)
+
+Closing the remaining $\sim 0.5$ percentage-point gap to the design
+$\sigma_E/E$ likely needs one or more of the following — none of which
+the timing-coincidence path on its own can address:
+
+| candidate effect | how to test |
+|---|---|
+| Per-module gain reference is the **median** of a tailed distribution → bias the per-module correction low → inflate spread | Replace the median with the fitted Crystal-Ball peak position per module — see immediately below |
+| No GEM-tagged elastic selection → bremsstrahlung accidentals + pile-up under the elastic peak | Require a matched GEM hit at the projected vertex |
+| Shower leakage outside the cluster envelope (dead material, beam-hole edge) | Apply a cluster-flag mask (`kDeadNeighbor`, `kInnerBound`, `kTransition`) and/or an $E$-dependent leakage correction |
+| Module non-linearity (`cal_non_linear`) not populated for this run | Audit the per-run calibration JSON |
+| Both-sided tails (pile-up adding energy on the high side too) | Switch to a **double-sided** Crystal Ball |
+
+`benchmark_hycal_timing.py` writes both the Gaussian and Crystal-Ball
+parameters to the TSV in every `--calibrate` run, so any of these
+follow-ups can re-use the same per-event records collected here.
+
+#### Per-module reference: median vs. Crystal-Ball peak
+
+The first item in the table — replacing the per-module median with a
+Crystal-Ball-fitted peak — is wired into the benchmark via
+`--cal-method {median, cb-peak}` (default `median` for backwards
+compatibility). With `cb-peak` the gain refinement loop fits a
+single-sided CB to the per-module energy histogram on a $\pm 200$ MeV
+window around the argmax (with narrow-Gaussian and bare-argmax
+fall-throughs for low-statistics modules) and uses the fitted $\mu$ as
+the reference instead of `np.median`.
+
+Re-running the [15, 20]-exclusion configuration with `--cal-method cb-peak`:
+
+| per-module reference | $\mu$ post (MeV) | $\sigma_G$ (MeV) | $\sigma_E/E$ (G) | $\sigma_{CB}$ (MeV) | $\sigma_E/E$ (CB) |
+|---|---:|---:|---:|---:|---:|
+| `median` | 3494.5 | 67.1 | 1.92 % | 66.7 | 1.91 % |
+| `cb-peak` | **3487.2** | 66.5 | 1.91 % | 66.2 | **1.90 %** |
+
+Two things to read off the table:
+
+1. The **calibration $\mu$** now lands within 1.3 MeV of the
+   3488.5 MeV elastic target (vs. 6 MeV high under median) — the
+   median was being pulled low by the radiative tail and the gain
+   refinement was over-correcting by the same $\sim$0.2 %. The CB-peak
+   reference removes that bias.
+2. The $\sigma_E/E$ improvement is small (~0.01 pp). The per-module
+   median bias was therefore a real but minor contributor to the
+   $\sim$0.5 pp gap to the $2.6\,\%/\sqrt{E}$ design value. The
+   remaining width is dominated by effects the recalibration cannot
+   touch — GEM-tagged elastic selection, shower-leakage correction,
+   and (possibly) module non-linearity calibration are the natural
+   next places to look.
+
+The headline observation that legacy and the timing-coincidence path
+agree to the second decimal is unchanged across all four
+configurations (median + Gaussian/CB, cb-peak + Gaussian/CB).
+
 ### What does an over-tight gate cost?
 
 Repeating the calibration test at $W = 8$ ns — half the physical
