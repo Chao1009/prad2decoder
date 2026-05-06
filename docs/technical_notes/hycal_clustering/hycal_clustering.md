@@ -402,6 +402,33 @@ The two paths give the same resolution to the second decimal — the
 timing-coincidence extension is benign on a clean run with the gate
 sized for the physical jitter.
 
+The remaining ~2 % spread is dominated by the innermost PbWO₄ modules,
+where shower leakage into the beam hole reduces the effective response
+and broadens the per-module distribution. Repeating the calibration
+test while dropping seed modules within the central 4 × 4 PbWO₄ block
+([row, col] ∈ [16, 19]) and then within the central 6 × 6 block
+([row, col] ∈ [15, 20]) confirms this picture and shows the
+underlying single-cluster resolution improving by $\sim$3 % per layer
+removed:
+
+| inner-block exclusion | modules used | events | $\sigma_E / E$ legacy | $\sigma_E / E$ new ($W=16$) |
+|---|---:|---:|---:|---:|
+| none (full $r < 200$ mm) | 148 | 56 617 | 1.98 % | 1.98 % |
+| 4 × 4 around beam hole ([16, 19]) | 141 | 43 129 | 1.96 % | 1.96 % |
+| 6 × 6 around beam hole ([15, 20]) | 128 | 34 997 | **1.92 %** | **1.92 %** |
+
+In every configuration the legacy and gated paths agree to the second
+decimal — the ~6 % improvement from peeling off the leakage-prone
+inner ring is independent of the clustering method, and the gating
+adds neither signal nor noise to the contained-shower sample. To
+attempt to invoke `--exclude-rowcol R_LO R_HI C_LO C_HI`:
+
+```bash
+python analysis/pyscripts/benchmark_hycal_timing.py \
+    /mnt/hgfs/Data/PRad2/prad_024386 out_024386_w16cal_excl15_20 \
+    --max-events 100000 --window 16 --calibrate --exclude-rowcol 15 20 15 20
+```
+
 ### What does an over-tight gate cost?
 
 Repeating the calibration test at $W = 8$ ns — half the physical

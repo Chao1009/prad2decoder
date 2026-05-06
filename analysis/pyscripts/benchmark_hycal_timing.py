@@ -53,12 +53,67 @@ def gauss(x, A, mu, sigma):
     return A * np.exp(-0.5 * ((x - mu) / sigma) ** 2)
 
 
+def crystal_ball(x, A, mu, sigma, alpha, n):
+    """Crystal-Ball PDF (left-side power-law tail).  α > 0, n > 1."""
+    z = (np.asarray(x, dtype=float) - mu) / sigma
+    abs_a = abs(alpha)
+    A_coef = (n / abs_a) ** n * np.exp(-0.5 * abs_a ** 2)
+    B_coef = n / abs_a - abs_a
+    gauss_part = np.exp(-0.5 * z * z)
+    arg = B_coef - z
+    arg = np.where(arg > 0, arg, 1e-30)
+    tail_part = A_coef * arg ** (-n)
+    return A * np.where(z > -alpha, gauss_part, tail_part)
+
+
+def fit_peak_cb(values, e_lo, e_hi, bin_width, mu0_hint=None):
+    """Crystal-Ball fit of the histogram of `values` in [e_lo, e_hi].
+    Returns (mu, sigma, alpha, n, A, n_in_fit, edges, counts).
+
+    `mu0_hint` (optional): seed value for μ; otherwise the histogram
+    argmax is used.  A wide window (~±400 MeV) is taken so the tail
+    region is included in the fit."""
+    edges = np.arange(e_lo, e_hi + bin_width, bin_width)
+    counts, _ = np.histogram(values, bins=edges)
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    nan = float('nan')
+    if not HAVE_SCIPY or counts.sum() == 0:
+        return nan, nan, nan, nan, nan, 0, edges, counts
+
+    imax = int(np.argmax(counts))
+    mu0  = float(mu0_hint) if mu0_hint is not None else float(centres[imax])
+    win  = max(400.0, 12.0 * bin_width)
+    mask = (centres > mu0 - win) & (centres < mu0 + 0.5 * win)
+    x = centres[mask]
+    y = counts[mask].astype(float)
+    if y.sum() < 50:
+        return nan, nan, nan, nan, nan, int(y.sum()), edges, counts
+    try:
+        p0     = [float(y.max()), mu0, max(60.0, bin_width * 3), 1.5, 2.0]
+        bounds = ([0,        e_lo - 200.0, 1.0,  0.1,  1.01],
+                  [np.inf,   e_hi + 200.0, win,  20.0, 50.0])
+        popt, _ = curve_fit(crystal_ball, x, y, p0=p0, bounds=bounds,
+                            maxfev=10000)
+        A, mu, sig, alpha, n = popt
+        return (float(mu), abs(float(sig)), float(alpha), float(n),
+                float(A), int(y.sum()), edges, counts)
+    except Exception as e:
+        sys.stderr.write(f"[WARN] crystal-ball fit failed: {e}\n")
+        return nan, nan, nan, nan, nan, int(y.sum()), edges, counts
+
+
 def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
-                         min_per_mod, n_iter=2):
+                         min_per_mod, n_iter=2, exclude_rowcol=None):
     """Per-seed-module gain refinement on the inner-ring high-statistics
     sample.
 
-    `events` is a list of (seed_id, x, y, seed_E, cluster_E).
+    `events` is a list of (seed_id, x, y, row, col, seed_E, cluster_E).
+    `exclude_rowcol` (optional) is (R_LO, R_HI, C_LO, C_HI); seed modules
+    whose (row, col) falls inside that rectangle are dropped from the
+    sample BEFORE per-module gains are fit (used to remove the inner
+    PbWO4 ring around the beam hole, where shower leakage biases the
+    per-module mean).
+
     Returns (gains, raw_inner, corrected_inner, n_modules):
       gains            — dict mapping seed_id → multiplicative correction.
                          Initialized to 1.0; iteratively refined so that
@@ -75,8 +130,20 @@ def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
     compared to the per-module bias.
     """
     inner_r2 = inner_r * inner_r
-    pool = [e for e in events
-            if (e[1] * e[1] + e[2] * e[2]) < inner_r2 and e[3] >= min_seed_E]
+
+    def keep(e):
+        sid, x, y, row, col, se, ce = e
+        if (x * x + y * y) >= inner_r2:
+            return False
+        if se < min_seed_E:
+            return False
+        if exclude_rowcol is not None:
+            r_lo, r_hi, c_lo, c_hi = exclude_rowcol
+            if r_lo <= row <= r_hi and c_lo <= col <= c_hi:
+                return False
+        return True
+
+    pool = [e for e in events if keep(e)]
     if not pool:
         return {}, np.array([]), np.array([]), 0
 
@@ -85,7 +152,7 @@ def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
 
     for _ in range(n_iter):
         per_mod = {sid: [] for sid in seed_ids}
-        for sid, _x, _y, _se, ce in pool:
+        for sid, _x, _y, _row, _col, _se, ce in pool:
             per_mod[sid].append(ce * gains[sid])
         for sid, vals in per_mod.items():
             if len(vals) < min_per_mod:
@@ -97,7 +164,8 @@ def fit_per_module_gains(events, *, target_peak, inner_r, min_seed_E,
     converged = {sid: g for sid, g in gains.items()
                  if len([e for e in pool if e[0] == sid]) >= min_per_mod}
     raw, corr = [], []
-    for sid, _x, _y, _se, ce in pool:
+    for e in pool:
+        sid = e[0]; ce = e[6]
         if sid not in converged:
             continue
         raw.append(ce)
@@ -172,6 +240,13 @@ def main(argv=None):
     ap.add_argument("--min-per-module", type=int, default=30,
                     help="Minimum events per module before a gain is fit "
                          "(default 30).")
+    ap.add_argument("--exclude-rowcol", type=int, nargs=4, default=None,
+                    metavar=("R_LO", "R_HI", "C_LO", "C_HI"),
+                    help="Drop seed modules with row in [R_LO, R_HI] AND "
+                         "column in [C_LO, C_HI] from the per-module "
+                         "calibration sample (e.g. --exclude-rowcol 16 19 "
+                         "16 19 removes the 4x4 PbWO4 block surrounding the "
+                         "beam hole, where leakage biases the per-module mean).")
     args = ap.parse_args(argv)
 
     p = C.setup_pipeline(
@@ -310,6 +385,7 @@ def main(argv=None):
                             energies_legacy.append(r.hit.energy)
                             events_legacy.append((r.hit.center_id,
                                                   seed_mod.x, seed_mod.y,
+                                                  seed_mod.row, seed_mod.column,
                                                   r.cluster.center.energy,
                                                   r.hit.energy))
                         if len(big_n) == 1:
@@ -319,6 +395,7 @@ def main(argv=None):
                             energies_new.append(r.hit.energy)
                             events_new.append((r.hit.center_id,
                                                seed_mod.x, seed_mod.y,
+                                               seed_mod.row, seed_mod.column,
                                                r.cluster.center.energy,
                                                r.hit.energy))
                     else:
@@ -393,14 +470,20 @@ def main(argv=None):
         print(f"                      seed E ≥ {args.min_seed_energy:.0f} MeV, "
               f"≥ {args.min_per_module} events/module")
 
+        excl = tuple(args.exclude_rowcol) if args.exclude_rowcol else None
+        if excl:
+            print(f"                      exclude rows {excl[0]}..{excl[1]} "
+                  f"AND cols {excl[2]}..{excl[3]}")
         gains_l, raw_l, corr_l, nmod_l = fit_per_module_gains(
             events_legacy,
             target_peak=args.target_peak, inner_r=args.inner_radius,
-            min_seed_E=args.min_seed_energy, min_per_mod=args.min_per_module)
+            min_seed_E=args.min_seed_energy, min_per_mod=args.min_per_module,
+            exclude_rowcol=excl)
         gains_n, raw_n, corr_n, nmod_n = fit_per_module_gains(
             events_new,
             target_peak=args.target_peak, inner_r=args.inner_radius,
-            min_seed_E=args.min_seed_energy, min_per_mod=args.min_per_module)
+            min_seed_E=args.min_seed_energy, min_per_mod=args.min_per_module,
+            exclude_rowcol=excl)
 
         # Wide enough fit window for the recalibrated peak (it'll sit near
         # target_peak, but pre-cal medians may be elsewhere).
@@ -414,6 +497,16 @@ def main(argv=None):
         _, _, _, _, _, counts_n_pre = fit_peak(raw_n, cal_lo, cal_hi, args.bin_width)
         cal_centres = 0.5 * (edges_cal[:-1] + edges_cal[1:])
 
+        # Crystal-ball fit on the recalibrated distributions.  Resolves the
+        # Gaussian-σ inflation caused by the long low-side radiative /
+        # leakage tail in the raw histogram.
+        cb_l = fit_peak_cb(corr_l, cal_lo, cal_hi, args.bin_width,
+                           mu0_hint=rmu_l_post)
+        cb_n = fit_peak_cb(corr_n, cal_lo, cal_hi, args.bin_width,
+                           mu0_hint=rmu_n_post)
+        mu_cb_l, sig_cb_l, alpha_l, n_l, A_cb_l, _, _, _ = cb_l
+        mu_cb_n, sig_cb_n, alpha_n, n_n, A_cb_n, _, _, _ = cb_n
+
         cal = dict(
             n_modules_l=nmod_l, n_modules_n=nmod_n,
             n_events_l=len(raw_l), n_events_n=len(raw_n),
@@ -421,24 +514,32 @@ def main(argv=None):
             mu_n_pre=rmu_n_pre, sig_n_pre=rsig_n_pre,
             mu_l_post=rmu_l_post, sig_l_post=rsig_l_post,
             mu_n_post=rmu_n_post, sig_n_post=rsig_n_post,
+            mu_cb_l=mu_cb_l, sig_cb_l=sig_cb_l, alpha_l=alpha_l, n_l=n_l, A_cb_l=A_cb_l,
+            mu_cb_n=mu_cb_n, sig_cb_n=sig_cb_n, alpha_n=alpha_n, n_n=n_n, A_cb_n=A_cb_n,
             edges=edges_cal, centres=cal_centres,
             counts_l_pre=counts_l_pre, counts_n_pre=counts_n_pre,
             counts_l_post=counts_l_post, counts_n_post=counts_n_post,
         )
 
-        sigE_l = rsig_l_post / rmu_l_post if rmu_l_post > 0 else float('nan')
-        sigE_n = rsig_n_post / rmu_n_post if rmu_n_post > 0 else float('nan')
+        sigE_l_g  = rsig_l_post / rmu_l_post if rmu_l_post > 0 else float('nan')
+        sigE_n_g  = rsig_n_post / rmu_n_post if rmu_n_post > 0 else float('nan')
+        sigE_l_cb = sig_cb_l    / mu_cb_l    if mu_cb_l    and mu_cb_l > 0    else float('nan')
+        sigE_n_cb = sig_cb_n    / mu_cb_n    if mu_cb_n    and mu_cb_n > 0    else float('nan')
         print()
-        print(f"                | legacy        | new (W={W:g} ns)")
-        print(f"  inner events  | {len(raw_l):>13d} | {len(raw_n):>13d}")
-        print(f"  modules used  | {nmod_l:>13d} | {nmod_n:>13d}")
-        print(f"  μ before (MeV)| {rmu_l_pre:>13.1f} | {rmu_n_pre:>13.1f}")
-        print(f"  σ before (MeV)| {rsig_l_pre:>13.1f} | {rsig_n_pre:>13.1f}")
-        print(f"  μ  after (MeV)| {rmu_l_post:>13.1f} | {rmu_n_post:>13.1f}  "
+        print(f"                  | legacy        | new (W={W:g} ns)")
+        print(f"  inner events    | {len(raw_l):>13d} | {len(raw_n):>13d}")
+        print(f"  modules used    | {nmod_l:>13d} | {nmod_n:>13d}")
+        print(f"  μ before  (MeV) | {rmu_l_pre:>13.1f} | {rmu_n_pre:>13.1f}")
+        print(f"  σ before  (MeV) | {rsig_l_pre:>13.1f} | {rsig_n_pre:>13.1f}")
+        print(f"  μ  after  (MeV) | {rmu_l_post:>13.1f} | {rmu_n_post:>13.1f}  "
               f"(target {args.target_peak:.1f})")
-        print(f"  σ  after (MeV)| {rsig_l_post:>13.1f} | {rsig_n_post:>13.1f}")
-        print(f"  σ_E  / E      | {sigE_l*100:>12.2f}% | {sigE_n*100:>12.2f}%  "
-              f"(Δ = {(sigE_n - sigE_l)*100:+.2f} pp)")
+        print(f"  σ  Gaussian     | {rsig_l_post:>13.1f} | {rsig_n_post:>13.1f}")
+        print(f"  σ_E / E  (G)    | {sigE_l_g*100:>12.2f}% | {sigE_n_g*100:>12.2f}%")
+        print(f"  μ  Crystal Ball | {mu_cb_l:>13.1f} | {mu_cb_n:>13.1f}")
+        print(f"  σ  Crystal Ball | {sig_cb_l:>13.1f} | {sig_cb_n:>13.1f}  "
+              f"(α_l={alpha_l:.2f} n_l={n_l:.1f}  α_n={alpha_n:.2f} n_n={n_n:.1f})")
+        print(f"  σ_E / E  (CB)   | {sigE_l_cb*100:>12.2f}% | {sigE_n_cb*100:>12.2f}%  "
+              f"(Δ = {(sigE_n_cb - sigE_l_cb)*100:+.2f} pp)")
 
     # ---- TSV output --------------------------------------------------------
     tsv_path = args.out_path if args.out_path.endswith('.tsv') \
@@ -465,18 +566,28 @@ def main(argv=None):
                     f" min/mod={args.min_per_module},"
                     f" target μ={args.target_peak:.1f} MeV)\n")
             f.write("path\tn_modules\tn_inner_events\tmu_pre_MeV\tsigma_pre_MeV"
-                    "\tmu_post_MeV\tsigma_post_MeV\tsigma_over_E_post\n")
-            for path, nmod, ne, mu_pre, sig_pre, mu_post, sig_post in [
+                    "\tmu_post_MeV\tsigma_post_MeV\tsigma_over_E_post"
+                    "\tmu_cb_MeV\tsigma_cb_MeV\talpha_cb\tn_cb"
+                    "\tsigma_over_E_cb\n")
+            for path, nmod, ne, mu_pre, sig_pre, mu_post, sig_post, \
+                mu_cb, sig_cb, a_cb, n_cb in [
                 ("legacy", cal['n_modules_l'], cal['n_events_l'],
                  cal['mu_l_pre'], cal['sig_l_pre'],
-                 cal['mu_l_post'], cal['sig_l_post']),
+                 cal['mu_l_post'], cal['sig_l_post'],
+                 cal['mu_cb_l'], cal['sig_cb_l'], cal['alpha_l'], cal['n_l']),
                 ("new", cal['n_modules_n'], cal['n_events_n'],
                  cal['mu_n_pre'], cal['sig_n_pre'],
-                 cal['mu_n_post'], cal['sig_n_post']),
+                 cal['mu_n_post'], cal['sig_n_post'],
+                 cal['mu_cb_n'], cal['sig_cb_n'], cal['alpha_n'], cal['n_n']),
             ]:
-                ratio = sig_post / mu_post if mu_post > 0 else float('nan')
+                ratio    = sig_post / mu_post if mu_post > 0 else float('nan')
+                ratio_cb = (sig_cb / mu_cb if (mu_cb and mu_cb > 0
+                                               and not math.isnan(mu_cb))
+                            else float('nan'))
                 f.write(f"{path}\t{nmod}\t{ne}\t{mu_pre:.2f}\t{sig_pre:.2f}"
-                        f"\t{mu_post:.2f}\t{sig_post:.2f}\t{ratio:.4f}\n")
+                        f"\t{mu_post:.2f}\t{sig_post:.2f}\t{ratio:.4f}"
+                        f"\t{mu_cb:.2f}\t{sig_cb:.2f}\t{a_cb:.3f}\t{n_cb:.3f}"
+                        f"\t{ratio_cb:.4f}\n")
             f.write("\n# inner-ring histogram bin centres + counts (pre/post recal)\n")
             f.write("e_centre\tlegacy_pre\tlegacy_post\tnew_pre\tnew_post\n")
             for c, lp, lq, np_, nq in zip(cal['centres'],
@@ -525,36 +636,61 @@ def main(argv=None):
         cal_png = png_path[:-4] + "_calibrated.png"
         fig, axes = plt.subplots(1, 2, figsize=(14, 5.5), sharey=True)
 
-        for ax, label, c_pre, c_post, mu_pre, sig_pre, mu_post, sig_post, base_col in [
+        for ax, label, c_pre, c_post, mu_pre, sig_pre, mu_post, sig_post, \
+            mu_cb, sig_cb, alpha_cb, n_cb, A_cb, base_col in [
             (axes[0], 'legacy',
              cal['counts_l_pre'], cal['counts_l_post'],
              cal['mu_l_pre'], cal['sig_l_pre'],
-             cal['mu_l_post'], cal['sig_l_post'], '#888'),
+             cal['mu_l_post'], cal['sig_l_post'],
+             cal['mu_cb_l'], cal['sig_cb_l'], cal['alpha_l'],
+             cal['n_l'], cal['A_cb_l'], '#888'),
             (axes[1], f'new (W={W:g} ns)',
              cal['counts_n_pre'], cal['counts_n_post'],
              cal['mu_n_pre'], cal['sig_n_pre'],
-             cal['mu_n_post'], cal['sig_n_post'], '#1f77b4'),
+             cal['mu_n_post'], cal['sig_n_post'],
+             cal['mu_cb_n'], cal['sig_cb_n'], cal['alpha_n'],
+             cal['n_n'], cal['A_cb_n'], '#1f77b4'),
         ]:
             ax.step(cal['centres'], c_pre, where='mid', color=base_col,
-                    alpha=0.55, lw=1.3,
-                    label=f'pre  μ={mu_pre:.0f}  σ={sig_pre:.0f} MeV')
+                    alpha=0.45, lw=1.3,
+                    label=f'pre   μ={mu_pre:.0f}  σ_G={sig_pre:.0f} MeV')
             ax.step(cal['centres'], c_post, where='mid', color=base_col,
                     lw=1.8,
-                    label=f'post μ={mu_post:.0f}  σ={sig_post:.0f} MeV')
-            ax.axvline(args.target_peak, color='#d62728', ls=':', lw=0.8,
-                       label=f'target μ = {args.target_peak:.1f} MeV')
+                    label=f'post  μ={mu_post:.0f}  σ_G={sig_post:.0f} MeV')
+            # Crystal-ball curve overlay
+            if not math.isnan(mu_cb) and A_cb > 0:
+                xfine = np.linspace(mu_cb - 6 * sig_cb, mu_cb + 4 * sig_cb,
+                                    400)
+                yfine = crystal_ball(xfine, A_cb, mu_cb, sig_cb,
+                                     alpha_cb, n_cb)
+                ax.plot(xfine, yfine, color='#d62728', lw=1.4,
+                        label=f'CB    μ={mu_cb:.0f}  σ={sig_cb:.0f} MeV  '
+                              f'(α={alpha_cb:.2f} n={n_cb:.1f})')
+            ax.axvline(args.target_peak, color='#444', ls=':', lw=0.8)
             ax.set_xlabel('cluster energy (MeV)')
             ax.set_title(label)
             ax.grid(alpha=0.3)
-            ax.legend(loc='upper right', fontsize=9)
+            ax.legend(loc='upper right', fontsize=8.5)
         axes[0].set_ylabel('events / bin')
+        excl_str = (f",  exclude rows [{args.exclude_rowcol[0]},"
+                    f"{args.exclude_rowcol[1]}]×cols "
+                    f"[{args.exclude_rowcol[2]},{args.exclude_rowcol[3]}]"
+                    if args.exclude_rowcol else "")
+        sigEcb_l = (cal['sig_cb_l']/cal['mu_cb_l']*100
+                    if cal['mu_cb_l'] and not math.isnan(cal['mu_cb_l'])
+                    else float('nan'))
+        sigEcb_n = (cal['sig_cb_n']/cal['mu_cb_n']*100
+                    if cal['mu_cb_n'] and not math.isnan(cal['mu_cb_n'])
+                    else float('nan'))
         fig.suptitle(
             f"Inner-ring per-module gain refinement "
             f"(r < {args.inner_radius:.0f} mm,  "
             f"seed E ≥ {args.min_seed_energy:.0f} MeV,  "
-            f"≥ {args.min_per_module} ev/mod)\n"
-            f"σ_E/E   legacy = {cal['sig_l_post']/cal['mu_l_post']*100:.2f} %    "
-            f"new = {cal['sig_n_post']/cal['mu_n_post']*100:.2f} %", fontsize=11)
+            f"≥ {args.min_per_module} ev/mod{excl_str})\n"
+            f"σ_E/E (Gauss):  legacy = {cal['sig_l_post']/cal['mu_l_post']*100:.2f} %   "
+            f"new = {cal['sig_n_post']/cal['mu_n_post']*100:.2f} %     "
+            f"(CB):  legacy = {sigEcb_l:.2f} %   new = {sigEcb_n:.2f} %",
+            fontsize=10.5)
         fig.tight_layout()
         fig.savefig(cal_png, dpi=130)
         plt.close(fig)
