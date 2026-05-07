@@ -52,8 +52,14 @@ function clearFrontend(){
     gemHits=null; gemHitsEvent=-1;
     // GEM APV waveform tab — drop cached payload, clear the canvas registry,
     // and empty the body so previously rendered traces aren't left visible.
+    // Also reset gemApvBuiltKey: buildGemApvSections() uses it as an
+    // idempotency guard ("same detector layout → skip rebuild"), so without
+    // this reset the next fetch with the same layout would early-return and
+    // leave the body empty + gemApvCanvases unpopulated, producing a blank
+    // GEM APV auto-report screenshot.
     gemApvData=null;
     gemApvCanvases.clear();
+    gemApvBuiltKey='';
     const apvBody=document.getElementById('gem-apv-body');
     if(apvBody) apvBody.innerHTML='';
     clearEpicsFrontend();
