@@ -696,7 +696,8 @@ static void bind_hycal(py::module_ &m)
         .def_readwrite("corner_conn",        &fdec::ClusterConfig::corner_conn)
         .def_readwrite("split_iter",         &fdec::ClusterConfig::split_iter)
         .def_readwrite("least_split",        &fdec::ClusterConfig::least_split)
-        .def_readwrite("log_weight_thres",   &fdec::ClusterConfig::log_weight_thres);
+        .def_readwrite("log_weight_thres",   &fdec::ClusterConfig::log_weight_thres)
+        .def_readwrite("seed_time_window",   &fdec::ClusterConfig::seed_time_window);
 
     py::class_<fdec::ModuleHit>(m, "ModuleHit",
         "One HyCal module hit fed into the clusterer.")
@@ -740,6 +741,20 @@ static void bind_hycal(py::module_ &m)
             },
             py::return_value_policy::reference_internal)
         .def_readonly("hit", &fdec::HyCalCluster::RecoResult::hit);
+
+    py::class_<fdec::HyCalCluster::SeedNeighborTiming>(m, "SeedNeighborTiming",
+        "One (seed, neighbour-pulse) row from HyCalCluster.collect_neighbor_timing(). "
+        "Used to histogram dt vs. spatial distance / energy on real data and "
+        "pick a value for HyCalClusterConfig.seed_time_window.")
+        .def_readonly("seed_module",     &fdec::HyCalCluster::SeedNeighborTiming::seed_module)
+        .def_readonly("neighbor_module", &fdec::HyCalCluster::SeedNeighborTiming::neighbor_module)
+        .def_readonly("seed_time",       &fdec::HyCalCluster::SeedNeighborTiming::seed_time)
+        .def_readonly("neighbor_time",   &fdec::HyCalCluster::SeedNeighborTiming::neighbor_time)
+        .def_readonly("dt",              &fdec::HyCalCluster::SeedNeighborTiming::dt)
+        .def_readonly("seed_energy",     &fdec::HyCalCluster::SeedNeighborTiming::seed_energy)
+        .def_readonly("neighbor_energy", &fdec::HyCalCluster::SeedNeighborTiming::neighbor_energy)
+        .def_readonly("dx_q",            &fdec::HyCalCluster::SeedNeighborTiming::dx_q)
+        .def_readonly("dy_q",            &fdec::HyCalCluster::SeedNeighborTiming::dy_q);
 
     // --- HyCalCluster -------------------------------------------------------
 
@@ -788,7 +803,21 @@ static void bind_hycal(py::module_ &m)
         .def("get_clusters", &fdec::HyCalCluster::GetClusters,
              py::return_value_policy::reference_internal,
              "Low-level module-level clusters (ModuleCluster[]).  Only valid "
-             "between form_clusters() and the next clear().");
+             "between form_clusters() and the next clear().")
+        .def("collect_neighbor_timing",
+            [](const fdec::HyCalCluster &self, double max_quantized_dist) {
+                std::vector<fdec::HyCalCluster::SeedNeighborTiming> out;
+                { py::gil_scoped_release rel;
+                  self.CollectNeighborTiming(out, max_quantized_dist); }
+                return out;
+            },
+            py::arg("max_quantized_dist") = 5.0,
+            "Identify seed candidates (largest pulse satisfying "
+            "min_center_energy that hasn't already seeded another cluster in "
+            "this scan) and return one SeedNeighborTiming row per neighbouring "
+            "pulse within `max_quantized_dist` module units of the seed — "
+            "WITHOUT applying any timing cut and WITHOUT consuming neighbour "
+            "pulses.  Use to inform HyCalClusterConfig.seed_time_window.");
 }
 
 // -------------------------------------------------------------------------

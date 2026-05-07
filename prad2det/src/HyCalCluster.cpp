@@ -10,6 +10,8 @@
 #include "HyCalCluster.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <numeric>
 
 namespace fdec
 {
@@ -113,40 +115,92 @@ void HyCalCluster::ReconstructMatched(std::vector<RecoResult> &out) const
 }
 
 //=============================================================================
-// DFS grouping — form connected components of adjacent hits
+// Seed-driven BFS grouping (multi-pulse aware)
+//
+// Pulses are sorted by energy descending; the largest unconsumed pulse that
+// passes min_center_energy becomes a cluster seed and grows an island via
+// BFS through module neighbours.  For each neighbour module, the LARGEST
+// unconsumed pulse whose time lies within ±seed_time_window of the seed is
+// added to the group and marked consumed.  Pulses that fall outside the
+// seed's window stay alive in the pool and can seed a later cluster at a
+// different timing within the same event.
+//
+// When seed_time_window <= 0 the dt gate is bypassed and the algorithm
+// degenerates to the legacy "all connected pulses" behaviour — single-pulse
+// callers see no change.
 //=============================================================================
 
 void HyCalCluster::group_hits()
 {
-    // Build reverse map: module index → hit index
-    mod_to_hit_.assign(sys_.module_count(), -1);
-    for (size_t i = 0; i < hits_.size(); ++i)
-        mod_to_hit_[hits_[i].index] = static_cast<int>(i);
+    // Build per-module pulse lists.  Multiple pulses on the same module
+    // are common with FADC waveform data; mod_to_hits_[m] holds every
+    // hit index whose ModuleHit::index == m.
+    mod_to_hits_.assign(sys_.module_count(), {});
+    for (int i = 0; i < static_cast<int>(hits_.size()); ++i)
+        mod_to_hits_[hits_[i].index].push_back(i);
 
     hit_group_id_.assign(hits_.size(), -1);
-    std::vector<bool> visited(hits_.size(), false);
+    consumed_.assign(hits_.size(), false);
 
-    for (size_t i = 0; i < hits_.size(); ++i) {
-        if (visited[i]) continue;
+    // Energy-descending seed order — the global largest pulse seeds first,
+    // ensuring that if multiple pulses on a module are time-coincident with
+    // the seed, the most energetic shower claims the cluster.
+    std::vector<int> order(hits_.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+              [&](int a, int b) { return hits_[a].energy > hits_[b].energy; });
+
+    for (int seed : order) {
+        if (consumed_[seed]) continue;
+        // sorted desc — once we drop below the seed threshold no later
+        // pulse can satisfy it.
+        if (hits_[seed].energy < config_.min_center_energy) break;
+
         int gid = static_cast<int>(groups_.size());
         groups_.emplace_back();
         groups_.back().reserve(ISLAND_GROUP_RESERVE);
-        dfs_group(groups_.back(), gid, static_cast<int>(i), visited);
+
+        consumed_[seed] = true;
+        hit_group_id_[seed] = gid;
+        grow_island(seed, gid, groups_.back());
     }
 }
 
-void HyCalCluster::dfs_group(std::vector<int> &group, int group_id, int hit_idx,
-                              std::vector<bool> &visited)
+void HyCalCluster::grow_island(int seed_idx, int group_id, std::vector<int> &group)
 {
-    group.push_back(hit_idx);
-    visited[hit_idx] = true;
-    hit_group_id_[hit_idx] = group_id;
+    const float seed_time = hits_[seed_idx].time;
+    const bool  use_time  = config_.seed_time_window > 0.f;
+    const float dt_max    = config_.seed_time_window;
 
-    sys_.for_each_neighbor(hits_[hit_idx].index, config_.corner_conn, [&](int ni) {
-        int hi = mod_to_hit_[ni];
-        if (hi >= 0 && !visited[hi])
-            dfs_group(group, group_id, hi, visited);
-    });
+    // BFS using the group vector itself as the queue: indices [qi..size())
+    // are still to be expanded.  Seed pushed by caller; we expand the
+    // frontier in insertion order.
+    group.push_back(seed_idx);
+    for (size_t qi = 0; qi < group.size(); ++qi) {
+        int hi = group[qi];
+        sys_.for_each_neighbor(hits_[hi].index, config_.corner_conn, [&](int ni) {
+            // Per neighbour MODULE, pick at most one pulse to add to this
+            // group: the LARGEST-energy unconsumed pulse whose time lies
+            // within ±seed_time_window of the seed (or any unconsumed
+            // pulse when gating is off).  Largest-amplitude is more
+            // reliable than closest-in-time — small pulses have noisy
+            // peak times.  Other pulses on the same module remain in
+            // the pool for a different seed at a different timing.
+            int best_k = -1;
+            for (int k : mod_to_hits_[ni]) {
+                if (consumed_[k]) continue;
+                if (use_time && std::fabs(hits_[k].time - seed_time) > dt_max)
+                    continue;
+                if (best_k < 0 || hits_[k].energy > hits_[best_k].energy)
+                    best_k = k;
+            }
+            if (best_k >= 0) {
+                consumed_[best_k] = true;
+                hit_group_id_[best_k] = group_id;
+                group.push_back(best_k);
+            }
+        });
+    }
 }
 
 //=============================================================================
@@ -191,12 +245,17 @@ std::vector<int> HyCalCluster::find_maxima(const std::vector<int> &group) const
             continue;
 
         bool is_max = true;
-        // include corners when checking for maxima (same as old code)
+        // include corners when checking for maxima (same as old code).  With
+        // multi-pulse modules, only the pulse that joined this group counts
+        // — others on the same module belong to a different (later) seed.
         sys_.for_each_neighbor(hit.index, true, [&](int ni) {
             if (!is_max) return;
-            int hj = mod_to_hit_[ni];
-            if (hj >= 0 && hit_group_id_[hj] == gid && hits_[hj].energy > hit.energy)
-                is_max = false;
+            for (int hj : mod_to_hits_[ni]) {
+                if (hit_group_id_[hj] == gid && hits_[hj].energy > hit.energy) {
+                    is_max = false;
+                    return;
+                }
+            }
         });
 
         if (is_max)
@@ -420,6 +479,80 @@ float HyCalCluster::get_profile_frac_at(float cx, float cy, float cE,
     float dist = std::sqrt(static_cast<float>(dx * dx + dy * dy));
     ModuleType type = sys_.sector_info(sid).mtype;
     return profile_->GetFraction(type, dist, cE);
+}
+
+//=============================================================================
+// CollectNeighborTiming — emit (seed, neighbour, dt) rows without applying any
+// timing cut, for picking the production value of seed_time_window from real
+// data.
+//
+// Seed selection mirrors group_hits(): largest-energy pulse passing
+// min_center_energy that hasn't already been claimed AS A SEED in this
+// scan.  After selecting a seed, every other pulse within ±max_qdist on
+// each axis is emitted — neighbour pulses themselves are NOT consumed,
+// so a pulse may appear as a neighbour of more than one seed (intentional:
+// the study is about the dt landscape, not about cluster assignment).
+//
+// Const-friendly: works on local mod_to_hits / consumed scratch so it
+// doesn't disturb the per-event state used by FormClusters().
+//=============================================================================
+void HyCalCluster::CollectNeighborTiming(std::vector<SeedNeighborTiming> &out,
+                                          double max_qdist) const
+{
+    out.clear();
+    if (hits_.empty()) return;
+
+    std::vector<std::vector<int>> mod_hits(sys_.module_count());
+    for (int i = 0; i < static_cast<int>(hits_.size()); ++i)
+        mod_hits[hits_[i].index].push_back(i);
+
+    std::vector<int> order(hits_.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+              [&](int a, int b) { return hits_[a].energy > hits_[b].energy; });
+
+    // A seed is "claimed" only against its own (module, time) so a single
+    // physics shower with several pulses doesn't double-seed.  Use a small
+    // claim window matching min_center_energy regions (5 ns is shorter than
+    // any reasonable pulse separation) to keep the seed list compact.
+    constexpr float SEED_CLAIM_WINDOW_NS = 5.f;
+
+    std::vector<bool> seed_claimed(hits_.size(), false);
+
+    for (int seed : order) {
+        if (seed_claimed[seed]) continue;
+        if (hits_[seed].energy < config_.min_center_energy) break;
+
+        // Claim this seed and any pulses on the SAME module within the
+        // tight seed-claim window so we don't emit multiple seeds for the
+        // same physics event in the same module.
+        const float st = hits_[seed].time;
+        const int   sm = hits_[seed].index;
+        for (int k : mod_hits[sm])
+            if (std::fabs(hits_[k].time - st) <= SEED_CLAIM_WINDOW_NS)
+                seed_claimed[k] = true;
+
+        const auto &smod = sys_.module(sm);
+        for (int k = 0; k < static_cast<int>(hits_.size()); ++k) {
+            if (k == seed) continue;
+            const auto &nmod = sys_.module(hits_[k].index);
+            double dx, dy;
+            sys_.qdist(smod, nmod, dx, dy);
+            if (std::fabs(dx) > max_qdist || std::fabs(dy) > max_qdist) continue;
+
+            SeedNeighborTiming s;
+            s.seed_module     = sm;
+            s.neighbor_module = hits_[k].index;
+            s.seed_time       = st;
+            s.neighbor_time   = hits_[k].time;
+            s.dt              = hits_[k].time - st;
+            s.seed_energy     = hits_[seed].energy;
+            s.neighbor_energy = hits_[k].energy;
+            s.dx_q            = dx;
+            s.dy_q            = dy;
+            out.push_back(s);
+        }
+    }
 }
 
 } // namespace fdec

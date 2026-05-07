@@ -385,23 +385,48 @@ json AppState::computeClustersJson(fdec::EventData &event, int ev_id,
                 const auto *mod = hycal.module_by_daq(crate, s, c);
                 if (!mod || !mod->is_hycal()) continue;
 
-                float adc_val = 0;
                 if (is_adc1881m) {
-                    adc_val = cd.samples[0];
-                } else {
-                    ana.SetChannelKey(roc.tag, s, c);
-                    ana.Analyze(cd.samples, cd.nsamples, wres);
-                    // Clustering input has no time cut — Waveform-Tab peak_filter
-                    // is decoupled from clustering. See app_state.cpp main loop.
-                    adc_val = bestPeak(wres);
+                    float adc_val = cd.samples[0];
+                    if (adc_val <= 0) continue;
+                    float energy = (mod->cal_factor > 0.)
+                        ? static_cast<float>(mod->energize(adc_val))
+                        : adc_val * adc_to_mev;
+                    mod_energy[mod->index] = energy;
+                    clusterer.AddHit(mod->index, energy, 0.f);
+                    continue;
                 }
-                if (adc_val <= 0) continue;
 
-                float energy = (mod->cal_factor > 0.)
-                    ? static_cast<float>(mod->energize(adc_val))
-                    : adc_val * adc_to_mev;
-                mod_energy[mod->index] = energy;
-                clusterer.AddHit(mod->index, energy, 0.f);
+                ana.SetChannelKey(roc.tag, s, c);
+                ana.Analyze(cd.samples, cd.nsamples, wres);
+                if (wres.npeaks <= 0) continue;
+
+                if (cluster_cfg.seed_time_window > 0.f) {
+                    // Multi-pulse mode — push every detected peak; the
+                    // clusterer applies the seed-anchored time gate.
+                    float total = 0.f;
+                    for (int p = 0; p < wres.npeaks; ++p) {
+                        const auto &pk = wres.peaks[p];
+                        float adc_val = pk.integral;
+                        if (adc_val <= 0) continue;
+                        float energy = (mod->cal_factor > 0.)
+                            ? static_cast<float>(mod->energize(adc_val))
+                            : adc_val * adc_to_mev;
+                        clusterer.AddHit(mod->index, energy, pk.time);
+                        total += energy;
+                    }
+                    if (total > 0.f) mod_energy[mod->index] = total;
+                } else {
+                    // Legacy: largest-integral peak across all detected
+                    // peaks (no time gate) — Waveform-Tab peak_filter is
+                    // decoupled.
+                    float adc_val = bestPeak(wres);
+                    if (adc_val <= 0) continue;
+                    float energy = (mod->cal_factor > 0.)
+                        ? static_cast<float>(mod->energize(adc_val))
+                        : adc_val * adc_to_mev;
+                    mod_energy[mod->index] = energy;
+                    clusterer.AddHit(mod->index, energy, 0.f);
+                }
             }
         }
     }
@@ -579,11 +604,32 @@ void AppState::processEvent(fdec::EventData &event,
                 if (do_cluster && crate >= 0) {
                     const auto *mod = hycal.module_by_daq(crate, s, c);
                     if (mod && mod->is_hycal()) {
-                        float adc_val = is_adc1881m ? (float)cd.samples[0] : peak_for_cluster;
-                        if (adc_val > 0) {
+                        if (is_adc1881m) {
+                            float adc_val = (float)cd.samples[0];
+                            if (adc_val > 0) {
+                                float energy = (mod->cal_factor > 0.)
+                                    ? static_cast<float>(mod->energize(adc_val))
+                                    : adc_val * adc_to_mev;
+                                clusterer.AddHit(mod->index, energy, 0.f);
+                                total_module_energy += energy;
+                            }
+                        } else if (cluster_cfg.seed_time_window > 0.f) {
+                            // Multi-pulse: hand every analyzer-detected peak
+                            // to the clusterer (which applies the seed-anchored
+                            // time gate).  No pre-window — the gate is the cut.
+                            for (int p = 0; p < wres.npeaks; ++p) {
+                                const auto &pk = wres.peaks[p];
+                                if (pk.integral <= 0) continue;
+                                float energy = (mod->cal_factor > 0.)
+                                    ? static_cast<float>(mod->energize(pk.integral))
+                                    : pk.integral * adc_to_mev;
+                                clusterer.AddHit(mod->index, energy, pk.time);
+                                total_module_energy += energy;
+                            }
+                        } else if (peak_for_cluster > 0) {
                             float energy = (mod->cal_factor > 0.)
-                                ? static_cast<float>(mod->energize(adc_val))
-                                : adc_val * adc_to_mev;
+                                ? static_cast<float>(mod->energize(peak_for_cluster))
+                                : peak_for_cluster * adc_to_mev;
                             clusterer.AddHit(mod->index, energy, 0.f);
                             total_module_energy += energy;
                         }

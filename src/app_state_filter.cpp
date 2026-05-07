@@ -236,21 +236,40 @@ bool AppState::evaluateFilter(fdec::EventData &event,
                     const auto *mod = hycal.module_by_daq(crate, s, c);
                     if (!mod || !mod->is_hycal()) continue;
 
-                    float adc_val;
                     if (is_adc1881m) {
-                        adc_val = (float)cd.samples[0];
-                    } else {
-                        ana.SetChannelKey(roc.tag, s, c);
-                        ana.Analyze(cd.samples, cd.nsamples, wres);
-                        // Clustering input has no time cut — peak_filter is
-                        // decoupled. Per-cluster cuts will reattach later.
-                        adc_val = bestPeak(wres);
+                        float adc_val = (float)cd.samples[0];
+                        if (adc_val > 0) {
+                            float energy = (mod->cal_factor > 0.)
+                                ? static_cast<float>(mod->energize(adc_val))
+                                : adc_val * adc_to_mev;
+                            clusterer.AddHit(mod->index, energy, 0.f);
+                        }
+                        continue;
                     }
-                    if (adc_val > 0) {
-                        float energy = (mod->cal_factor > 0.)
-                            ? static_cast<float>(mod->energize(adc_val))
-                            : adc_val * adc_to_mev;
-                        clusterer.AddHit(mod->index, energy, 0.f);
+
+                    ana.SetChannelKey(roc.tag, s, c);
+                    ana.Analyze(cd.samples, cd.nsamples, wres);
+                    if (wres.npeaks <= 0) continue;
+
+                    if (cluster_cfg.seed_time_window > 0.f) {
+                        // Multi-pulse: feed every detected peak with its time
+                        // so the clusterer can apply the seed-anchored gate.
+                        for (int p = 0; p < wres.npeaks; ++p) {
+                            const auto &pk = wres.peaks[p];
+                            if (pk.integral <= 0) continue;
+                            float energy = (mod->cal_factor > 0.)
+                                ? static_cast<float>(mod->energize(pk.integral))
+                                : pk.integral * adc_to_mev;
+                            clusterer.AddHit(mod->index, energy, pk.time);
+                        }
+                    } else {
+                        float adc_val = bestPeak(wres);
+                        if (adc_val > 0) {
+                            float energy = (mod->cal_factor > 0.)
+                                ? static_cast<float>(mod->energize(adc_val))
+                                : adc_val * adc_to_mev;
+                            clusterer.AddHit(mod->index, energy, 0.f);
+                        }
                     }
                 }
             }
