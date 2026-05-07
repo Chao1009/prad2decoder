@@ -226,19 +226,19 @@ std::array<float, 3> PhysicsTools::FitPeakResolution(int module_id) const
     int nfound = spec.Search(h, 2, "nobackground nodraw", 0.05);
 
     double peak0;
-    if (nfound > 0) {
+    /*if (nfound > 0) {
         // pick the rightmost (highest-energy) peak
         const double *xpeaks = spec.GetPositionX();
         peak0 = xpeaks[0];
         for (int i = 1; i < nfound; ++i)
             if (xpeaks[i] > peak0) peak0 = xpeaks[i];
-    } else {
+    } else {*/
         // fallback: maximum bin
         peak0 = h->GetBinCenter(h->GetMaximumBin());
-    }
+    //}
 
     // --- Gaussian fit around the selected peak ---
-    double rms0 = 40.;
+    double rms0 = 70.;
     double lo = peak0 - 1.5 * rms0, hi = peak0 + 1.5 * rms0;
 
     // Crystal Ball: Gaussian core + power-law low-energy tail
