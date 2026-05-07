@@ -159,7 +159,7 @@ int main(int argc, char *argv[])
 
     std::string input_calib_file, output_calib_file;
     if (iteration == 1)
-        input_calib_file = db_dir + "/calibration/calibration_factor_2_0.json";
+        input_calib_file = db_dir + "/calibration/calibration_factor_3p5.json";
     else if (iteration > 1)
         input_calib_file = run_out_dir + Form("/calib_iter%d.json", iteration - 1);
     else {
@@ -317,8 +317,8 @@ int main(int argc, char *argv[])
                             // gain correction for HyCal modules
                             //if(mod_id>1000) adc *= gain_correction.w[mod_id-1000].corr[1]; // Use g2-based correction for PbWO4 (matches LMS2)
                             //else adc *= gain_correction.g[mod_id].corr[1]; // Use g2-based correction for PbGlass (matches LMS2)
-                            if(mod_id > 1000) adc *= ev.gain_factor[j];
-                            else adc *= ev.gain_factor[j];
+                            //if(mod_id > 1000) adc *= ev.gain_factor[j];
+                            //else adc *= ev.gain_factor[j];
                         }
                         else{
                             if(ev.daq_npeaks[j] <= 0) continue;
