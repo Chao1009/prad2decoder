@@ -1176,8 +1176,7 @@ class ControlPanel(QWidget):
         do_all_row = QHBoxLayout()
         self._do_all_btn = QPushButton("Do It All  (SCP → Replay → hadd → Filter → Quick Check)")
         self._do_all_btn.setStyleSheet(_BTN_PRIMARY)
-        self._do_all_btn.clicked.connect(
-            lambda: self._start_pipeline(["scp", "replay", "hadd", "filter", "qcheck"]))
+        self._do_all_btn.clicked.connect(self._on_do_all_clicked)
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setStyleSheet(_BTN_DANGER)
         self._stop_btn.setEnabled(False)
@@ -1298,8 +1297,10 @@ class ControlPanel(QWidget):
         # Replay Filter params
         self._filter_input_edit  = QLineEdit()
         self._filter_output_edit = QLineEdit()
+        self._filter_cut_edit    = QLineEdit()   # -c cut JSON for replay filter
         self._max_events_flt     = QLineEdit("-1")
-        for w in (self._filter_input_edit, self._filter_output_edit, self._max_events_flt):
+        for w in (self._filter_input_edit, self._filter_output_edit,
+                  self._filter_cut_edit, self._max_events_flt):
             _hlay.addWidget(w)
 
         # Quick Check params
@@ -1340,6 +1341,87 @@ class ControlPanel(QWidget):
     # ------------------------------------------------------------------
     # Settings dialogs
     # ------------------------------------------------------------------
+
+    def _on_do_all_clicked(self):
+        """Show a quick-config popup, then launch the full pipeline."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Do It All — Quick Setup")
+        dlg.setMinimumWidth(480)
+        dlg.setStyleSheet(themed("QDialog{background:#0d1117;}"))
+        form = QFormLayout(dlg)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        def _le(w):
+            w.setFont(QFont("Consolas", 10))
+            w.setStyleSheet(_LINEEDIT_SS)
+            return w
+        def _sp(w):
+            w.setFont(QFont("Consolas", 10))
+            w.setStyleSheet(_SPINBOX_SS)
+            return w
+
+        run_e = _le(QLineEdit(self._run_edit.text()))
+        run_e.setPlaceholderText("e.g. 024388")
+
+        thr_sp = _sp(QSpinBox())
+        thr_sp.setRange(1, 256)
+        thr_sp.setValue(25)
+
+        # Filter cut JSON — line edit + Browse button
+        cut_e = _le(QLineEdit(self._filter_cut_edit.text()))
+        cut_e.setPlaceholderText("(optional) path/to/cut.json")
+        cut_row = QWidget()
+        cr = QHBoxLayout(cut_row)
+        cr.setContentsMargins(0, 0, 0, 0)
+        cr.setSpacing(4)
+        cr.addWidget(cut_e)
+        cut_brw = QPushButton("Browse…")
+        cut_brw.setFixedWidth(72)
+        cut_brw.setStyleSheet(_BTN_NORMAL)
+        def browse_cut():
+            p, _ = QFileDialog.getOpenFileName(
+                dlg, "Select cut JSON", cut_e.text(),
+                "JSON files (*.json);;All files (*)")
+            if p:
+                cut_e.setText(p)
+        cut_brw.clicked.connect(browse_cut)
+        cr.addWidget(cut_brw)
+
+        zsup_e = _le(QLineEdit(self._zerosup_edit.text()))
+        zsup_e.setPlaceholderText("e.g. 5")
+
+        form.addRow("Run number:", run_e)
+        form.addRow("Threads (-j):", thr_sp)
+        form.addRow("Filter cut JSON (-c):", cut_row)
+        form.addRow("GEM zero-sup (-z):", zsup_e)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("Start Pipeline")
+        ok_btn.setStyleSheet(_BTN_PRIMARY)
+        ca_btn = QPushButton("Cancel")
+        ca_btn.setStyleSheet(_BTN_NORMAL)
+        btns.addStretch()
+        btns.addWidget(ok_btn)
+        btns.addWidget(ca_btn)
+        form.addRow(btns)
+
+        def accept():
+            rn = run_e.text().strip()
+            if not rn:
+                run_e.setStyleSheet(_LINEEDIT_SS + "border:1px solid #f85149;")
+                return
+            self._run_edit.setText(rn)
+            self._threads_spin.setValue(thr_sp.value())
+            self._filter_cut_edit.setText(cut_e.text())
+            self._zerosup_edit.setText(zsup_e.text())
+            dlg.accept()
+
+        ok_btn.clicked.connect(accept)
+        ca_btn.clicked.connect(dlg.reject)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._start_pipeline(["scp", "replay", "hadd", "filter", "qcheck"])
 
     def _open_scp_dialog(self):
         dlg = QDialog(self)
@@ -1857,6 +1939,9 @@ class ControlPanel(QWidget):
 
         cmd = [_REPLAY_FILTER_CMD, flt_input, "-o", flt_out,
                "-j", self._filter_report]
+        cut_cfg = self._filter_cut_edit.text().strip()
+        if cut_cfg:
+            cmd += ["-c", cut_cfg]
         n_ev = self._max_events_flt.text().strip()
         if n_ev and n_ev != "-1":
             cmd += ["-n", n_ev]
