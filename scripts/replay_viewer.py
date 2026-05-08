@@ -1287,10 +1287,6 @@ class ControlPanel(QWidget):
         self._prad1_chk.setStyleSheet(_CHK_SS)
         form_rep.addRow("", self._prad1_chk)
 
-        self._auto_delete_chk = QCheckBox("Auto-delete EVIO files after recon")
-        self._auto_delete_chk.setStyleSheet(_CHK_SS)
-        form_rep.addRow("", self._auto_delete_chk)
-
         rep_btn_row = QHBoxLayout()
         self._replay_btn = QPushButton("Run Replay")
         self._replay_btn.setStyleSheet(_BTN_PRIMARY)
@@ -1755,28 +1751,6 @@ class ControlPanel(QWidget):
         self._process = None
         color = "#3fb950" if exit_code == 0 else "#f85149"
         self._log(f"<span style='color:{color}'>[Exit {exit_code}]</span>")
-
-        # After hadd: delete the entire recon subdirectory
-        if exit_code == 0 and self._current_step == "hadd" and self._recon_dir:
-            self._log(f"<span style='color:#8b949e'>Deleting recon directory: {self._recon_dir}…</span>")
-            try:
-                shutil.rmtree(self._recon_dir)
-                self._log("<span style='color:#3fb950'>Recon directory deleted.</span>")
-            except Exception as exc:
-                self._log(f"<span style='color:#f85149'>Delete failed ({self._recon_dir}): {exc}</span>")
-            self._hadd_inputs = []
-
-        # Auto-delete evio files if requested
-        if exit_code == 0 and self._auto_delete_chk.isChecked() \
-                and self._pending_steps and self._pending_steps[0] == "qcheck":
-            evio_path = self._evio_edit.text().strip() or self._evio_dir
-            if evio_path and os.path.isdir(evio_path):
-                self._log(f"<span style='color:#f0883e'>Auto-deleting EVIO dir: {evio_path}</span>")
-                try:
-                    shutil.rmtree(evio_path)
-                    self._log("<span style='color:#3fb950'>EVIO files deleted.</span>")
-                except Exception as exc:
-                    self._log(f"<span style='color:#f85149'>Delete failed: {exc}</span>")
 
         if exit_code == 0:
             self._run_next_step()
