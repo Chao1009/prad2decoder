@@ -17,6 +17,7 @@
 #include "EventData.h"
 #include "EventData_io.h"
 #include "InstallPaths.h"
+#include "ConfigSetup.h"
 
 #include <TFile.h>
 #include <TTree.h>
@@ -89,6 +90,13 @@ int main(int argc, char *argv[])
         "PRAD2_DATABASE_DIR",
         {"../share/prad2evviewer/database"},
         DATABASE_DIR);
+
+    // --- load run config: assign run_id and Ebeam from gRunConfig ---
+    run_id = analysis::get_run_int(root_files[0]);
+    gRunConfig = analysis::LoadRunConfig(dbDir + "/runinfo/2p1_general.json", run_id);
+    Ebeam = gRunConfig.Ebeam > 0.f ? gRunConfig.Ebeam : Ebeam;
+
+    std::cout << "Processing run " << run_id << " with Ebeam = " << Ebeam << " MeV\n";
 
     // --- init detector system ---
     fdec::HyCalSystem hycal;
@@ -241,7 +249,7 @@ int main(int argc, char *argv[])
 
     outfile.Close();
     
-    physics.Resolution2Database(run_id); // example run ID
+    // physics.Resolution2Database(run_id); // example run ID
 
     std::cerr << "Result saved -> " << outName.Data() << "\n";
 }
