@@ -1498,10 +1498,26 @@ class ControlPanel(QWidget):
         f_start = self._f_start.value()
         f_end = self._f_end.value()
         run_id = int(run_num)
-        remote_run_dir = f"{remote_base}/prad_{run_id:06d}"
-        local_run_dir  = os.path.join(local_base, f"prad_{run_id:06d}")
+        run_tag = f"prad_{run_id:06d}"
+        remote_run_dir = f"{remote_base}/{run_tag}"
+        local_run_dir  = os.path.join(local_base, run_tag)
 
-        # Auto-check disk space before downloading
+        # -- pre-check: find files in range that already exist locally --
+        existing = []
+        if os.path.isdir(local_run_dir):
+            import glob as _glob
+            for path in sorted(_glob.glob(f"{local_run_dir}/{run_tag}.evio.*")):
+                m = re.search(r'\.evio\.(\d+)$', os.path.basename(path))
+                if m:
+                    n = int(m.group(1))
+                    if f_start <= n <= f_end:
+                        existing.append(os.path.basename(path))
+        if existing:
+            self._log(
+                f"<span style='color:#d29922'>{len(existing)} file(s) already present "
+                f"in {local_run_dir} — will be skipped.</span>")
+
+        # -- disk space check --
         self._log("<span style='color:#8b949e'>Checking disk space…</span>")
         self._status_lbl.setText("Checking disk space…")
         try:
@@ -1526,26 +1542,37 @@ class ControlPanel(QWidget):
         except Exception as exc:
             self._log(f"<span style='color:#f0883e'>Disk check error: {exc} — continuing anyway.</span>")
 
-        # Auto-create local run directory if it doesn't exist
-        if not os.path.isdir(local_run_dir):
-            self._log(f"<span style='color:#8b949e'>Creating directory: {local_run_dir}</span>")
-        os.makedirs(local_run_dir, exist_ok=True)
         self._evio_dir = local_run_dir
 
-        # Build rsync pattern list: "*.evio.NNN" for each index
-        patterns = []
-        run_tag = f"prad_{run_id:06d}"
-        for i in range(f_start, f_end + 1):
-            patterns += ["--include", f"{run_tag}.evio.{i:05d}"]
-        cmd = (["rsync", "-avz", "--progress"] +
-               ["--include", "*/"] +
-               patterns +
-               ["--exclude", "*",
-                f"{host}:{remote_run_dir}/",
-                local_run_dir + "/"])
-        self._log(f"<span style='color:#8b949e'>$ {' '.join(cmd)}</span>")
+        # bash script: list remote files, skip existing, scp missing ones
+        bash_cmd = (
+            f"mkdir -p {local_run_dir}\n"
+            f"echo 'Local directory: {local_run_dir}'\n"
+            f"echo 'Listing remote files...'\n"
+            f"ALL_FILES=$(ssh {host} 'ls {remote_run_dir}/' 2>/dev/null | sort)\n"
+            f"COPIED=0\n"
+            f"ALREADY=0\n"
+            f"while IFS= read -r f; do\n"
+            f"    NUM=$(echo \"$f\" | grep -oP '\\.evio\\.\\K[0-9]+')\n"
+            f"    [ -z \"$NUM\" ] && continue\n"
+            f"    N=$((10#$NUM))\n"
+            f"    if [ \"$N\" -lt {f_start} ] || [ \"$N\" -gt {f_end} ]; then continue; fi\n"
+            f"    if [ -f \"{local_run_dir}/$f\" ]; then\n"
+            f"        echo \"  Already exists: $f (skipping)\"\n"
+            f"        ALREADY=$((ALREADY+1))\n"
+            f"    else\n"
+            f"        echo \"  Copying $f\"\n"
+            f"        scp {host}:{remote_run_dir}/$f {local_run_dir}/\n"
+            f"        COPIED=$((COPIED+1))\n"
+            f"    fi\n"
+            f"done <<< \"$ALL_FILES\"\n"
+            f"echo \"Done. Copied $COPIED file(s), $ALREADY already present.\"\n"
+        )
+        self._log(
+            f"<span style='color:#8b949e'>Run {run_num}, files {f_start}–{f_end}"
+            f" → {local_run_dir}</span>")
         self._status_lbl.setText("Getting data…")
-        self._launch_process(cmd)
+        self._launch_process_bash(bash_cmd)
 
     # -- Replay step --
 
@@ -1686,6 +1713,16 @@ class ControlPanel(QWidget):
         proc.setProcessEnvironment(QProcessEnvironment.systemEnvironment())
         self._process = proc
         proc.start(cmd[0], cmd[1:])
+
+    def _launch_process_bash(self, bash_script: str):
+        proc = QProcess(self)
+        proc.readyReadStandardOutput.connect(self._on_stdout)
+        proc.readyReadStandardError.connect(self._on_stderr)
+        proc.finished.connect(self._on_finished)
+        proc.errorOccurred.connect(self._on_process_error)
+        proc.setProcessEnvironment(QProcessEnvironment.systemEnvironment())
+        self._process = proc
+        proc.start("bash", ["-c", bash_script])
 
     def _on_stdout(self):
         if self._process is None:
