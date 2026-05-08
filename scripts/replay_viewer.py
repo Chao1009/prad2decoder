@@ -108,8 +108,9 @@ _EVIO_BYTES_PER_FILE_EST = int(2.1 * 1024 ** 3)
 
 # Replay tools — match the names used by other scripts
 _PRAD2_BIN_DIR    = "/data/soft/prad2evviewer/build/bin"
-_REPLAY_RECON_CMD = os.path.join(_PRAD2_BIN_DIR, "pradana_replay_recon")
-_QUICK_CHECK_CMD  = os.path.join(_PRAD2_BIN_DIR, "pradana_quick_check")
+_REPLAY_RECON_CMD = os.path.join(_PRAD2_BIN_DIR, "prad2ana_replay_recon")
+_QUICK_CHECK_CMD  = os.path.join(_PRAD2_BIN_DIR, "prad2ana_quick_check")
+_RECON_BASE       = "/data/replay_recon"
 
 
 # ===========================================================================
@@ -1556,7 +1557,11 @@ class ControlPanel(QWidget):
             return
         out_dir = self._outdir_edit.text().strip()
         if not out_dir:
-            out_dir = evio_path + "_recon"
+            run_num = self._run_edit.text().strip()
+            if run_num:
+                out_dir = os.path.join(_RECON_BASE, f"prad_{int(run_num):06d}")
+            else:
+                out_dir = os.path.join(_RECON_BASE, os.path.basename(evio_path.rstrip("/")) + "_recon")
         os.makedirs(out_dir, exist_ok=True)
         self._recon_dir = out_dir
 
@@ -1627,7 +1632,8 @@ class ControlPanel(QWidget):
             m = re.match(r'(prad_\d+_recon).*\.root', first)
             out_name = (m.group(1) + ".root") if m else "merged_recon.root"
 
-        self._hadd_out = os.path.join(recon_dir, out_name)
+        hadd_dir = os.path.dirname(recon_dir.rstrip("/")) or _RECON_BASE
+        self._hadd_out = os.path.join(hadd_dir, out_name)
         self._hadd_inputs = list(root_files)
 
         cmd = ["hadd", "-f", self._hadd_out] + root_files
@@ -1676,6 +1682,7 @@ class ControlPanel(QWidget):
         proc.readyReadStandardOutput.connect(self._on_stdout)
         proc.readyReadStandardError.connect(self._on_stderr)
         proc.finished.connect(self._on_finished)
+        proc.errorOccurred.connect(self._on_process_error)
         proc.setProcessEnvironment(QProcessEnvironment.systemEnvironment())
         self._process = proc
         proc.start(cmd[0], cmd[1:])
@@ -1692,22 +1699,35 @@ class ControlPanel(QWidget):
         data = self._process.readAllStandardError().data().decode(errors="replace")
         self._log(f"<span style='color:#f0883e'>{data.replace(chr(10), '<br>')}</span>")
 
+    def _on_process_error(self, error):
+        labels = {
+            QProcess.ProcessError.FailedToStart: "Failed to start (executable not found or no permission)",
+            QProcess.ProcessError.Crashed:       "Process crashed",
+            QProcess.ProcessError.Timedout:      "Timed out",
+            QProcess.ProcessError.ReadError:     "Read error",
+            QProcess.ProcessError.WriteError:    "Write error",
+            QProcess.ProcessError.UnknownError:  "Unknown error",
+        }
+        msg = labels.get(error, f"Process error ({error})")
+        self._log(f"<span style='color:#f85149'>[Process error] {msg}</span>")
+        self._pending_steps.clear()
+        self._process = None
+        self._set_running(False)
+
     def _on_finished(self, exit_code: int, _status):
         self._process = None
         color = "#3fb950" if exit_code == 0 else "#f85149"
         self._log(f"<span style='color:{color}'>[Exit {exit_code}]</span>")
 
-        # After hadd: delete the individual recon ROOT files
-        if exit_code == 0 and self._current_step == "hadd" and self._hadd_inputs:
-            self._log("<span style='color:#8b949e'>Deleting individual recon ROOT files\u2026</span>")
-            for f in self._hadd_inputs:
-                if os.path.isfile(f):
-                    try:
-                        os.remove(f)
-                    except Exception as exc:
-                        self._log(f"<span style='color:#f85149'>Delete failed ({f}): {exc}</span>")
+        # After hadd: delete the entire recon subdirectory
+        if exit_code == 0 and self._current_step == "hadd" and self._recon_dir:
+            self._log(f"<span style='color:#8b949e'>Deleting recon directory: {self._recon_dir}…</span>")
+            try:
+                shutil.rmtree(self._recon_dir)
+                self._log("<span style='color:#3fb950'>Recon directory deleted.</span>")
+            except Exception as exc:
+                self._log(f"<span style='color:#f85149'>Delete failed ({self._recon_dir}): {exc}</span>")
             self._hadd_inputs = []
-            self._log("<span style='color:#3fb950'>Individual recon files deleted.</span>")
 
         # Auto-delete evio files if requested
         if exit_code == 0 and self._auto_delete_chk.isChecked() \
