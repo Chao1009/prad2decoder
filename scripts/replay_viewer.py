@@ -1144,8 +1144,12 @@ class ControlPanel(QWidget):
         self._stop_btn.setStyleSheet(_BTN_DANGER)
         self._stop_btn.setEnabled(False)
         self._stop_btn.clicked.connect(self._on_stop)
+        self._auto_delete_evio_chk = QCheckBox("Auto-delete EVIO files")
+        self._auto_delete_evio_chk.setStyleSheet(_CHK_SS)
         do_all_row.addWidget(self._do_all_btn)
         do_all_row.addWidget(self._stop_btn)
+        do_all_row.addSpacing(12)
+        do_all_row.addWidget(self._auto_delete_evio_chk)
         do_all_row.addStretch()
         root.addLayout(do_all_row)
 
@@ -1751,6 +1755,30 @@ class ControlPanel(QWidget):
         self._process = None
         color = "#3fb950" if exit_code == 0 else "#f85149"
         self._log(f"<span style='color:{color}'>[Exit {exit_code}]</span>")
+
+        # After hadd: always delete the individual recon ROOT files
+        if exit_code == 0 and self._current_step == "hadd" and self._hadd_inputs:
+            self._log("<span style='color:#8b949e'>Deleting individual recon ROOT files…</span>")
+            for f in self._hadd_inputs:
+                if os.path.isfile(f):
+                    try:
+                        os.remove(f)
+                    except Exception as exc:
+                        self._log(f"<span style='color:#f85149'>Delete failed ({f}): {exc}</span>")
+            self._hadd_inputs = []
+            self._log("<span style='color:#3fb950'>Individual recon files deleted.</span>")
+
+        # After replay: optionally delete the downloaded EVIO directory
+        if exit_code == 0 and self._current_step == "replay" \
+                and self._auto_delete_evio_chk.isChecked():
+            evio_path = self._evio_edit.text().strip() or self._evio_dir
+            if evio_path and os.path.isdir(evio_path):
+                self._log(f"<span style='color:#f0883e'>Auto-deleting EVIO dir: {evio_path}</span>")
+                try:
+                    shutil.rmtree(evio_path)
+                    self._log("<span style='color:#3fb950'>EVIO files deleted.</span>")
+                except Exception as exc:
+                    self._log(f"<span style='color:#f85149'>Delete failed: {exc}</span>")
 
         if exit_code == 0:
             self._run_next_step()
