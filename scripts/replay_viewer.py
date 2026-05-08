@@ -1499,6 +1499,35 @@ class ControlPanel(QWidget):
         run_id = int(run_num)
         remote_run_dir = f"{remote_base}/run{run_id:06d}"
         local_run_dir  = os.path.join(local_base, f"run{run_id:06d}")
+
+        # Auto-check disk space before downloading
+        self._log("<span style='color:#8b949e'>Checking disk space…</span>")
+        self._status_lbl.setText("Checking disk space…")
+        try:
+            needed, free = _check_disk_space(host, remote_run_dir, local_base,
+                                              f_start, f_end)
+            ok = free >= needed
+            color = "#3fb950" if ok else "#f85149"
+            self._log(
+                f"<span style='color:{color}'>Disk: need {_fmt_bytes(needed)}, "
+                f"free {_fmt_bytes(free)}{'  ✓' if ok else '  ✗ (insufficient)'}</span>")
+            self._disk_lbl.setText(
+                f"<span style='color:{color}'>"
+                f"need {_fmt_bytes(needed)}, free {_fmt_bytes(free)}"
+                f"{'  ✓' if ok else '  ✗ (insufficient)'}</span>")
+            if not ok:
+                self._log("<span style='color:#f85149'>Insufficient disk space — stopping.</span>")
+                self._pending_steps.clear()
+                self._set_running(False)
+                return
+        except RuntimeError as exc:
+            self._log(f"<span style='color:#f0883e'>Disk check SSH error: {exc} — continuing anyway.</span>")
+        except Exception as exc:
+            self._log(f"<span style='color:#f0883e'>Disk check error: {exc} — continuing anyway.</span>")
+
+        # Auto-create local run directory if it doesn't exist
+        if not os.path.isdir(local_run_dir):
+            self._log(f"<span style='color:#8b949e'>Creating directory: {local_run_dir}</span>")
         os.makedirs(local_run_dir, exist_ok=True)
         self._evio_dir = local_run_dir
 
