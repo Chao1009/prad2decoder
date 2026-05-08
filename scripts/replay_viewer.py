@@ -107,8 +107,9 @@ _LOCAL_DATA_BASE  = "/data/evio/data"
 _EVIO_BYTES_PER_FILE_EST = int(2.1 * 1024 ** 3)
 
 # Replay tools — match the names used by other scripts
-_REPLAY_RECON_CMD = "pradana_replay_recon"
-_QUICK_CHECK_CMD  = "pradana_quick_check"
+_PRAD2_BIN_DIR    = "/data/soft/prad2evviewer/build/bin"
+_REPLAY_RECON_CMD = os.path.join(_PRAD2_BIN_DIR, "pradana_replay_recon")
+_QUICK_CHECK_CMD  = os.path.join(_PRAD2_BIN_DIR, "pradana_quick_check")
 
 
 # ===========================================================================
@@ -303,6 +304,16 @@ class Hist1DWidget(QWidget):
         self._btn_log_y.clicked.connect(self._toggle_log_y)
         self._cache_pm: Optional[QPixmap] = None
         self._cached_sx_state: Optional[tuple] = None
+        # Crystal Ball auto-fit
+        self.auto_cb_fit: bool = False
+        # Asymmetric fit window around peak: (left_width, right_width) in data units.
+        # None means use the full histogram range.
+        self.cb_fit_range: Optional[Tuple[float, float]] = None
+        # Asymmetric fit window in units of estimated sigma: (left_nsigma, right_nsigma).
+        # Takes priority over cb_fit_range when set.
+        self.cb_fit_range_sigma: Optional[Tuple[float, float]] = None
+        self._cb_fit_result: Optional[Tuple[float, float, float, float]] = None  # (mean, mean_err, sigma, sigma_err)
+        self._cb_fit_curve: Optional[Tuple[List[float], List[float]]] = None  # (xs, ys)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -319,8 +330,91 @@ class Hist1DWidget(QWidget):
             self._x_lo = edges[0]
             self._x_hi = edges[-1]
         self._drag_start = self._drag_cur = None
+        self._cb_fit_result = None
+        self._cb_fit_curve  = None
+        if self.auto_cb_fit:
+            self._run_cb_fit()
         self._cache_pm = None
         self.update()
+
+    # -- Crystal Ball fit --
+
+    def _run_cb_fit(self):
+        """Fit histogram with a Crystal Ball function using scipy.
+        Stores fit result and curve; silently ignored if scipy is unavailable.
+        """
+        if not self._values or not self._edges or len(self._edges) < 3:
+            return
+        try:
+            from scipy.optimize import curve_fit
+            import numpy as _np
+        except ImportError:
+            return
+
+        edges  = _np.array(self._edges)
+        values = _np.array(self._values, dtype=float)
+        mids   = (edges[:-1] + edges[1:]) / 2.0
+        mask   = values > 0
+        if mask.sum() < 5:
+            return
+
+        def crystal_ball(x, amp, mu, sigma, alpha, n):
+            alpha = abs(alpha)
+            n     = abs(n)
+            t = (x - mu) / sigma
+            result = _np.where(
+                t > -alpha,
+                amp * _np.exp(-0.5 * t * t),
+                amp * (n / alpha) ** n * _np.exp(-0.5 * alpha * alpha)
+                    / (n / alpha - alpha - t) ** n
+            )
+            return result
+
+        # initial guesses
+        amp0   = float(values.max())
+        mu0    = float(mids[values.argmax()])
+        # estimate sigma from RMS within half-max region
+        half_max_mask = values > amp0 * 0.5
+        sigma0 = float(mids[half_max_mask].std()) if half_max_mask.sum() > 1 else (edges[-1] - edges[0]) * 0.05
+        if sigma0 <= 0:
+            sigma0 = (edges[-1] - edges[0]) * 0.05
+
+        # Determine fit window
+        if self.cb_fit_range_sigma is not None:
+            left_ns, right_ns = self.cb_fit_range_sigma
+            fit_lo = mu0 - left_ns * sigma0
+            fit_hi = mu0 + right_ns * sigma0
+            fit_mask = mask & (mids >= fit_lo) & (mids <= fit_hi)
+        elif self.cb_fit_range is not None:
+            left_w, right_w = self.cb_fit_range
+            fit_lo = mu0 - left_w
+            fit_hi = mu0 + right_w
+            fit_mask = mask & (mids >= fit_lo) & (mids <= fit_hi)
+        else:
+            fit_lo, fit_hi = float(edges[0]), float(edges[-1])
+            fit_mask = mask
+        if fit_mask.sum() < 5:
+            fit_mask = mask  # fall back to full range
+            fit_lo, fit_hi = float(edges[0]), float(edges[-1])
+
+        try:
+            popt, pcov = curve_fit(
+                crystal_ball, mids[fit_mask], values[fit_mask],
+                p0=[amp0, mu0, sigma0, 1.5, 3.0],
+                bounds=([0, fit_lo, 0, 0.1, 1.1],
+                        [_np.inf, fit_hi, (fit_hi - fit_lo), 10.0, 50.0]),
+                maxfev=5000,
+            )
+            perr = _np.sqrt(_np.diag(pcov))
+            mu_fit, mu_err     = float(popt[1]), float(perr[1])
+            sigma_fit, sigma_err = abs(float(popt[2])), float(perr[2])
+            self._cb_fit_result = (mu_fit, mu_err, sigma_fit, sigma_err)
+            # build curve for drawing
+            xs = _np.linspace(edges[0], edges[-1], 400)
+            ys = crystal_ball(xs, *popt)
+            self._cb_fit_curve = (xs.tolist(), ys.tolist())
+        except Exception:
+            pass
 
     def clear(self):
         self._values = []
@@ -533,6 +627,42 @@ class Hist1DWidget(QWidget):
                 sx = to_sx(xt)
                 p.drawText(QRectF(sx - 28, py + ph + 2, 56, 16),
                            Qt.AlignmentFlag.AlignCenter, f"{xt:.4g}")
+
+        # Crystal Ball fit curve + annotation
+        if self._cb_fit_curve is not None:
+            xs, ys = self._cb_fit_curve
+            if use_log_y:
+                vis_max_fit = max((v for v in ys if v > 0), default=1.0)
+                y_hi_fit = math.log10(vis_max_fit * 1.5) if vis_max_fit > 0 else 0.0
+                y_lo_fit = y_lo_log
+                def to_sy_fit(v):
+                    if v <= 0: return py + ph + 1
+                    lv = math.log10(v)
+                    return py + ph * (1.0 - (lv - y_lo_fit) / (y_hi_fit - y_lo_fit))
+            else:
+                to_sy_fit = to_sy
+            fit_pen = QPen(QColor("#ff7b00"), 1.5)
+            p.setPen(fit_pen)
+            pts = []
+            for xv, yv in zip(xs, ys):
+                if x_lo <= xv <= x_hi:
+                    pts.append(QPointF(to_sx(xv), to_sy_fit(yv)))
+            for i in range(1, len(pts)):
+                p.drawLine(pts[i - 1], pts[i])
+
+        if self._cb_fit_result is not None:
+            mu, mu_err, sigma, sigma_err = self._cb_fit_result
+            label1 = f"\u03bc = {mu:.2f} \u00b1 {mu_err:.2f}"
+            label2 = f"\u03c3 = {sigma:.2f} \u00b1 {sigma_err:.2f}"
+            p.setFont(QFont("Consolas", 9))
+            p.setPen(QColor("#ff7b00"))
+            p.drawText(QRectF(px + 4, py + 4, pw - 8, 16),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       label1)
+            p.drawText(QRectF(px + 4, py + 20, pw - 8, 16),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       label2)
+
         p.end()
         self._cache_pm = pm
         self._cached_sx_state = (px, py, pw, ph, x_lo, x_hi,
@@ -985,9 +1115,12 @@ class ControlPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._process: Optional[QProcess] = None
-        self._pending_steps: List[str] = []   # ["scp", "replay", "qcheck"]
+        self._pending_steps: List[str] = []   # ["scp", "replay", "hadd", "qcheck"]
+        self._current_step: str = ""          # step currently running
         self._evio_dir: str = ""              # set after SCP completes
         self._recon_dir: str = ""             # set after replay completes
+        self._hadd_out: str = ""              # merged ROOT file from hadd
+        self._hadd_inputs: List[str] = []     # individual files to delete after hadd
         self._qcheck_out: str = ""            # final ROOT file path
         self._build_ui()
 
@@ -1002,10 +1135,10 @@ class ControlPanel(QWidget):
 
         # ---- Do It All / Stop row (always visible at top) ----
         do_all_row = QHBoxLayout()
-        self._do_all_btn = QPushButton("Do It All  (SCP → Replay → Quick Check)")
+        self._do_all_btn = QPushButton("Do It All  (SCP → Replay → hadd → Quick Check)")
         self._do_all_btn.setStyleSheet(_BTN_PRIMARY)
         self._do_all_btn.clicked.connect(
-            lambda: self._start_pipeline(["scp", "replay", "qcheck"]))
+            lambda: self._start_pipeline(["scp", "replay", "hadd", "qcheck"]))
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setStyleSheet(_BTN_DANGER)
         self._stop_btn.setEnabled(False)
@@ -1143,7 +1276,7 @@ class ControlPanel(QWidget):
         self._gem_ped_edit.setStyleSheet(_LINEEDIT_SS)
         form_rep.addRow("GEM pedestal (-g):", self._gem_ped_edit)
 
-        self._zerosup_edit = QLineEdit()
+        self._zerosup_edit = QLineEdit("5")
         self._zerosup_edit.setPlaceholderText("(default)")
         self._zerosup_edit.setFont(QFont("Consolas", 10))
         self._zerosup_edit.setStyleSheet(_LINEEDIT_SS)
@@ -1338,10 +1471,13 @@ class ControlPanel(QWidget):
             self._log("<span style='color:#3fb950'>[All steps complete]</span>")
             return
         step = self._pending_steps.pop(0)
+        self._current_step = step
         if step == "scp":
             self._run_scp()
         elif step == "replay":
             self._run_replay()
+        elif step == "hadd":
+            self._run_hadd()
         elif step == "qcheck":
             self._run_qcheck()
         else:
@@ -1429,10 +1565,50 @@ class ControlPanel(QWidget):
         self._status_lbl.setText("Running replay recon…")
         self._launch_process(cmd)
 
+    # -- hadd merge step --
+
+    def _run_hadd(self):
+        import glob
+        recon_dir = self._recon_dir
+        if not recon_dir or not os.path.isdir(recon_dir):
+            self._log("<span style='color:#f85149'>No recon directory for hadd.</span>")
+            self._set_running(False)
+            return
+
+        root_files = sorted(glob.glob(os.path.join(recon_dir, "*.root")))
+        if not root_files:
+            self._log("<span style='color:#8b949e'>No ROOT files in recon dir, skipping hadd.</span>")
+            self._run_next_step()
+            return
+
+        if len(root_files) == 1:
+            self._hadd_out = root_files[0]
+            self._log(f"<span style='color:#8b949e'>Single ROOT file, skipping hadd: {self._hadd_out}</span>")
+            self._run_next_step()
+            return
+
+        # Determine merged output filename
+        run_num = self._run_edit.text().strip()
+        if run_num:
+            out_name = f"prad_{int(run_num):06d}_recon.root"
+        else:
+            # Derive from first file (e.g. prad_024436_recon_0000.root → prad_024436_recon.root)
+            first = os.path.basename(root_files[0])
+            m = re.match(r'(prad_\d+_recon).*\.root', first)
+            out_name = (m.group(1) + ".root") if m else "merged_recon.root"
+
+        self._hadd_out = os.path.join(recon_dir, out_name)
+        self._hadd_inputs = list(root_files)
+
+        cmd = ["hadd", "-f", self._hadd_out] + root_files
+        self._log(f"<span style='color:#8b949e'>$ {' '.join(cmd)}</span>")
+        self._status_lbl.setText("Merging ROOT files (hadd)\u2026")
+        self._launch_process(cmd)
+
     # -- Quick check step --
 
     def _run_qcheck(self):
-        qc_input = self._qc_input_edit.text().strip() or self._recon_dir
+        qc_input = self._qc_input_edit.text().strip() or self._hadd_out or self._recon_dir
         if not qc_input:
             self._log("<span style='color:#f85149'>No input specified for quick_check.</span>")
             self._set_running(False)
@@ -1440,9 +1616,14 @@ class ControlPanel(QWidget):
 
         qc_out = self._qc_output_edit.text().strip()
         if not qc_out:
-            base = qc_input if not os.path.isdir(qc_input) else qc_input
-            qc_out = os.path.join(base if os.path.isdir(base) else os.path.dirname(base),
-                                  "quick_check_out.root")
+            run_num = self._run_edit.text().strip()
+            if run_num:
+                out_name = f"prad_{int(run_num):06d}_quick.root"
+            else:
+                out_name = "quick_check_out.root"
+            base_dir = (os.path.dirname(qc_input)
+                        if not os.path.isdir(qc_input) else qc_input)
+            qc_out = os.path.join(base_dir, out_name)
         self._qcheck_out = qc_out
 
         cmd = [_QUICK_CHECK_CMD, qc_input]
@@ -1485,6 +1666,18 @@ class ControlPanel(QWidget):
         self._process = None
         color = "#3fb950" if exit_code == 0 else "#f85149"
         self._log(f"<span style='color:{color}'>[Exit {exit_code}]</span>")
+
+        # After hadd: delete the individual recon ROOT files
+        if exit_code == 0 and self._current_step == "hadd" and self._hadd_inputs:
+            self._log("<span style='color:#8b949e'>Deleting individual recon ROOT files\u2026</span>")
+            for f in self._hadd_inputs:
+                if os.path.isfile(f):
+                    try:
+                        os.remove(f)
+                    except Exception as exc:
+                        self._log(f"<span style='color:#f85149'>Delete failed ({f}): {exc}</span>")
+            self._hadd_inputs = []
+            self._log("<span style='color:#3fb950'>Individual recon files deleted.</span>")
 
         # Auto-delete evio files if requested
         if exit_code == 0 and self._auto_delete_chk.isChecked() \
@@ -1693,12 +1886,18 @@ class ResultsPanel(QWidget):
         mg.setSpacing(4)
         mol_top = QHBoxLayout()
         self._h_moller_z    = Hist1DWidget("Moller Z vertex")
+        self._h_moller_z.auto_cb_fit = True
+        self._h_moller_z.cb_fit_range_sigma = (3.0, 1.5)  # left 3σ, right 1.5σ
         self._h_moller_phi  = Hist1DWidget("Moller Φ diff")
         mol_top.addWidget(self._h_moller_z)
         mol_top.addWidget(self._h_moller_phi)
         mol_bot = QHBoxLayout()
         self._h_moller_x = Hist1DWidget("Moller X center")
+        self._h_moller_x.auto_cb_fit = True
+        self._h_moller_x.cb_fit_range = (5.0, 2.5)  # left 5 mm, right 2.5 mm from peak
         self._h_moller_y = Hist1DWidget("Moller Y center")
+        self._h_moller_y.auto_cb_fit = True
+        self._h_moller_y.cb_fit_range = (5.0, 2.5)  # left 5 mm, right 2.5 mm from peak
         mol_bot.addWidget(self._h_moller_x)
         mol_bot.addWidget(self._h_moller_y)
         mg.addLayout(mol_top, stretch=1)
