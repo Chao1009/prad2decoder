@@ -229,10 +229,6 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
             if (tc.contains("hycal_module_file"))
                 result.hycal_time_cut_file = tc["hycal_module_file"].get<std::string>();
         }
-        // The legacy "matching": { radius, use_square_cut } block is no longer
-        // honoured — matching now goes through prad2::trk::TrackMatcher with
-        // σ_GEM and σ_HC(E) coefficients sourced from
-        // reconstruction_config.json:matching.  Keys silently ignored.
         if (c.contains("gain_factor") && c["gain_factor"].is_object()) {
             const auto &gf = c["gain_factor"];
             if (gf.contains("data_dir")) result.gain_data_dir = gf["data_dir"].get<std::string>();

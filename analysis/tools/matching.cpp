@@ -11,6 +11,7 @@
 #include "HyCalSystem.h"
 #include "TrackMatcher.h"
 #include "TrackGeometry.h"
+#include "PipelineBuilder.h"
 #include "EventData.h"
 #include "EventData_io.h"
 #include "ConfigSetup.h"
@@ -77,39 +78,42 @@ int main(int argc, char *argv[])
         {"../share/prad2evviewer/database"},
         DATABASE_DIR);
 
-    // --- load detector geometry config from JSON ---
-    std::string run_str = get_run_str(root_files[0]);
-    int run_num = get_run_int(root_files[0]);
-    gRunConfig = LoadRunConfig(dbDir + "/runinfo/general.json", run_num);
+    // --- one-stop detector wiring (HyCal, GEM, transforms, matching params)
+    // PipelineBuilder loads reconstruction_config.json:matching into
+    // pipeline.{hycal_pos_res, gem_pos_res, target_pos_res} and pushes
+    // hycal_pos_res into HyCalSystem, so per-run σ tuning lands without
+    // hardcoded defaults.
+    auto pipeline = prad2::PipelineBuilder()
+        .set_database_dir(dbDir)
+        .set_run_number_from_evio(root_files[0])
+        .build();
 
-    // --- init detector system ---
-    fdec::HyCalSystem hycal;
-    hycal.Init(dbDir + "/hycal_map.json");
+    auto &hycal = pipeline.hycal;
+    gRunConfig  = pipeline.run_cfg;          // global used by GetProjection below
     PhysicsTools physics(hycal);
 
     // --- TrackMatcher (target-seed, χ²-gated) -----------------------------
-    // gRunConfig provides target + GEM placements; per-plane σ_GEM and HC
-    // (A, B, C) coefficients aren't in RunConfig (they live in
-    // reconstruction_config.json:matching), so we use working defaults
-    // here.  Tools that need per-run tuning should load matching params
-    // explicitly the way AppState does in src/app_state_init.cpp.
     namespace trk = prad2::trk;
-    auto xforms = analysis::BuildLabTransforms(gRunConfig);
     trk::MatcherConfig mcfg;
     mcfg.planes.resize(4);
     for (int d = 0; d < 4; ++d) {
+        const float s = (d < (int)pipeline.gem_pos_res.size())
+                        ? pipeline.gem_pos_res[d] : 0.5f;
         mcfg.planes[d].id      = d;
-        mcfg.planes[d].z       = gRunConfig.gem_z[d];
-        mcfg.planes[d].sigma_x = 0.5f;          // mm — typical PRad-II GEM σ
-        mcfg.planes[d].sigma_y = 0.5f;
-        mcfg.planes[d].xform   = xforms.gem[d];
+        mcfg.planes[d].z       = pipeline.run_cfg.gem_z[d];
+        mcfg.planes[d].sigma_x = s;
+        mcfg.planes[d].sigma_y = s;
+        mcfg.planes[d].xform   = pipeline.gem_transforms[d];
     }
     mcfg.hc_sigma_A = hycal.GetPositionResolutionA();
     mcfg.hc_sigma_B = hycal.GetPositionResolutionB();
     mcfg.hc_sigma_C = hycal.GetPositionResolutionC();
-    mcfg.target_x = gRunConfig.target_x;
-    mcfg.target_y = gRunConfig.target_y;
-    mcfg.target_z = gRunConfig.target_z;
+    mcfg.target_x        = pipeline.run_cfg.target_x;
+    mcfg.target_y        = pipeline.run_cfg.target_y;
+    mcfg.target_z        = pipeline.run_cfg.target_z;
+    mcfg.target_sigma_x  = pipeline.target_pos_res[0];
+    mcfg.target_sigma_y  = pipeline.target_pos_res[1];
+    mcfg.target_sigma_z  = pipeline.target_pos_res[2];
     mcfg.match_nsigma = 3.0f;
     mcfg.max_chi2     = 5.0f;        // loose; this is a quick-look tool
     trk::TrackMatcher matcher(std::move(mcfg));
