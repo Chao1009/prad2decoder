@@ -149,8 +149,8 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < N; i++) {
         tree->GetEntry(i);
-        if (i % 1000 == 0)
-            std::cerr << "\rPass 1: " << i << " / " << N << std::flush;
+        //if (i % 1000 == 0)
+            //std::cerr << "\rPass 1: " << i << " / " << N << std::flush;
 
         for (int j = 0; j < ev.n_clusters; j++) {
             float r = std::sqrt(ev.cl_x[j]*ev.cl_x[j] + ev.cl_y[j]*ev.cl_y[j]);

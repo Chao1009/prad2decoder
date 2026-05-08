@@ -63,14 +63,14 @@ from PyQt6.QtCore import (
     QPointF, QProcess, QProcessEnvironment, QRectF, QThread, Qt, pyqtSignal,
 )
 from PyQt6.QtGui import (
-    QColor, QFont, QImage, QPainter, QPen, QPixmap,
+    QAction, QColor, QFont, QImage, QPainter, QPen, QPixmap,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox,
     QDialog, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMenu, QPushButton, QScrollArea,
     QSizePolicy, QSlider, QSplitter, QSpinBox, QStackedWidget,
-    QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QTabWidget, QTextEdit, QToolButton, QVBoxLayout, QWidget,
 )
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,18 @@ try:
     HAS_UPROOT = True
 except ImportError:
     HAS_UPROOT = False
+
+# ---------------------------------------------------------------------------
+# Optional matplotlib (for embedded filter report chart)
+# ---------------------------------------------------------------------------
+try:
+    from matplotlib.backends.backend_qtagg import (
+        FigureCanvasQTAgg, NavigationToolbar2QT as _MplNavToolbar,
+    )
+    from matplotlib.figure import Figure as MplFigure
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
 # ---------------------------------------------------------------------------
 # Shared HyCal infrastructure
@@ -101,6 +113,27 @@ from hycal_geoview import (  # noqa: E402
 DB_DIR       = os.path.join(os.path.dirname(SCRIPT_DIR), "database")
 MODULES_JSON = os.path.join(DB_DIR, "hycal_map.json")
 
+# ---------------------------------------------------------------------------
+# Optional replay_report_viewer (for embedded filter report chart)
+# ---------------------------------------------------------------------------
+_TOOLS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "analysis", "tools")
+try:
+    if _TOOLS_DIR not in sys.path:
+        sys.path.insert(0, _TOOLS_DIR)
+    from replay_report_viewer import (  # noqa: E402
+        load_report         as _rrv_load_report,
+        get_x               as _rrv_get_x,
+        reject_segments     as _rrv_reject_segments,
+        shade_rejected      as _rrv_shade_rejected,
+        _draw_status_row    as _rrv_draw_status,
+        _draw_livetime_rate as _rrv_draw_lt_rate,
+        _finite_xy          as _rrv_finite_xy,
+        _title_for          as _rrv_title_for,
+    )
+    HAS_REPORT_VIEWER = True
+except ImportError:
+    HAS_REPORT_VIEWER = False
+
 _REMOTE_HOST      = "clondaq2"
 _REMOTE_DATA_BASE = "/data/stage2"
 _LOCAL_DATA_BASE  = "/data/evio/data"
@@ -108,8 +141,9 @@ _EVIO_BYTES_PER_FILE_EST = int(2.1 * 1024 ** 3)
 
 # Replay tools — match the names used by other scripts
 _PRAD2_BIN_DIR    = "/data/soft/prad2evviewer/build/bin"
-_REPLAY_RECON_CMD = os.path.join(_PRAD2_BIN_DIR, "prad2ana_replay_recon")
-_QUICK_CHECK_CMD  = os.path.join(_PRAD2_BIN_DIR, "prad2ana_quick_check")
+_REPLAY_RECON_CMD   = os.path.join(_PRAD2_BIN_DIR, "prad2ana_replay_recon")
+_REPLAY_FILTER_CMD  = os.path.join(_PRAD2_BIN_DIR, "prad2ana_replay_filter")
+_QUICK_CHECK_CMD    = os.path.join(_PRAD2_BIN_DIR, "prad2ana_quick_check")
 _RECON_BASE       = "/data/replay_recon"
 
 
@@ -1111,17 +1145,21 @@ class ControlPanel(QWidget):
     """Left panel: SCP, replay, quick_check controls + log output."""
 
     # Emitted when a quick_check ROOT file has been generated (or opened).
-    rootFileReady = pyqtSignal(str)   # path to ROOT file
+    rootFileReady     = pyqtSignal(str)   # path to ROOT file
+    # Emitted when a replay-filter JSON report has been generated.
+    filterReportReady = pyqtSignal(str)   # path to *.report.json
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._process: Optional[QProcess] = None
-        self._pending_steps: List[str] = []   # ["scp", "replay", "hadd", "qcheck"]
+        self._pending_steps: List[str] = []   # ["scp", "replay", "hadd", "filter", "qcheck"]
         self._current_step: str = ""          # step currently running
         self._evio_dir: str = ""              # set after SCP completes
         self._recon_dir: str = ""             # set after replay completes
         self._hadd_out: str = ""              # merged ROOT file from hadd
         self._hadd_inputs: List[str] = []     # individual files to delete after hadd
+        self._filter_out: str = ""            # filtered ROOT file from replay filter
+        self._filter_report: str = ""         # JSON report written by replay filter
         self._qcheck_out: str = ""            # final ROOT file path
         self._build_ui()
 
@@ -1136,10 +1174,10 @@ class ControlPanel(QWidget):
 
         # ---- Do It All / Stop row (always visible at top) ----
         do_all_row = QHBoxLayout()
-        self._do_all_btn = QPushButton("Do It All  (SCP → Replay → hadd → Quick Check)")
+        self._do_all_btn = QPushButton("Do It All  (SCP → Replay → hadd → Filter → Quick Check)")
         self._do_all_btn.setStyleSheet(_BTN_PRIMARY)
         self._do_all_btn.clicked.connect(
-            lambda: self._start_pipeline(["scp", "replay", "hadd", "qcheck"]))
+            lambda: self._start_pipeline(["scp", "replay", "hadd", "filter", "qcheck"]))
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setStyleSheet(_BTN_DANGER)
         self._stop_btn.setEnabled(False)
@@ -1153,194 +1191,125 @@ class ControlPanel(QWidget):
         do_all_row.addStretch()
         root.addLayout(do_all_row)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(themed(
-            "QScrollArea{border:none;background:transparent;}"
-            "QScrollBar:vertical{background:#0d1117;width:8px;}"
-            "QScrollBar::handle:vertical{background:#30363d;border-radius:4px;}"))
+        # ---- Step buttons (compact rows) ----
+        steps_widget = QWidget()
+        steps_lay = QVBoxLayout(steps_widget)
+        steps_lay.setContentsMargins(4, 4, 4, 4)
+        steps_lay.setSpacing(6)
 
-        inner = QWidget()
-        inner_lay = QVBoxLayout(inner)
-        inner_lay.setContentsMargins(2, 2, 2, 2)
-        inner_lay.setSpacing(8)
-
-        # ---- SCP section ----
-        grp_scp = QGroupBox("1. Get Data (SCP from clondaq2)")
-        grp_scp.setStyleSheet(_GRPBOX_SS)
-        form_scp = QFormLayout(grp_scp)
-        form_scp.setSpacing(5)
-        form_scp.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self._run_edit = QLineEdit()
-        self._run_edit.setPlaceholderText("e.g. 024100")
-        self._run_edit.setFont(QFont("Consolas", 10))
-        self._run_edit.setStyleSheet(_LINEEDIT_SS)
-        form_scp.addRow("Run number:", self._run_edit)
-
-        self._host_edit = QLineEdit(_REMOTE_HOST)
-        self._host_edit.setFont(QFont("Consolas", 10))
-        self._host_edit.setStyleSheet(_LINEEDIT_SS)
-        form_scp.addRow("Remote host:", self._host_edit)
-
-        self._remote_base_edit = QLineEdit(_REMOTE_DATA_BASE)
-        self._remote_base_edit.setFont(QFont("Consolas", 10))
-        self._remote_base_edit.setStyleSheet(_LINEEDIT_SS)
-        form_scp.addRow("Remote base dir:", self._remote_base_edit)
-
-        self._local_base_edit, _br1 = self._dir_row(_LOCAL_DATA_BASE,
-                                                     self._browse_local_base)
-        form_scp.addRow("Local base dir:", _br1)
-
-        self._f_start = QSpinBox()
-        self._f_start.setRange(0, 9999)
-        self._f_start.setValue(0)
-        self._f_start.setFont(QFont("Consolas", 10))
-        self._f_start.setStyleSheet(_SPINBOX_SS)
-
-        self._f_end = QSpinBox()
-        self._f_end.setRange(0, 9999)
-        self._f_end.setValue(99)
-        self._f_end.setFont(QFont("Consolas", 10))
-        self._f_end.setStyleSheet(_SPINBOX_SS)
-
-        f_row = QHBoxLayout()
-        f_row.addWidget(self._f_start)
-        f_row.addWidget(QLabel(" — "))
-        f_row.addWidget(self._f_end)
-        f_row.addStretch()
-        form_scp.addRow("File index range:", f_row)
-
-        self._disk_lbl = QLabel("(disk space: not checked)")
-        self._disk_lbl.setStyleSheet(_LBL_MUT)
-        form_scp.addRow("", self._disk_lbl)
-
-        scp_btn_row = QHBoxLayout()
+        # 1. SCP row
+        scp_row = QHBoxLayout()
+        self._scp_cfg_btn = QPushButton("⚙  SCP Settings…")
+        self._scp_cfg_btn.setStyleSheet(_BTN_NORMAL)
+        self._scp_cfg_btn.clicked.connect(self._open_scp_dialog)
+        self._scp_btn = QPushButton("1. Get Data")
+        self._scp_btn.setStyleSheet(_BTN_PRIMARY)
+        self._scp_btn.clicked.connect(lambda: self._start_pipeline(["scp"]))
         self._check_disk_btn = QPushButton("Check Disk")
         self._check_disk_btn.setStyleSheet(_BTN_NORMAL)
         self._check_disk_btn.clicked.connect(self._on_check_disk)
-        self._scp_btn = QPushButton("Get Data")
-        self._scp_btn.setStyleSheet(_BTN_PRIMARY)
-        self._scp_btn.clicked.connect(lambda: self._start_pipeline(["scp"]))
-        scp_btn_row.addWidget(self._check_disk_btn)
-        scp_btn_row.addWidget(self._scp_btn)
-        scp_btn_row.addStretch()
-        form_scp.addRow("", scp_btn_row)
+        self._disk_lbl = QLabel("")
+        self._disk_lbl.setStyleSheet(_LBL_MUT)
+        scp_row.addWidget(self._scp_cfg_btn)
+        scp_row.addWidget(self._scp_btn)
+        scp_row.addWidget(self._check_disk_btn)
+        scp_row.addWidget(self._disk_lbl)
+        scp_row.addStretch()
+        steps_lay.addLayout(scp_row)
 
-        inner_lay.addWidget(grp_scp)
-
-        # ---- Replay section ----
-        grp_rep = QGroupBox("2. Replay Recon")
-        grp_rep.setStyleSheet(_GRPBOX_SS)
-        form_rep = QFormLayout(grp_rep)
-        form_rep.setSpacing(5)
-        form_rep.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self._evio_edit, _bev = self._dir_row("", self._browse_evio)
-        form_rep.addRow("EVIO dir / file:", _bev)
-
-        self._outdir_edit, _bout = self._dir_row("", self._browse_outdir)
-        form_rep.addRow("Output dir:", _bout)
-
-        self._threads_spin = QSpinBox()
-        self._threads_spin.setRange(1, 64)
-        self._threads_spin.setValue(4)
-        self._threads_spin.setFont(QFont("Consolas", 10))
-        self._threads_spin.setStyleSheet(_SPINBOX_SS)
-        form_rep.addRow("Threads (-j):", self._threads_spin)
-
-        self._max_events_rep = QLineEdit("-1")
-        self._max_events_rep.setFont(QFont("Consolas", 10))
-        self._max_events_rep.setStyleSheet(_LINEEDIT_SS)
-        self._max_events_rep.setToolTip("-1 means no limit")
-        form_rep.addRow("Max events (-n):", self._max_events_rep)
-
-        self._max_files_spin = QSpinBox()
-        self._max_files_spin.setRange(-1, 9999)
-        self._max_files_spin.setValue(-1)
-        self._max_files_spin.setSpecialValueText("all")
-        self._max_files_spin.setFont(QFont("Consolas", 10))
-        self._max_files_spin.setStyleSheet(_SPINBOX_SS)
-        form_rep.addRow("Max files (-f):", self._max_files_spin)
-
-        self._daq_config_edit = QLineEdit()
-        self._daq_config_edit.setPlaceholderText("(default)")
-        self._daq_config_edit.setFont(QFont("Consolas", 10))
-        self._daq_config_edit.setStyleSheet(_LINEEDIT_SS)
-        form_rep.addRow("DAQ config (-c):", self._daq_config_edit)
-
-        self._hycal_map_edit = QLineEdit()
-        self._hycal_map_edit.setPlaceholderText("(default)")
-        self._hycal_map_edit.setFont(QFont("Consolas", 10))
-        self._hycal_map_edit.setStyleSheet(_LINEEDIT_SS)
-        form_rep.addRow("HyCal map (-d):", self._hycal_map_edit)
-
-        self._gem_ped_edit = QLineEdit()
-        self._gem_ped_edit.setPlaceholderText("(none)")
-        self._gem_ped_edit.setFont(QFont("Consolas", 10))
-        self._gem_ped_edit.setStyleSheet(_LINEEDIT_SS)
-        form_rep.addRow("GEM pedestal (-g):", self._gem_ped_edit)
-
-        self._zerosup_edit = QLineEdit("5")
-        self._zerosup_edit.setPlaceholderText("(default)")
-        self._zerosup_edit.setFont(QFont("Consolas", 10))
-        self._zerosup_edit.setStyleSheet(_LINEEDIT_SS)
-        form_rep.addRow("Zero-sup thresh (-z):", self._zerosup_edit)
-
-        self._prad1_chk = QCheckBox("PRad-1 mode (-p)")
-        self._prad1_chk.setStyleSheet(_CHK_SS)
-        form_rep.addRow("", self._prad1_chk)
-
-        rep_btn_row = QHBoxLayout()
-        self._replay_btn = QPushButton("Run Replay")
+        # 2. Replay row
+        rep_row = QHBoxLayout()
+        self._rep_cfg_btn = QPushButton("⚙  Replay Settings…")
+        self._rep_cfg_btn.setStyleSheet(_BTN_NORMAL)
+        self._rep_cfg_btn.clicked.connect(self._open_replay_dialog)
+        self._replay_btn = QPushButton("2. Run Replay")
         self._replay_btn.setStyleSheet(_BTN_PRIMARY)
         self._replay_btn.clicked.connect(lambda: self._start_pipeline(["replay"]))
-        rep_btn_row.addWidget(self._replay_btn)
-        rep_btn_row.addStretch()
-        form_rep.addRow("", rep_btn_row)
+        rep_row.addWidget(self._rep_cfg_btn)
+        rep_row.addWidget(self._replay_btn)
+        rep_row.addStretch()
+        steps_lay.addLayout(rep_row)
 
-        inner_lay.addWidget(grp_rep)
+        # 3. Replay Filter row
+        flt_row = QHBoxLayout()
+        self._flt_cfg_btn = QPushButton("⚙  Filter Settings…")
+        self._flt_cfg_btn.setStyleSheet(_BTN_NORMAL)
+        self._flt_cfg_btn.clicked.connect(self._open_filter_dialog)
+        self._filter_btn = QPushButton("3. Replay Filter")
+        self._filter_btn.setStyleSheet(_BTN_PRIMARY)
+        self._filter_btn.clicked.connect(lambda: self._start_pipeline(["filter"]))
+        flt_row.addWidget(self._flt_cfg_btn)
+        flt_row.addWidget(self._filter_btn)
+        flt_row.addStretch()
+        steps_lay.addLayout(flt_row)
 
-        # ---- Quick Check section ----
-        grp_qc = QGroupBox("3. Quick Check")
-        grp_qc.setStyleSheet(_GRPBOX_SS)
-        form_qc = QFormLayout(grp_qc)
-        form_qc.setSpacing(5)
-        form_qc.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self._qc_input_edit, _bqci = self._dir_row("", self._browse_qc_input)
-        form_qc.addRow("Input (dir / file):", _bqci)
-
-        self._qc_output_edit = QLineEdit()
-        self._qc_output_edit.setPlaceholderText("output.root")
-        self._qc_output_edit.setFont(QFont("Consolas", 10))
-        self._qc_output_edit.setStyleSheet(_LINEEDIT_SS)
-        form_qc.addRow("Output ROOT (-o):", self._qc_output_edit)
-
-        self._max_events_qc = QLineEdit("-1")
-        self._max_events_qc.setFont(QFont("Consolas", 10))
-        self._max_events_qc.setStyleSheet(_LINEEDIT_SS)
-        form_qc.addRow("Max events (-n):", self._max_events_qc)
-
-        qc_btn_row = QHBoxLayout()
-        self._qcheck_btn = QPushButton("Run Quick Check")
+        # 4. Quick Check row
+        qc_row = QHBoxLayout()
+        self._qc_cfg_btn = QPushButton("⚙  QCheck Settings…")
+        self._qc_cfg_btn.setStyleSheet(_BTN_NORMAL)
+        self._qc_cfg_btn.clicked.connect(self._open_qcheck_dialog)
+        self._qcheck_btn = QPushButton("4. Quick Check")
         self._qcheck_btn.setStyleSheet(_BTN_PRIMARY)
         self._qcheck_btn.clicked.connect(lambda: self._start_pipeline(["qcheck"]))
-
         self._open_root_btn = QPushButton("Open ROOT…")
         self._open_root_btn.setStyleSheet(_BTN_NORMAL)
         self._open_root_btn.clicked.connect(self._browse_root_file)
+        qc_row.addWidget(self._qc_cfg_btn)
+        qc_row.addWidget(self._qcheck_btn)
+        qc_row.addWidget(self._open_root_btn)
+        qc_row.addStretch()
+        steps_lay.addLayout(qc_row)
 
-        qc_btn_row.addWidget(self._qcheck_btn)
-        qc_btn_row.addWidget(self._open_root_btn)
-        qc_btn_row.addStretch()
-        form_qc.addRow("", qc_btn_row)
+        root.addWidget(steps_widget)
 
-        inner_lay.addWidget(grp_qc)
+        # ---- Hidden parameter widgets (not shown, values read by pipeline) ----
+        _hidden = QWidget(); _hidden.hide()
+        _hlay = QVBoxLayout(_hidden)
 
-        inner_lay.addStretch()
-        scroll.setWidget(inner)
-        root.addWidget(scroll, stretch=0)
+        # SCP params
+        self._run_edit = QLineEdit()
+        self._host_edit = QLineEdit(_REMOTE_HOST)
+        self._remote_base_edit = QLineEdit(_REMOTE_DATA_BASE)
+        self._local_base_edit = QLineEdit(_LOCAL_DATA_BASE)
+        self._f_start = QSpinBox(); self._f_start.setRange(0, 9999); self._f_start.setValue(0)
+        self._f_end   = QSpinBox(); self._f_end.setRange(0, 9999);   self._f_end.setValue(99)
+        for w in (self._run_edit, self._host_edit, self._remote_base_edit,
+                  self._local_base_edit, self._f_start, self._f_end):
+            _hlay.addWidget(w)
+
+        # Replay params
+        self._evio_edit   = QLineEdit()
+        self._outdir_edit = QLineEdit()
+        self._threads_spin = QSpinBox(); self._threads_spin.setRange(1, 256); self._threads_spin.setValue(50)
+        self._max_events_rep = QLineEdit("-1")
+        self._max_files_spin = QSpinBox(); self._max_files_spin.setRange(-1, 9999); self._max_files_spin.setValue(-1)
+        self._max_files_spin.setSpecialValueText("all")
+        self._daq_config_edit = QLineEdit()
+        self._hycal_map_edit  = QLineEdit()
+        self._gem_ped_edit    = QLineEdit()
+        self._zerosup_edit    = QLineEdit("5")
+        self._prad1_chk = QCheckBox()
+        for w in (self._evio_edit, self._outdir_edit, self._threads_spin,
+                  self._max_events_rep, self._max_files_spin, self._daq_config_edit,
+                  self._hycal_map_edit, self._gem_ped_edit, self._zerosup_edit,
+                  self._prad1_chk):
+            _hlay.addWidget(w)
+
+        # Replay Filter params
+        self._filter_input_edit  = QLineEdit()
+        self._filter_output_edit = QLineEdit()
+        self._max_events_flt     = QLineEdit("-1")
+        for w in (self._filter_input_edit, self._filter_output_edit, self._max_events_flt):
+            _hlay.addWidget(w)
+
+        # Quick Check params
+        self._qc_input_edit  = QLineEdit()
+        self._qc_output_edit = QLineEdit()
+        self._max_events_qc  = QLineEdit("-1")
+        for w in (self._qc_input_edit, self._qc_output_edit, self._max_events_qc):
+            _hlay.addWidget(w)
+
+        root.addWidget(_hidden)
 
         # ---- Log output ----
         log_header = QHBoxLayout()
@@ -1369,50 +1338,241 @@ class ControlPanel(QWidget):
         root.addWidget(self._console, stretch=1)
 
     # ------------------------------------------------------------------
-    # Dir-row helper: QLineEdit + Browse button
+    # Settings dialogs
     # ------------------------------------------------------------------
 
-    def _dir_row(self, default: str, slot) -> Tuple[QLineEdit, QWidget]:
-        container = QWidget()
-        row = QHBoxLayout(container)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        edit = QLineEdit(default)
-        edit.setFont(QFont("Consolas", 10))
-        edit.setStyleSheet(_LINEEDIT_SS)
-        btn = QPushButton("Browse…")
-        btn.setFixedWidth(72)
-        btn.setStyleSheet(_BTN_NORMAL)
-        btn.clicked.connect(slot)
-        row.addWidget(edit)
-        row.addWidget(btn)
-        return edit, container
+    def _open_scp_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("SCP Settings")
+        dlg.setMinimumWidth(480)
+        dlg.setStyleSheet(themed("QDialog{background:#0d1117;}"))
+        form = QFormLayout(dlg)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-    # -- browse slots --
+        def _le(w): w.setFont(QFont("Consolas", 10)); w.setStyleSheet(_LINEEDIT_SS); return w
+        def _sp(w): w.setFont(QFont("Consolas", 10)); w.setStyleSheet(_SPINBOX_SS); return w
+        def _lbl(t): l = QLabel(t); l.setStyleSheet(_LBL_MUT); return l
 
-    def _browse_local_base(self):
-        d = QFileDialog.getExistingDirectory(self, "Local Base Directory",
-                                             self._local_base_edit.text())
-        if d:
-            self._local_base_edit.setText(d)
+        run_e   = _le(QLineEdit(self._run_edit.text()))
+        run_e.setPlaceholderText("e.g. 024100")
+        host_e  = _le(QLineEdit(self._host_edit.text()))
+        rbas_e  = _le(QLineEdit(self._remote_base_edit.text()))
+        lbas_e  = _le(QLineEdit(self._local_base_edit.text()))
 
-    def _browse_evio(self):
-        d = QFileDialog.getExistingDirectory(self, "EVIO Directory",
-                                             self._evio_edit.text())
-        if d:
-            self._evio_edit.setText(d)
+        fs_sp   = _sp(QSpinBox()); fs_sp.setRange(0, 9999); fs_sp.setValue(self._f_start.value())
+        fe_sp   = _sp(QSpinBox()); fe_sp.setRange(0, 9999); fe_sp.setValue(self._f_end.value())
+        frange_row = QHBoxLayout()
+        frange_row.addWidget(fs_sp); frange_row.addWidget(QLabel("—")); frange_row.addWidget(fe_sp); frange_row.addStretch()
 
-    def _browse_outdir(self):
-        d = QFileDialog.getExistingDirectory(self, "Replay Output Directory",
-                                             self._outdir_edit.text())
-        if d:
-            self._outdir_edit.setText(d)
+        disk_lbl = _lbl("(not checked)")
 
-    def _browse_qc_input(self):
-        d = QFileDialog.getExistingDirectory(self, "Quick Check Input Directory",
-                                             self._qc_input_edit.text())
-        if d:
-            self._qc_input_edit.setText(d)
+        def browse_local():
+            d = QFileDialog.getExistingDirectory(dlg, "Local Base Directory", lbas_e.text())
+            if d: lbas_e.setText(d)
+        lbas_row = QWidget(); lr = QHBoxLayout(lbas_row); lr.setContentsMargins(0,0,0,0); lr.setSpacing(4)
+        lr.addWidget(lbas_e); brw = QPushButton("Browse…"); brw.setFixedWidth(72); brw.setStyleSheet(_BTN_NORMAL); brw.clicked.connect(browse_local); lr.addWidget(brw)
+
+        def check_disk():
+            rn = run_e.text().strip()
+            if not rn: disk_lbl.setText("<span style='color:#f85149'>Enter run number</span>"); return
+            h = host_e.text().strip() or _REMOTE_HOST
+            rb = rbas_e.text().strip() or _REMOTE_DATA_BASE
+            lb = lbas_e.text().strip() or _LOCAL_DATA_BASE
+            rdir = f"{rb}/prad_{int(rn):06d}"
+            disk_lbl.setText("Checking…")
+            try:
+                needed, free = _check_disk_space(h, rdir, lb, fs_sp.value(), fe_sp.value())
+                ok = free >= needed
+                c = "#3fb950" if ok else "#f85149"
+                disk_lbl.setText(f"<span style='color:{c}'>need {_fmt_bytes(needed)}, free {_fmt_bytes(free)}{'  ✓' if ok else '  ✗'}</span>")
+            except Exception as exc:
+                disk_lbl.setText(f"<span style='color:#f0883e'>{exc}</span>")
+
+        form.addRow("Run number:", run_e)
+        form.addRow("Remote host:", host_e)
+        form.addRow("Remote base dir:", rbas_e)
+        form.addRow("Local base dir:", lbas_row)
+        form.addRow("File index range:", frange_row)
+        chk_btn = QPushButton("Check Disk"); chk_btn.setStyleSheet(_BTN_NORMAL); chk_btn.clicked.connect(check_disk)
+        chk_row = QHBoxLayout(); chk_row.addWidget(chk_btn); chk_row.addWidget(disk_lbl); chk_row.addStretch()
+        form.addRow("", chk_row)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("OK"); ok_btn.setStyleSheet(_BTN_PRIMARY)
+        ca_btn = QPushButton("Cancel"); ca_btn.setStyleSheet(_BTN_NORMAL)
+        btns.addStretch(); btns.addWidget(ok_btn); btns.addWidget(ca_btn)
+        form.addRow(btns)
+
+        def accept():
+            self._run_edit.setText(run_e.text())
+            self._host_edit.setText(host_e.text())
+            self._remote_base_edit.setText(rbas_e.text())
+            self._local_base_edit.setText(lbas_e.text())
+            self._f_start.setValue(fs_sp.value())
+            self._f_end.setValue(fe_sp.value())
+            dlg.accept()
+
+        ok_btn.clicked.connect(accept)
+        ca_btn.clicked.connect(dlg.reject)
+        dlg.exec()
+
+    def _open_replay_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Replay Settings")
+        dlg.setMinimumWidth(520)
+        dlg.setStyleSheet(themed("QDialog{background:#0d1117;}"))
+        form = QFormLayout(dlg)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        def _le(w): w.setFont(QFont("Consolas", 10)); w.setStyleSheet(_LINEEDIT_SS); return w
+        def _sp(w): w.setFont(QFont("Consolas", 10)); w.setStyleSheet(_SPINBOX_SS); return w
+
+        def dir_row_dlg(text, title):
+            e = _le(QLineEdit(text))
+            row = QWidget(); rl = QHBoxLayout(row); rl.setContentsMargins(0,0,0,0); rl.setSpacing(4)
+            b = QPushButton("Browse…"); b.setFixedWidth(72); b.setStyleSheet(_BTN_NORMAL)
+            def browse():
+                d = QFileDialog.getExistingDirectory(dlg, title, e.text())
+                if d: e.setText(d)
+            b.clicked.connect(browse); rl.addWidget(e); rl.addWidget(b)
+            return e, row
+
+        evio_e, evio_row   = dir_row_dlg(self._evio_edit.text(), "EVIO Directory")
+        out_e,  out_row    = dir_row_dlg(self._outdir_edit.text(), "Replay Output Directory")
+        thr_sp = _sp(QSpinBox()); thr_sp.setRange(1, 256); thr_sp.setValue(self._threads_spin.value())
+        nev_e  = _le(QLineEdit(self._max_events_rep.text())); nev_e.setToolTip("-1 = no limit")
+        nf_sp  = _sp(QSpinBox()); nf_sp.setRange(-1, 9999); nf_sp.setValue(self._max_files_spin.value()); nf_sp.setSpecialValueText("all")
+        daq_e  = _le(QLineEdit(self._daq_config_edit.text())); daq_e.setPlaceholderText("(default)")
+        hmap_e = _le(QLineEdit(self._hycal_map_edit.text())); hmap_e.setPlaceholderText("(default)")
+        gem_e  = _le(QLineEdit(self._gem_ped_edit.text())); gem_e.setPlaceholderText("(none)")
+        zsup_e = _le(QLineEdit(self._zerosup_edit.text()))
+        p1_chk = QCheckBox("PRad-1 mode (-p)"); p1_chk.setStyleSheet(_CHK_SS); p1_chk.setChecked(self._prad1_chk.isChecked())
+
+        form.addRow("EVIO dir / file:", evio_row)
+        form.addRow("Output dir:", out_row)
+        form.addRow("Threads (-j):", thr_sp)
+        form.addRow("Max events (-n):", nev_e)
+        form.addRow("Max files (-f):", nf_sp)
+        form.addRow("DAQ config (-c):", daq_e)
+        form.addRow("HyCal map (-d):", hmap_e)
+        form.addRow("GEM pedestal (-g):", gem_e)
+        form.addRow("Zero-sup thresh (-z):", zsup_e)
+        form.addRow("", p1_chk)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("OK"); ok_btn.setStyleSheet(_BTN_PRIMARY)
+        ca_btn = QPushButton("Cancel"); ca_btn.setStyleSheet(_BTN_NORMAL)
+        btns.addStretch(); btns.addWidget(ok_btn); btns.addWidget(ca_btn)
+        form.addRow(btns)
+
+        def accept():
+            self._evio_edit.setText(evio_e.text())
+            self._outdir_edit.setText(out_e.text())
+            self._threads_spin.setValue(thr_sp.value())
+            self._max_events_rep.setText(nev_e.text())
+            self._max_files_spin.setValue(nf_sp.value())
+            self._daq_config_edit.setText(daq_e.text())
+            self._hycal_map_edit.setText(hmap_e.text())
+            self._gem_ped_edit.setText(gem_e.text())
+            self._zerosup_edit.setText(zsup_e.text())
+            self._prad1_chk.setChecked(p1_chk.isChecked())
+            dlg.accept()
+
+        ok_btn.clicked.connect(accept)
+        ca_btn.clicked.connect(dlg.reject)
+        dlg.exec()
+
+    def _open_filter_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Replay Filter Settings")
+        dlg.setMinimumWidth(480)
+        dlg.setStyleSheet(themed("QDialog{background:#0d1117;}"))
+        form = QFormLayout(dlg)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        def _le(w): w.setFont(QFont("Consolas", 10)); w.setStyleSheet(_LINEEDIT_SS); return w
+
+        def dir_row_dlg(text, title):
+            e = _le(QLineEdit(text))
+            row = QWidget(); rl = QHBoxLayout(row); rl.setContentsMargins(0,0,0,0); rl.setSpacing(4)
+            b = QPushButton("Browse…"); b.setFixedWidth(72); b.setStyleSheet(_BTN_NORMAL)
+            def browse():
+                d = QFileDialog.getOpenFileName(dlg, title, e.text(), "ROOT files (*.root);;All files (*)")
+                if d[0]: e.setText(d[0])
+            b.clicked.connect(browse); rl.addWidget(e); rl.addWidget(b)
+            return e, row
+
+        inp_e, inp_row = dir_row_dlg(self._filter_input_edit.text(), "Filter Input ROOT File")
+        out_e = _le(QLineEdit(self._filter_output_edit.text())); out_e.setPlaceholderText("(auto: prad_XXXXXX_filter.root)")
+        nev_e = _le(QLineEdit(self._max_events_flt.text())); nev_e.setToolTip("-1 = no limit")
+
+        form.addRow("Input ROOT (-i):", inp_row)
+        form.addRow("Output ROOT (-o):", out_e)
+        form.addRow("Max events (-n):", nev_e)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("OK"); ok_btn.setStyleSheet(_BTN_PRIMARY)
+        ca_btn = QPushButton("Cancel"); ca_btn.setStyleSheet(_BTN_NORMAL)
+        btns.addStretch(); btns.addWidget(ok_btn); btns.addWidget(ca_btn)
+        form.addRow(btns)
+
+        def accept():
+            self._filter_input_edit.setText(inp_e.text())
+            self._filter_output_edit.setText(out_e.text())
+            self._max_events_flt.setText(nev_e.text())
+            dlg.accept()
+
+        ok_btn.clicked.connect(accept)
+        ca_btn.clicked.connect(dlg.reject)
+        dlg.exec()
+
+    def _open_qcheck_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Quick Check Settings")
+        dlg.setMinimumWidth(480)
+        dlg.setStyleSheet(themed("QDialog{background:#0d1117;}"))
+        form = QFormLayout(dlg)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        def _le(w): w.setFont(QFont("Consolas", 10)); w.setStyleSheet(_LINEEDIT_SS); return w
+
+        def dir_row_dlg(text, title):
+            e = _le(QLineEdit(text))
+            row = QWidget(); rl = QHBoxLayout(row); rl.setContentsMargins(0,0,0,0); rl.setSpacing(4)
+            b = QPushButton("Browse…"); b.setFixedWidth(72); b.setStyleSheet(_BTN_NORMAL)
+            def browse():
+                d = QFileDialog.getExistingDirectory(dlg, title, e.text())
+                if d: e.setText(d)
+            b.clicked.connect(browse); rl.addWidget(e); rl.addWidget(b)
+            return e, row
+
+        inp_e, inp_row = dir_row_dlg(self._qc_input_edit.text(), "Quick Check Input")
+        out_e = _le(QLineEdit(self._qc_output_edit.text())); out_e.setPlaceholderText("(auto)")
+        nev_e = _le(QLineEdit(self._max_events_qc.text())); nev_e.setToolTip("-1 = no limit")
+
+        form.addRow("Input (dir / file):", inp_row)
+        form.addRow("Output ROOT (-o):", out_e)
+        form.addRow("Max events (-n):", nev_e)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("OK"); ok_btn.setStyleSheet(_BTN_PRIMARY)
+        ca_btn = QPushButton("Cancel"); ca_btn.setStyleSheet(_BTN_NORMAL)
+        btns.addStretch(); btns.addWidget(ok_btn); btns.addWidget(ca_btn)
+        form.addRow(btns)
+
+        def accept():
+            self._qc_input_edit.setText(inp_e.text())
+            self._qc_output_edit.setText(out_e.text())
+            self._max_events_qc.setText(nev_e.text())
+            dlg.accept()
+
+        ok_btn.clicked.connect(accept)
+        ca_btn.clicked.connect(dlg.reject)
+        dlg.exec()
 
     def _browse_root_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1479,6 +1639,8 @@ class ControlPanel(QWidget):
             self._run_replay()
         elif step == "hadd":
             self._run_hadd()
+        elif step == "filter":
+            self._run_filter()
         elif step == "qcheck":
             self._run_qcheck()
         else:
@@ -1668,10 +1830,45 @@ class ControlPanel(QWidget):
         self._status_lbl.setText("Merging ROOT files (hadd)\u2026")
         self._launch_process(cmd)
 
+    # -- Replay filter step --
+
+    def _run_filter(self):
+        flt_input = self._filter_input_edit.text().strip() or self._hadd_out
+        if not flt_input:
+            self._log("<span style='color:#f85149'>No input specified for replay filter (run hadd first).</span>")
+            self._set_running(False)
+            return
+
+        flt_out = self._filter_output_edit.text().strip()
+        if not flt_out:
+            run_num = self._run_edit.text().strip()
+            if run_num:
+                out_name = f"prad_{int(run_num):06d}_filter.root"
+            else:
+                base = os.path.basename(flt_input)
+                m = re.match(r'(prad_\d+).*\.root', base)
+                out_name = (m.group(1) + "_filter.root") if m else "filter_out.root"
+            base_dir = os.path.dirname(flt_input)
+            flt_out = os.path.join(base_dir, out_name)
+        self._filter_out = flt_out
+        # JSON report path: same dir, replace .root → .report.json
+        self._filter_report = re.sub(r'\.root$', '.report.json', flt_out,
+                                      flags=re.IGNORECASE)
+
+        cmd = [_REPLAY_FILTER_CMD, flt_input, "-o", flt_out,
+               "-j", self._filter_report]
+        n_ev = self._max_events_flt.text().strip()
+        if n_ev and n_ev != "-1":
+            cmd += ["-n", n_ev]
+
+        self._log(f"<span style='color:#8b949e'>$ {' '.join(cmd)}</span>")
+        self._status_lbl.setText("Running replay filter…")
+        self._launch_process(cmd)
+
     # -- Quick check step --
 
     def _run_qcheck(self):
-        qc_input = self._qc_input_edit.text().strip() or self._hadd_out or self._recon_dir
+        qc_input = self._qc_input_edit.text().strip() or self._filter_out or self._hadd_out or self._recon_dir
         if not qc_input:
             self._log("<span style='color:#f85149'>No input specified for quick_check.</span>")
             self._set_running(False)
@@ -1780,6 +1977,11 @@ class ControlPanel(QWidget):
                 except Exception as exc:
                     self._log(f"<span style='color:#f85149'>Delete failed: {exc}</span>")
 
+        # Emit filter report when filter step succeeded
+        if exit_code == 0 and self._current_step == "filter" \
+                and self._filter_report and os.path.isfile(self._filter_report):
+            self.filterReportReady.emit(self._filter_report)
+
         if exit_code == 0:
             self._run_next_step()
         else:
@@ -1801,7 +2003,7 @@ class ControlPanel(QWidget):
 
     def _set_running(self, running: bool):
         self._stop_btn.setEnabled(running)
-        for btn in (self._scp_btn, self._replay_btn, self._qcheck_btn, self._do_all_btn):
+        for btn in (self._scp_btn, self._replay_btn, self._filter_btn, self._qcheck_btn, self._do_all_btn):
             btn.setEnabled(not running)
         if not running:
             self._status_lbl.setText("Ready")
@@ -1851,6 +2053,176 @@ def _check_disk_space(remote_host, remote_run_dir, local_base, f_start, f_end):
         check_path = os.path.dirname(check_path)
     free = shutil.disk_usage(check_path or "/").free
     return needed, free
+
+
+# ===========================================================================
+#  Filter Report Widget
+# ===========================================================================
+
+class FilterReportWidget(QWidget):
+    """Embedded replay-filter JSON report chart.
+
+    Shows three rows (cut status / livetime+rate / EPICS) using the same
+    plotting helpers as replay_report_viewer.py.  Requires matplotlib and
+    replay_report_viewer to be importable; shows a placeholder otherwise.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(4, 4, 4, 4)
+        v.setSpacing(4)
+
+        if not (HAS_REPORT_VIEWER and HAS_MATPLOTLIB):
+            lbl = QLabel(
+                "Filter report viewer requires matplotlib.\n"
+                "Install it with:  pip install matplotlib")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("QLabel{color:#8b949e;font-size:11pt;}")
+            v.addWidget(lbl)
+            self._available = False
+            return
+
+        self._available = True
+        self._report = None
+
+        # ── top controls ──────────────────────────────────────────────────
+        top = QHBoxLayout()
+
+        top.addWidget(QLabel("x-axis:"))
+        self._cmb_x = QComboBox()
+        self._cmb_x.addItem("associated_timestamp", "time")
+        self._cmb_x.addItem("associated_evn",       "evn")
+        self._cmb_x.setStyleSheet(_COMBO_SS)
+        self._cmb_x.setFont(QFont("Consolas", 10))
+        self._cmb_x.currentIndexChanged.connect(self._replot)
+        top.addWidget(self._cmb_x)
+
+        top.addSpacing(12)
+        self._btn_epics = QToolButton()
+        self._btn_epics.setText("EPICS \u25be")
+        self._btn_epics.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._menu_epics = QMenu(self._btn_epics)
+        self._btn_epics.setMenu(self._menu_epics)
+        top.addWidget(self._btn_epics)
+
+        top.addStretch()
+        self._lbl_title = QLabel("")
+        self._lbl_title.setStyleSheet(_LBL_MUT)
+        top.addWidget(self._lbl_title)
+
+        v.addLayout(top)
+
+        # ── matplotlib canvas ─────────────────────────────────────────────
+        self._fig = MplFigure(constrained_layout=True)
+        self._fig.patch.set_facecolor("#0d1117")
+        self._canvas = FigureCanvasQTAgg(self._fig)
+        self._canvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        v.addWidget(self._canvas, 1)
+
+        self._nav = _MplNavToolbar(self._canvas, self)
+        v.addWidget(self._nav)
+
+        self._selected_epics: set = set()
+
+    # ------------------------------------------------------------------
+    def load_report(self, path: str) -> None:
+        """Load a *.report.json written by prad2ana_replay_filter."""
+        if not self._available:
+            return
+        try:
+            self._report = _rrv_load_report(path)
+        except Exception as exc:
+            self._lbl_title.setText(
+                f"<span style='color:#f85149'>Load error: {exc}</span>")
+            return
+
+        # Rebuild EPICS channel menu
+        self._menu_epics.clear()
+        for s in self._report.channels.values():
+            if not s.is_epics:
+                continue
+            act = QAction(s.label, self)
+            act.setCheckable(True)
+            act.setChecked(True)
+            act.setData(s.name)
+            act.toggled.connect(lambda _c: self._on_epics_toggled())
+            self._menu_epics.addAction(act)
+        self._selected_epics = {
+            s.name for s in self._report.channels.values() if s.is_epics
+        }
+
+        self._lbl_title.setText(_rrv_title_for(self._report))
+        self._replot()
+
+    def _on_epics_toggled(self) -> None:
+        self._selected_epics = {
+            a.data() for a in self._menu_epics.actions() if a.isChecked()
+        }
+        self._replot()
+
+    def _replot(self) -> None:
+        self._fig.clear()
+        r = self._report
+        if r is None:
+            self._canvas.draw_idle()
+            return
+
+        x_kind = self._cmb_x.currentData() or "time"
+        x, xlabel = _rrv_get_x(r, x_kind)
+        segs = _rrv_reject_segments(r, x)
+
+        axes = self._fig.subplots(
+            3, 1, sharex=True,
+            gridspec_kw={"height_ratios": [1.4, 1.4, 1.7]})
+
+        # Apply dark theme to every axis
+        _DARK_BG   = "#0d1117"
+        _DARK_FG   = "#c9d1d9"
+        _DARK_EDGE = "#30363d"
+        for ax in axes:
+            ax.set_facecolor(_DARK_BG)
+            ax.tick_params(colors=_DARK_FG)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(_DARK_EDGE)
+
+        _rrv_draw_status(axes[0], r, x)
+        _rrv_shade_rejected(axes[0], segs)
+
+        ax_rt = _rrv_draw_lt_rate(axes[1], r, x)
+        ax_rt.set_facecolor(_DARK_BG)
+        ax_rt.tick_params(colors=_DARK_FG)
+        for spine in ax_rt.spines.values():
+            spine.set_edgecolor(_DARK_EDGE)
+        _rrv_shade_rejected(axes[1], segs)
+        _rrv_shade_rejected(ax_rt,   segs)
+
+        ax_ep = axes[2]
+        sel = [r.channels[n] for n in self._selected_epics if n in r.channels]
+        sel.sort(key=lambda s: s.label)
+        if sel:
+            for s in sel:
+                xx, yy = _rrv_finite_xy(x, s.values)
+                ax_ep.plot(xx, yy, lw=1.0, label=s.label)
+            ax_ep.set_ylabel("EPICS", rotation=0, ha="right",
+                              va="center", labelpad=8, color=_DARK_FG)
+            ax_ep.legend(loc="upper right", fontsize=8,
+                         ncol=min(len(sel), 4),
+                         facecolor="#161b22", edgecolor=_DARK_EDGE,
+                         labelcolor=_DARK_FG)
+            ax_ep.grid(axis="x", which="major", alpha=0.25)
+        else:
+            ax_ep.text(0.5, 0.5, "No EPICS channels selected — pick from menu.",
+                       transform=ax_ep.transAxes,
+                       ha="center", va="center", color="#8b949e")
+            ax_ep.set_yticks([])
+        _rrv_shade_rejected(ax_ep, segs)
+
+        axes[-1].set_xlabel(xlabel, color=_DARK_FG)
+        self._fig.align_ylabels(axes)
+        self._fig.suptitle(_rrv_title_for(r), fontsize=11, color=_DARK_FG)
+        self._canvas.draw_idle()
 
 
 # ===========================================================================
@@ -2012,6 +2384,10 @@ class ResultsPanel(QWidget):
         yg.addWidget(self._h_ratio)
         self._tabs.addTab(yields_tab, "Physics Yields")
 
+        # Tab 6: Filter Report
+        self._filter_report_widget = FilterReportWidget()
+        self._tabs.addTab(self._filter_report_widget, "Filter Report")
+
         root.addWidget(self._tabs, stretch=1)
 
         # status bar
@@ -2039,6 +2415,14 @@ class ResultsPanel(QWidget):
         self._loader = _RootLoader(path, self)
         self._loader.finished.connect(self._on_loaded)
         self._loader.start()
+
+    def load_filter_report(self, path: str):
+        """Load a replay-filter JSON report and switch to the Filter Report tab."""
+        self._filter_report_widget.load_report(path)
+        # Switch to the Filter Report tab automatically
+        idx = self._tabs.indexOf(self._filter_report_widget)
+        if idx >= 0:
+            self._tabs.setCurrentIndex(idx)
 
     def _reload(self):
         if hasattr(self, "_current_path"):
@@ -2164,6 +2548,7 @@ class MainWindow(QMainWindow):
         self._results = ResultsPanel()
 
         self._ctrl.rootFileReady.connect(self._results.load_file)
+        self._ctrl.filterReportReady.connect(self._results.load_filter_report)
 
         splitter.addWidget(self._ctrl)
         splitter.addWidget(self._results)
