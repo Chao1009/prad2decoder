@@ -1434,7 +1434,7 @@ class ControlPanel(QWidget):
         local_base = self._local_base_edit.text().strip() or _LOCAL_DATA_BASE
         f_start = self._f_start.value()
         f_end = self._f_end.value()
-        remote_run_dir = f"{remote_base}/run{int(run_num):06d}"
+        remote_run_dir = f"{remote_base}/prad_{int(run_num):06d}"
         self._disk_lbl.setText("Checking…")
         try:
             needed, free = _check_disk_space(host, remote_run_dir, local_base,
@@ -1497,8 +1497,8 @@ class ControlPanel(QWidget):
         f_start = self._f_start.value()
         f_end = self._f_end.value()
         run_id = int(run_num)
-        remote_run_dir = f"{remote_base}/run{run_id:06d}"
-        local_run_dir  = os.path.join(local_base, f"run{run_id:06d}")
+        remote_run_dir = f"{remote_base}/prad_{run_id:06d}"
+        local_run_dir  = os.path.join(local_base, f"prad_{run_id:06d}")
 
         # Auto-check disk space before downloading
         self._log("<span style='color:#8b949e'>Checking disk space…</span>")
