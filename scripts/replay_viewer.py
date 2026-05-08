@@ -1533,10 +1533,11 @@ class ControlPanel(QWidget):
 
         # Build rsync pattern list: "*.evio.NNN" for each index
         patterns = []
+        run_tag = f"prad_{run_id:06d}"
         for i in range(f_start, f_end + 1):
-            patterns += ["--include", f"*{i:04d}"]
+            patterns += ["--include", f"{run_tag}.evio.{i:05d}"]
         cmd = (["rsync", "-avz", "--progress"] +
-               ["--include", "*/", "--include", "*.evio.*"] +
+               ["--include", "*/"] +
                patterns +
                ["--exclude", "*",
                 f"{host}:{remote_run_dir}/",
