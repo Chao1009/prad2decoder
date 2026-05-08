@@ -103,7 +103,7 @@
             "peak_nsigma":      5.0,
             "min_peak_height":  10.0,
             "min_peak_ratio":   0.3,
-            "int_tail_ratio":  0.02,
+            "int_tail_ratio":  0.1,
             "tail_break_n":    2,
             "peak_pileup_gap": 2,
             "ped_nsamples":    30,
