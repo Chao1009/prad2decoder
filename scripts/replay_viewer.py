@@ -1082,35 +1082,36 @@ class HyCalReplayMapWidget(HyCalMapWidget):
 
 _BTN_PRIMARY = themed(
     "QPushButton{background:#1f6feb;color:white;border:1px solid #388bfd;"
-    "padding:4px 14px;font:bold 10pt Consolas;border-radius:3px;}"
+    "padding:5px 16px;font:bold 11pt Consolas;border-radius:3px;}"
     "QPushButton:hover{background:#388bfd;}"
     "QPushButton:disabled{background:#21262d;color:#555;border-color:#30363d;}")
 
 _BTN_NORMAL = themed(
     "QPushButton{background:#21262d;color:#c9d1d9;border:1px solid #30363d;"
-    "padding:4px 12px;font:bold 10pt Consolas;border-radius:3px;}"
+    "padding:5px 14px;font:bold 11pt Consolas;border-radius:3px;}"
     "QPushButton:hover{background:#30363d;}"
     "QPushButton:disabled{color:#555;}")
 
 _BTN_DANGER = themed(
     "QPushButton{background:#3d1f22;color:#f85149;border:1px solid #f85149;"
-    "padding:4px 12px;font:bold 10pt Consolas;border-radius:3px;}"
+    "padding:5px 14px;font:bold 11pt Consolas;border-radius:3px;}"
     "QPushButton:hover{background:#5a2329;}"
     "QPushButton:disabled{color:#555;}")
 
 _LINEEDIT_SS = themed(
     "QLineEdit{background:#161b22;color:#c9d1d9;"
-    "border:1px solid #30363d;border-radius:3px;padding:2px 6px;"
-    "font-family:Consolas;font-size:10pt;}")
+    "border:1px solid #30363d;border-radius:3px;padding:3px 6px;"
+    "font-family:Consolas;font-size:11pt;}")
 
 _SPINBOX_SS = themed(
     "QSpinBox{background:#161b22;color:#c9d1d9;"
-    "border:1px solid #30363d;border-radius:3px;padding:2px 6px;"
-    "font-family:Consolas;font-size:10pt;}")
+    "border:1px solid #30363d;border-radius:3px;padding:3px 6px;"
+    "font-family:Consolas;font-size:11pt;}")
 
 _COMBO_SS = themed(
     "QComboBox{background:#161b22;color:#c9d1d9;"
-    "border:1px solid #30363d;border-radius:3px;padding:2px 6px;}"
+    "border:1px solid #30363d;border-radius:3px;padding:3px 6px;"
+    "font-family:Consolas;font-size:11pt;}"
     "QComboBox::drop-down{border:none;width:18px;}"
     "QComboBox::down-arrow{border-left:4px solid transparent;"
     "border-right:4px solid transparent;border-top:5px solid #8b949e;"
@@ -1119,24 +1120,24 @@ _COMBO_SS = themed(
     "border:1px solid #30363d;selection-background-color:#1f6feb;}")
 
 _GRPBOX_SS = themed(
-    "QGroupBox{color:#58a6ff;font:bold 10pt Consolas;"
+    "QGroupBox{color:#58a6ff;font:bold 11pt Consolas;"
     "border:1px solid #30363d;border-radius:4px;margin-top:8px;padding-top:6px;}"
     "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}")
 
 _CHK_SS = themed(
-    "QCheckBox{color:#c9d1d9;font-family:Consolas;font-size:10pt;spacing:6px;}"
-    "QCheckBox::indicator{width:14px;height:14px;"
+    "QCheckBox{color:#c9d1d9;font-family:Consolas;font-size:11pt;spacing:6px;}"
+    "QCheckBox::indicator{width:15px;height:15px;"
     "border:1px solid #30363d;border-radius:2px;background:#161b22;}"
     "QCheckBox::indicator:checked{background:#1f6feb;border-color:#388bfd;}")
 
-_LBL_SS  = themed("QLabel{color:#c9d1d9;font-family:Consolas;font-size:10pt;}")
-_LBL_MUT = themed("QLabel{color:#8b949e;font-family:Consolas;font-size:9pt;}")
+_LBL_SS  = themed("QLabel{color:#c9d1d9;font-family:Consolas;font-size:11pt;}")
+_LBL_MUT = themed("QLabel{color:#8b949e;font-family:Consolas;font-size:10pt;}")
 
 
 def _section_label(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(themed(
-        "QLabel{color:#8b949e;font:bold 9pt Consolas;"
+        "QLabel{color:#8b949e;font:bold 10pt Consolas;"
         "border-bottom:1px solid #30363d;padding-bottom:2px;}"))
     return lbl
 
@@ -1320,7 +1321,7 @@ class ControlPanel(QWidget):
         self._status_lbl = QLabel("Ready")
         self._status_lbl.setStyleSheet(_LBL_MUT)
         clr_btn = QPushButton("Clear")
-        clr_btn.setFixedWidth(54)
+        clr_btn.setFixedWidth(80)
         clr_btn.setStyleSheet(_BTN_NORMAL)
         clr_btn.clicked.connect(lambda: self._console.clear())
         log_header.addWidget(log_lbl)
@@ -1331,11 +1332,11 @@ class ControlPanel(QWidget):
 
         self._console = QTextEdit()
         self._console.setReadOnly(True)
-        self._console.setFont(QFont("Monospace", 9))
+        self._console.setFont(QFont("Monospace", 10))
         self._console.document().setMaximumBlockCount(10000)
         self._console.setStyleSheet(themed(
             "QTextEdit{background:#0a0e14;color:#c9d1d9;"
-            "border:1px solid #30363d;font-family:Monospace;font-size:9pt;}"))
+            "border:1px solid #30363d;font-family:Monospace;font-size:10pt;}"))
         root.addWidget(self._console, stretch=1)
 
     # ------------------------------------------------------------------
@@ -1377,7 +1378,7 @@ class ControlPanel(QWidget):
         cr.setSpacing(4)
         cr.addWidget(cut_e)
         cut_brw = QPushButton("Browse…")
-        cut_brw.setFixedWidth(72)
+        cut_brw.setFixedWidth(90)
         cut_brw.setStyleSheet(_BTN_NORMAL)
         def browse_cut():
             p, _ = QFileDialog.getOpenFileName(
@@ -1391,7 +1392,23 @@ class ControlPanel(QWidget):
         zsup_e = _le(QLineEdit(self._zerosup_edit.text()))
         zsup_e.setPlaceholderText("e.g. 5")
 
+        fs_sp = _sp(QSpinBox())
+        fs_sp.setRange(0, 9999)
+        fs_sp.setValue(self._f_start.value())
+        fe_sp = _sp(QSpinBox())
+        fe_sp.setRange(0, 9999)
+        fe_sp.setValue(self._f_end.value())
+        frange_row = QWidget()
+        fr = QHBoxLayout(frange_row)
+        fr.setContentsMargins(0, 0, 0, 0)
+        fr.setSpacing(4)
+        fr.addWidget(fs_sp)
+        fr.addWidget(QLabel("—"))
+        fr.addWidget(fe_sp)
+        fr.addStretch()
+
         form.addRow("Run number:", run_e)
+        form.addRow("File index range:", frange_row)
         form.addRow("Threads (-j):", thr_sp)
         form.addRow("Filter cut JSON (-c):", cut_row)
         form.addRow("GEM zero-sup (-z):", zsup_e)
@@ -1412,6 +1429,8 @@ class ControlPanel(QWidget):
                 run_e.setStyleSheet(_LINEEDIT_SS + "border:1px solid #f85149;")
                 return
             self._run_edit.setText(rn)
+            self._f_start.setValue(fs_sp.value())
+            self._f_end.setValue(fe_sp.value())
             self._threads_spin.setValue(thr_sp.value())
             self._filter_cut_edit.setText(cut_e.text())
             self._zerosup_edit.setText(zsup_e.text())
@@ -1453,7 +1472,7 @@ class ControlPanel(QWidget):
             d = QFileDialog.getExistingDirectory(dlg, "Local Base Directory", lbas_e.text())
             if d: lbas_e.setText(d)
         lbas_row = QWidget(); lr = QHBoxLayout(lbas_row); lr.setContentsMargins(0,0,0,0); lr.setSpacing(4)
-        lr.addWidget(lbas_e); brw = QPushButton("Browse…"); brw.setFixedWidth(72); brw.setStyleSheet(_BTN_NORMAL); brw.clicked.connect(browse_local); lr.addWidget(brw)
+        lr.addWidget(lbas_e); brw = QPushButton("Browse…"); brw.setFixedWidth(90); brw.setStyleSheet(_BTN_NORMAL); brw.clicked.connect(browse_local); lr.addWidget(brw)
 
         def check_disk():
             rn = run_e.text().strip()
@@ -1514,7 +1533,7 @@ class ControlPanel(QWidget):
         def dir_row_dlg(text, title):
             e = _le(QLineEdit(text))
             row = QWidget(); rl = QHBoxLayout(row); rl.setContentsMargins(0,0,0,0); rl.setSpacing(4)
-            b = QPushButton("Browse…"); b.setFixedWidth(72); b.setStyleSheet(_BTN_NORMAL)
+            b = QPushButton("Browse…"); b.setFixedWidth(90); b.setStyleSheet(_BTN_NORMAL)
             def browse():
                 d = QFileDialog.getExistingDirectory(dlg, title, e.text())
                 if d: e.setText(d)
@@ -1580,7 +1599,7 @@ class ControlPanel(QWidget):
         def dir_row_dlg(text, title):
             e = _le(QLineEdit(text))
             row = QWidget(); rl = QHBoxLayout(row); rl.setContentsMargins(0,0,0,0); rl.setSpacing(4)
-            b = QPushButton("Browse…"); b.setFixedWidth(72); b.setStyleSheet(_BTN_NORMAL)
+            b = QPushButton("Browse…"); b.setFixedWidth(90); b.setStyleSheet(_BTN_NORMAL)
             def browse():
                 d = QFileDialog.getOpenFileName(dlg, title, e.text(), "ROOT files (*.root);;All files (*)")
                 if d[0]: e.setText(d[0])
@@ -1625,7 +1644,7 @@ class ControlPanel(QWidget):
         def dir_row_dlg(text, title):
             e = _le(QLineEdit(text))
             row = QWidget(); rl = QHBoxLayout(row); rl.setContentsMargins(0,0,0,0); rl.setSpacing(4)
-            b = QPushButton("Browse…"); b.setFixedWidth(72); b.setStyleSheet(_BTN_NORMAL)
+            b = QPushButton("Browse…"); b.setFixedWidth(90); b.setStyleSheet(_BTN_NORMAL)
             def browse():
                 d = QFileDialog.getExistingDirectory(dlg, title, e.text())
                 if d: e.setText(d)
@@ -2346,7 +2365,7 @@ class ResultsPanel(QWidget):
         self._file_lbl.setStyleSheet(themed(
             "QLabel{color:#8b949e;font-family:Consolas;font-size:9pt;}"))
         self._reload_btn = QPushButton("Reload")
-        self._reload_btn.setFixedWidth(70)
+        self._reload_btn.setFixedWidth(90)
         self._reload_btn.setStyleSheet(_BTN_NORMAL)
         self._reload_btn.clicked.connect(self._reload)
         self._reload_btn.setEnabled(False)
