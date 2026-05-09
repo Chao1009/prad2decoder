@@ -17,6 +17,7 @@
 #include "EventData.h"
 #include "EventData_io.h"
 #include "InstallPaths.h"
+#include "ConfigSetup.h"
 
 #include <TFile.h>
 #include <TTree.h>
@@ -90,6 +91,13 @@ int main(int argc, char *argv[])
         {"../share/prad2evviewer/database"},
         DATABASE_DIR);
 
+    // --- load run config: assign run_id and Ebeam from gRunConfig ---
+    run_id = analysis::get_run_int(root_files[0]);
+    gRunConfig = analysis::LoadRunConfig(dbDir + "/runinfo/2p1_general.json", run_id);
+    Ebeam = gRunConfig.Ebeam > 0.f ? gRunConfig.Ebeam : Ebeam;
+
+    std::cout << "Processing run " << run_id << " with Ebeam = " << Ebeam << " MeV\n";
+
     // --- init detector system ---
     fdec::HyCalSystem hycal;
     hycal.Init(dbDir + "/hycal_map.json");
@@ -141,8 +149,8 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < N; i++) {
         tree->GetEntry(i);
-        if (i % 1000 == 0)
-            std::cerr << "\rPass 1: " << i << " / " << N << std::flush;
+        //if (i % 1000 == 0)
+            //std::cerr << "\rPass 1: " << i << " / " << N << std::flush;
 
         for (int j = 0; j < ev.n_clusters; j++) {
             float r = std::sqrt(ev.cl_x[j]*ev.cl_x[j] + ev.cl_y[j]*ev.cl_y[j]);
@@ -241,7 +249,7 @@ int main(int argc, char *argv[])
 
     outfile.Close();
     
-    physics.Resolution2Database(run_id); // example run ID
+    // physics.Resolution2Database(run_id); // example run ID
 
     std::cerr << "Result saved -> " << outName.Data() << "\n";
 }
