@@ -1,16 +1,49 @@
 #!/usr/bin/env python3
 """Replay Viewer (PyQt6)
 =======================
-GUI tool for the PRad-2 replay pipeline:
+PyQt6 GUI for the PRad-2 online replay pipeline.
 
-  1. Get Data  — SCP evio files from clondaq2
-  2. Replay    — run pradana_replay_recon with configurable parameters
-  3. Quick Check — run pradana_quick_check and display results
+Quick Start
+-----------
+1. Click the "Do It All" button and fill in the popup:
+     • Run number       — 6-digit run number, e.g. 024388
+     • File index range — range of EVIO file indices to download (default 0–99)
+     • Threads          — number of parallel replay threads (default 25)
+     • Filter cut JSON  — slow-control cut config for replay_filter (optional)
+     • GEM zero-sup     — GEM zero-suppression threshold (default 5)
+   Click "Start Pipeline" to run the full pipeline:
+     SCP → Replay Recon → hadd → Replay Filter → Quick Check
+   Result plots appear automatically in the right panel.
 
-Results are displayed via a HyCal map and various histogram panels.
+Step-by-Step
+------------
+   Each step can also be run individually:
+     "1. Get Data"       — download EVIO files from clondaq2
+     "2. Run Replay"     — run prad2ana_replay_recon
+     "3. Replay Filter"  — run prad2ana_replay_filter (also writes a JSON report)
+     "4. Quick Check"    — run prad2ana_quick_check
+   Detailed parameters for each step are available via the "⚙ Settings…" button.
 
-Usage:
-  python replay_viewer.py [quick_check_output.root]
+Filter Report Tab
+-----------------
+   After Replay Filter completes, the "Filter Report" tab on the right
+   automatically displays time-series plots (cut status / livetime+rate / EPICS
+   channels).  Use the controls at the top to switch the x-axis (timestamp /
+   event number) and toggle individual EPICS channels.
+
+Other Features
+--------------
+   • "Auto-delete EVIO files" — delete the local EVIO directory after a
+                                successful replay
+   • "Check Disk"             — estimate disk usage before downloading
+   • "Stop"                   — abort the currently running step
+   • File → Open ROOT file…   — manually open an existing quick_check ROOT file
+
+Command-Line Usage at Counting House Computer
+------------------
+   ssh clonfarm11
+   source /home/clasrun/prad2_daq/prad2_env.csh
+   python /data/soft/prad2evviewer/scripts/replay_viewer.py
 """
 from __future__ import annotations
 
