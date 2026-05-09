@@ -64,11 +64,12 @@ add_analysis_tool(gain_fitter tools/gain_fitter.cpp)
 add_analysis_tool(sim2replay tools/sim2replay.cpp)
 add_analysis_tool(cosmic_lg tools/cosmic_lg.cpp)
 add_analysis_tool(gain_replay tools/gain_replay.cpp)
+add_analysis_tool(calib_5by5 tools/calib_5by5.cpp)
 
 install(TARGETS replay_rawdata replay_recon replay_filter replay_add_hv
                 live_charge epCalib
                 cosmic_test quick_check matching det_calib cosmic_lg sim2replay gain_replay
-                gain_monitor gain_fitter
+                gain_monitor gain_fitter calib_5by5
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # ---------------------------------------------------------------------------

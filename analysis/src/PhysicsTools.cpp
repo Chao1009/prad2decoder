@@ -238,8 +238,8 @@ std::array<float, 3> PhysicsTools::FitPeakResolution(int module_id) const
     //}
 
     // --- Gaussian fit around the selected peak ---
-    double rms0 = 70.;
-    double lo = peak0 - 1.5 * rms0, hi = peak0 + 1.5 * rms0;
+    double rms0 = 55.;
+    double lo = peak0 - 3.5 * rms0, hi = peak0 + 2. * rms0;
 
     // Crystal Ball: Gaussian core + power-law low-energy tail
     // p[0]=amplitude, p[1]=mean, p[2]=sigma, p[3]=alpha, p[4]=n
