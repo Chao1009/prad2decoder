@@ -200,7 +200,7 @@ int main(int argc, char *argv[])
             res->module_hists[i] = std::make_unique<TH1F>(
                 Form("h_%s_%d", mod.name.c_str(), tid),
                 Form("%s cluster energy;Energy (MeV);Counts", mod.name.c_str()),
-                500, 0, 5000);
+                250, 0, 5000);
             res->module_hists[i]->SetDirectory(nullptr);
         }
         res->h2_energy_theta = std::make_unique<TH2F>(
@@ -216,7 +216,7 @@ int main(int argc, char *argv[])
         res->h_E_1cl = std::make_unique<TH1F>(
             Form("one_cluster_energy_%d", tid),
             "Single-cluster Event energy;E (MeV);Counts",
-            1000, 0, 5000);
+            250, 0, 5000);
         res->h_E_1cl->SetDirectory(nullptr);
         results[tid] = std::move(res);
     }
