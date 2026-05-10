@@ -545,7 +545,13 @@ async function generateReport(reportBy,runNumber){
         await refreshDataForReport();
         reportAttachments=[];
         const ts=new Date().toLocaleString();
-        const samples=mode==='online'?sampleCount:totalEvents;
+        // online: use the server's events_processed (total field on
+        // /api/occupancy → occTotal).  sampleCount is the chosen
+        // client's UI auto-follow counter; on a fresh / backgrounded /
+        // recently-cleared tab it can read 1-2 even when the server
+        // has 10k+ events for the run, which is what the report is
+        // actually summarising.
+        const samples=mode==='online'?occTotal:totalEvents;
         const runStr=runNumber?String(runNumber).padStart(6,'0'):'';
         const titleRun=runStr?`Run ${runStr}: `:'';
         let header=`# ${titleRun}PRad-II HyCal Monitor Report\n\n`;

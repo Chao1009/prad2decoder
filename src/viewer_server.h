@@ -18,6 +18,7 @@
 #include <websocketpp/server.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <ctime>
 #include <deque>
 #include <map>
@@ -291,4 +292,25 @@ private:
     // Verify we can write to local_save_dir at startup.  Sets
     // save_dir_writable_ + logs result.
     void checkSaveDirWritable();
+
+    // ---- Deferred autoclear (run-boundary path) ----------------------------
+    // scheduleAutoClear() — called from etReaderThread on END / PRESTART /
+    // run-change — starts a server-side wipe of hist+lms+epics after a
+    // delay (5 s at every current call site).  The countdown PAUSES while
+    // pending_capture_ is set, so a run-change-fallback capture firing on
+    // the first physics of the new run still snapshots the prior run's
+    // data before the wipe.  Last-call-wins: repeated calls re-anchor the
+    // countdown to the most recent boundary.  Manual /api/hist/clear etc.
+    // bypass this entirely so operator presses are immediate.
+    struct AutoClearState {
+        bool                                  pending      = false;
+        int                                   remaining_ms = 0;
+        std::chrono::steady_clock::time_point last_tick;
+    };
+    std::mutex      autoclear_mtx_;
+    AutoClearState  autoclear_state_;
+
+    void scheduleAutoClear(int delay_ms);
+    void tickAutoClear();
+    void runAutoClearNow();
 };

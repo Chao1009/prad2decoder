@@ -657,7 +657,8 @@ bool ViewerServer::dispatchCapture(uint32_t run, const std::string &reason,
         return false;
     }
     std::cerr << "AutoReport: dispatched capture_request for run " << run
-              << " (request " << pc.request_id
+              << " (reason " << pc.reason
+              << ", request " << pc.request_id
               << ", attempt " << pc.tried.size() << ")\n";
     return true;
 }
@@ -678,6 +679,86 @@ void ViewerServer::autoReportWatchdog()
     std::cerr << "AutoReport: watchdog timeout for run " << stale->run
               << " (request " << stale->request_id << ")\n";
     dispatchCapture(stale->run, stale->reason, stale->request_id);
+}
+
+// =========================================================================
+// Deferred autoclear — gates the PRESTART data wipe on capture state
+// =========================================================================
+// Why: with multiple browser tabs connected, every non-chosen tab calling
+// /api/hist/clear on PRESTART wipes the server's histograms while the
+// chosen reporter is still snapping screenshots, and the run-change
+// fallback (when END is missed) dispatches its capture AFTER PRESTART has
+// already broadcast.  Both races land empty data + a low Samples count
+// in the auto-report.  Funnelling PRESTART clears through this delayed,
+// capture-aware scheduler keeps the server's state intact long enough
+// for either the END-driven or run-change-driven capture to complete.
+// Manual /api/hist/clear is intentionally NOT routed here — operator
+// presses must take effect immediately.
+// =========================================================================
+
+void ViewerServer::scheduleAutoClear(int delay_ms)
+{
+    if (delay_ms < 0) delay_ms = 5000;
+    std::lock_guard<std::mutex> lk(autoclear_mtx_);
+    // Last-call-wins.  Run-boundary signals fire in sequence (e.g. END
+    // schedules 5 s, then PRESTART arrives and re-schedules 5 s); each
+    // refresh anchors the countdown to the most recent boundary.  Tick
+    // pauses while pending_capture_ is set, so the actual fire time is
+    // (last schedule) + delay + (paused capture duration).
+    autoclear_state_.pending      = true;
+    autoclear_state_.remaining_ms = delay_ms;
+    autoclear_state_.last_tick    = std::chrono::steady_clock::now();
+    std::cerr << "AutoClear: scheduled in " << delay_ms << " ms\n";
+}
+
+void ViewerServer::tickAutoClear()
+{
+    bool should_run = false;
+    {
+        std::lock_guard<std::mutex> lk(autoclear_mtx_);
+        if (!autoclear_state_.pending) return;
+
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - autoclear_state_.last_tick).count();
+        autoclear_state_.last_tick = now;
+
+        // Pause the countdown while a capture is in flight.  The chosen
+        // reporter's screenshots fetch /api/occupancy etc. mid-capture; if
+        // the timer expired and we cleared, the run-change-driven capture
+        // would land empty data.
+        bool capture_in_flight;
+        {
+            std::lock_guard<std::mutex> lkc(pending_capture_mtx_);
+            capture_in_flight = pending_capture_.has_value();
+        }
+        if (capture_in_flight) return;
+
+        autoclear_state_.remaining_ms -= static_cast<int>(elapsed_ms);
+        if (autoclear_state_.remaining_ms <= 0) {
+            autoclear_state_.pending      = false;
+            autoclear_state_.remaining_ms = 0;
+            should_run = true;
+        }
+    }
+    if (should_run) runAutoClearNow();
+}
+
+void ViewerServer::runAutoClearNow()
+{
+    std::cerr << "AutoClear: firing — clearing histograms / lms / epics\n";
+    auto &app = activeApp();
+    app.clearHistograms();
+    app.clearLms();
+    app.clearEpics();
+    // Per-domain broadcasts keep existing handlers (which do partial UI
+    // resets) in step.  The autoclear_done broadcast piggy-backs on top
+    // so clients can run a single full clearFrontend in one place
+    // instead of inferring it from the three partial resets.
+    wsBroadcast("{\"type\":\"hist_cleared\"}");
+    wsBroadcast("{\"type\":\"lms_cleared\"}");
+    wsBroadcast("{\"type\":\"epics_cleared\"}");
+    wsBroadcast("{\"type\":\"autoclear_done\"}");
 }
 
 // =========================================================================
@@ -1048,7 +1129,6 @@ void ViewerServer::onHttp(WsServer *srv, websocketpp::connection_hdl hdl)
         wsBroadcast("{\"type\":\"epics_cleared\"}");
         return;
     }
-
     // --- shared read-only API routes ---
     auto result = activeApp().handleReadApi(uri);
     if (result.handled) { reply(result.body); return; }

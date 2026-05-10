@@ -232,17 +232,15 @@ function connectWebSocket() {
                     clearFrontend();
                     fetchConfigAndApply();
                 }
-            } else if (msg.type === 'control_event') {
-                // PRESTART → clear all data so the new run starts blank.
-                // END is handled server-side: the server dispatches a
-                // 'capture_request' below to one chosen client.
-                // prestartClearAll() defers the clear on the chosen
-                // reporter until its capture finishes — otherwise the
-                // screenshots would race against a wiped canvas.
-                if (msg.kind === 'prestart' &&
-                    typeof prestartClearAll === 'function') {
-                    prestartClearAll();
-                }
+            } else if (msg.type === 'autoclear_done') {
+                // Server-side autoclear has just wiped histograms / lms
+                // / epics.  Mirror that to the local UI in lockstep so
+                // every connected tab resets together (sampleCount,
+                // Plotly redraws, GEM caches, …).  The per-domain
+                // *_cleared broadcasts that preceded this still run
+                // their existing partial-reset handlers; clearFrontend
+                // is idempotent on top of that.
+                if (typeof clearFrontend === 'function') clearFrontend();
             } else if (msg.type === 'capture_request') {
                 // Server picked us as the on-demand reporter for this
                 // run.  Light the badge, run the capture pipeline, and

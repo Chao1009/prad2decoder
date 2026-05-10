@@ -197,26 +197,23 @@ void ViewerServer::etReaderThread()
                         const auto &s = ch.Sync();
                         if (app_online_.sync_unix == 0 && s.unix_time != 0)
                             app_online_.recordSyncTime(s.unix_time, last_ti_ts);
-                        // Broadcast PRESTART / END so the auto-report mode in
-                        // the UI can clear on PRESTART, and so the server
-                        // can dispatch a capture_request to one connected
-                        // client on END.
+                        // Auto-report and the post-run wipe are server-driven:
+                        //   END      → dispatch capture (if enabled),
+                        //              schedule autoclear
+                        //   PRESTART → schedule autoclear (END may have
+                        //              been missed; PRESTART is also a
+                        //              valid signal that a new run is up)
+                        // The autoclear's countdown pauses while a capture
+                        // is in flight, so screenshots always see the
+                        // pre-wipe data.
                         if (et == EventType::Prestart || et == EventType::End) {
-                            const char *kind = (et == EventType::Prestart)
-                                ? "prestart" : "end";
-                            json msg = {
-                                {"type", "control_event"},
-                                {"kind", kind},
-                                {"run_number", s.run_number},
-                                {"unix_time", s.unix_time}
-                            };
-                            wsBroadcast(msg.dump());
                             if (et == EventType::End &&
                                 app_online_.auto_report_enabled &&
                                 s.run_number > 0)
                             {
                                 dispatchCapture(s.run_number, "end");
                             }
+                            scheduleAutoClear(5000);
                         }
                     }
                 }
@@ -255,15 +252,21 @@ void ViewerServer::etReaderThread()
                     // Run-change fallback: if a physics event arrives
                     // with a run_number we haven't dispatched a capture
                     // for yet, fire one for the OLD run (the just-ended
-                    // one).  Server-side per-run dedup eats the dup if
+                    // one) and schedule the post-run autoclear.  This
+                    // covers the worst case where END *and* PRESTART
+                    // were both dropped by CODA — the boundary is then
+                    // detectable only from the run_number flip, and
+                    // without a server-side autoclear schedule the next
+                    // run would accumulate on top of the prior one.
+                    // Per-run dedup in handleElogPost absorbs the dup if
                     // END already triggered.
                     if (event.info.run_number > 0 &&
                         event.info.run_number != last_seen_run_)
                     {
-                        if (last_seen_run_ > 0 &&
-                            app_online_.auto_report_enabled)
-                        {
-                            dispatchCapture(last_seen_run_, "run-change");
+                        if (last_seen_run_ > 0) {
+                            if (app_online_.auto_report_enabled)
+                                dispatchCapture(last_seen_run_, "run-change");
+                            scheduleAutoClear(5000);
                         }
                         last_seen_run_ = event.info.run_number;
                     }
@@ -464,6 +467,11 @@ void ViewerServer::monitorStatusPollThread()
             auto_wd_in_ds = 50;
             autoReportWatchdog();
         }
+
+        // Deferred autoclear — fires the PRESTART-scheduled hist+lms+epics
+        // wipe once its countdown elapses, paused while a capture is in
+        // flight.  TICK_MS resolution is plenty for a 5 s delay.
+        tickAutoClear();
 
         for (auto &m : metrics) {
             if (m.next_in_ds > 0) { --m.next_in_ds; continue; }

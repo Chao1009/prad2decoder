@@ -307,21 +307,21 @@ function passesTriggerFilter(triggerBits){
 // =========================================================================
 // Auto Report mode
 // =========================================================================
-// On-demand: server is the trigger and the gatekeeper.  When END (or a
-// run-change fallback) fires, the server picks one alive WS client and
-// sends a 'capture_request' over the WS.  The chosen client (us, if it's
-// our turn) takes screenshots and POSTs them to /api/elog/post; the
-// server saves locally + optionally uploads to elog.
+// Fully server-driven.  The server detects run boundaries (END /
+// PRESTART control events, run-number flip on physics events as a
+// fallback), picks one alive WS client, and sends a 'capture_request'.
+// The chosen client takes screenshots and POSTs them to /api/elog/post;
+// the server saves locally + optionally uploads to elog.  When the
+// server's capture-aware autoclear fires, every client gets an
+// autoclear_done broadcast that resets local UI in lockstep.
 //
 // This client only:
 //   1. Reflects auto_post_enabled in the header status pill.
 //   2. Lights the same pill green ("Auto-reporting…") while we're the
 //      one running captures.
-//   3. Clears all data on PRESTART (so the new run starts blank).
 
 let autoPostEnabled=false;     // server-controlled, from /api/config
 let autoIsReporting=false;     // true while we're handling a capture_request
-let pendingPrestartClear=false; // PRESTART arrived mid-capture; flush on done
 
 function autoStatusEl(){ return document.getElementById('auto-status'); }
 
@@ -347,16 +347,12 @@ function autoUpdateStatus(){
 }
 
 function autoSetReporting(on){
-    const wasReporting = autoIsReporting;
     autoIsReporting = !!on;
     autoUpdateStatus();
-    // Capture finished (success, failure, or auto_capture_done from
-    // server-side timeout): if PRESTART for the next run arrived while
-    // we were busy, run the clear now that the screenshots are safe.
-    // doClearAll() resets pendingPrestartClear itself.
-    if(wasReporting && !autoIsReporting && pendingPrestartClear){
-        doClearAll();
-    }
+    // Local UI clears + the server-side data wipe are both driven by
+    // the server's autoclear scheduler — when it fires, every client
+    // (including this one) gets an autoclear_done broadcast that runs
+    // clearFrontend in lockstep.  Nothing to flush here.
 }
 
 // Called from initReport() once /api/config has arrived.
@@ -366,15 +362,11 @@ function applyAutoReportConfig(cfg){
     autoUpdateStatus();
 }
 
-// Centralised Clear All — used by the manual button.  PRESTART goes
-// through prestartClearAll() so the chosen reporter can defer the
-// clear until its in-flight capture finishes (otherwise the screenshots
-// would land on freshly-wiped histograms).  The manual button has higher
-// priority than the deferred prestart-clear: any direct doClearAll()
-// supersedes a parked deferral so we don't fire it again later and wipe
-// the new run's freshly-accumulating data.
+// Manual Clear All — operator-driven, immediate.  Run-boundary
+// (PRESTART / END / run-change) wipes are handled entirely server-side
+// via scheduleAutoClear; this path is intentionally not gated on
+// pending_capture_ so a button press always takes effect right away.
 function doClearAll(){
-    pendingPrestartClear = false;
     return Promise.all([
         fetch('/api/hist/clear').then(r=>r.json()),
         fetch('/api/lms/clear').then(r=>r.json()),
@@ -382,18 +374,6 @@ function doClearAll(){
     ]).then(clearFrontend).catch(()=>{
         document.getElementById('status-bar').textContent='Error clearing data';
     });
-}
-
-// PRESTART entry point.  Non-reporter clients clear immediately (their
-// autoIsReporting is always false); the chosen reporter parks the clear
-// until autoSetReporting(false) flushes it.  Manual button still calls
-// doClearAll() directly so operators are never gated on auto-report.
-function prestartClearAll(){
-    if(autoIsReporting){
-        pendingPrestartClear = true;
-        return;
-    }
-    return doClearAll();
 }
 
 function initAutoReport(){
