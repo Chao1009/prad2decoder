@@ -198,17 +198,21 @@ void ViewerServer::etReaderThread()
                         if (app_online_.sync_unix == 0 && s.unix_time != 0)
                             app_online_.recordSyncTime(s.unix_time, last_ti_ts);
                         // Auto-report and the post-run wipe are server-driven:
-                        //   END      → dispatch capture (if enabled),
-                        //              schedule autoclear
-                        //   PRESTART → schedule autoclear (END may have
-                        //              been missed; PRESTART is also a
-                        //              valid signal that a new run is up)
-                        // The autoclear's countdown pauses while a capture
-                        // is in flight, so screenshots always see the
-                        // pre-wipe data.
-                        if (et == EventType::Prestart || et == EventType::End) {
-                            if (et == EventType::End &&
-                                app_online_.auto_report_enabled &&
+                        //   END      → dispatch capture (if enabled) and
+                        //              scheduleAutoClear; the schedule
+                        //              pauses while pending_capture_ is
+                        //              set so screenshots see pre-wipe data.
+                        //   PRESTART → no scheduling.  Between PRESTART
+                        //              and GO there is no pending_capture_
+                        //              to gate on, so a timer here would
+                        //              fire standalone and wipe the prior
+                        //              run's data before the run-change
+                        //              fallback (in the per-event loop)
+                        //              gets a chance to capture it.  The
+                        //              run-change branch covers the
+                        //              END-missed case on its own.
+                        if (et == EventType::End) {
+                            if (app_online_.auto_report_enabled &&
                                 s.run_number > 0)
                             {
                                 dispatchCapture(s.run_number, "end");
