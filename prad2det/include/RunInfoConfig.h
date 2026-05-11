@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -184,6 +185,12 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
         const auto &gf = c["gain_factor"];
         if (gf.contains("data_dir")) result.gain_data_dir = gf["data_dir"].get<std::string>();
         if (gf.contains("ref_run"))  result.gain_ref_run  = gf["ref_run"].get<int>();
+    }
+    // Fallback: if gain_data_dir is still empty, derive it from the runinfo
+    // file location: <runinfo_dir>/../gain_factor  (i.e. database/gain_factor).
+    if (result.gain_data_dir.empty()) {
+        result.gain_data_dir = (std::filesystem::path(path).parent_path()
+                                / ".." / "gain_factor").lexically_normal().string();
     }
     std::cerr << "RunInfo   : loaded run_number=" << best_run
               << " from " << path << "\n";

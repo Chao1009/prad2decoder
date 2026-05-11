@@ -64,7 +64,7 @@
                 "use_square_cut": true
             },
             "gain_factor": {
-                "data_dir": "/home/liyuan/PRad2_script/new/prad2evviewer/database/gain_factor",
+                "data_dir": "",
                 "ref_run": 24484
             }
         }
