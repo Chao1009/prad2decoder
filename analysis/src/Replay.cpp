@@ -254,7 +254,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
     gain_tree->Branch("mid_event_num", &mid_event_num, "mid_event_num/L");
 
     TH1F *ref_lms[3], *ref_alpha[3], *mod_lms[1156];
-    string filename = input_evio.substr(input_evio.find_last_of("/\\") + 1);
+    std::string filename = input_evio.substr(input_evio.find_last_of("/\\") + 1);
     for (int i = 0; i < 3; ++i) {
         ref_lms[i]   = new TH1F(Form("ref_lms%d_%s",   i+1, filename.c_str()), Form("Reference LMS%d",   i+1), 150*2, 0, 15000);
         ref_alpha[i] = new TH1F(Form("ref_alpha%d_%s", i+1, filename.c_str()), Form("Reference alpha%d", i+1), 150*2, 0, 15000);
