@@ -584,9 +584,9 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
             gain_W_ref[i][0] = ref_gain_tbl.w[i + 1].g[0];
             gain_W_ref[i][1] = ref_gain_tbl.w[i + 1].g[1];
             gain_W_ref[i][2] = ref_gain_tbl.w[i + 1].g[2];
-            gain_corr_W[i][0] = gain_W[i][0] / gain_W_ref[i][0];
-            gain_corr_W[i][1] = gain_W[i][1] / gain_W_ref[i][1];
-            gain_corr_W[i][2] = gain_W[i][2] / gain_W_ref[i][2];
+            gain_corr_W[i][0] = gain_W_ref[i][0] / gain_W[i][0];
+            gain_corr_W[i][1] = gain_W_ref[i][1] / gain_W[i][1];
+            gain_corr_W[i][2] = gain_W_ref[i][2] / gain_W[i][2];
         }
         gain_tree->Fill();
     }
