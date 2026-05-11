@@ -351,8 +351,7 @@ int main(int argc, char *argv[])
                             }
                             if (bestIdx < 0) continue;
                             adc    = ev.peak_integral[j][bestIdx];
-                            adc *= (gain_corr_W[mod->id-1000-1][0]+gain_corr_W[mod->id-1000-1][1]+
-                                gain_corr_W[mod->id-1000-1][2]) / 3.; // apply gain correction
+                            adc *= (gain_corr_W[mod->id-1000-1][0]+gain_corr_W[mod->id-1000-1][1]) / 2.; // apply gain correction
                             int mod_id = ev.module_id[j];
                             float E = (mod->cal_factor > 0) ? static_cast<float>(mod->energize(adc)) : adc * 0.f;
                             valid_peaks.push_back({mod_id, E, ev.peak_time[j][bestIdx]});
