@@ -326,6 +326,7 @@ int main(int argc, char *argv[])
                         int module_id;
                         float energy;
                         float time;
+                        int peak_n;
                     };
                     std::vector<PeakInfo> valid_peaks;
 
@@ -351,10 +352,10 @@ int main(int argc, char *argv[])
                             }
                             if (bestIdx < 0) continue;
                             adc    = ev.peak_integral[j][bestIdx];
-                            adc *= gain_corr_W[mod->id-1000-1][1]; // apply gain correction
+                            //adc *= gain_corr_W[mod->id-1000-1][1]; // apply gain correction
                             int mod_id = ev.module_id[j];
                             float E = (mod->cal_factor > 0) ? static_cast<float>(mod->energize(adc)) : adc * 0.f;
-                            valid_peaks.push_back({mod_id, E, ev.peak_time[j][bestIdx]});
+                            valid_peaks.push_back({mod_id, E, ev.peak_time[j][bestIdx], ev.npeaks[j]});
                         }
                         else{
                             if(ev.daq_npeaks[j] <= 0) continue;
@@ -381,6 +382,20 @@ int main(int argc, char *argv[])
                         if (!valid_peaks.empty()) {
                             const auto *center_mod = res->hycal.module_by_id(valid_peaks[0].module_id);
                             if (center_mod) {
+                                // Require all modules in 3×3 window to have exactly one peak
+                                constexpr float half_win_3x3 = 1.5f * 20.78f;
+                                bool clean_3x3 = true;
+                                for (const auto &pk : valid_peaks) {
+                                    const auto *m = res->hycal.module_by_id(pk.module_id);
+                                    if (!m) continue;
+                                    float dx = m->x - center_mod->x;
+                                    float dy = m->y - center_mod->y;
+                                    if (std::abs(dx) <= half_win_3x3 && std::abs(dy) <= half_win_3x3) {
+                                        if (pk.peak_n != 1) { clean_3x3 = false; break; }
+                                    }
+                                }
+                                if (!clean_3x3) continue;
+
                                 // 5×5 energy sum: select modules whose center lies within
                                 // ±2 crystal pitches (20.77 mm) in both x and y from center
                                 constexpr float half_win = 2.5f * 20.78f;
