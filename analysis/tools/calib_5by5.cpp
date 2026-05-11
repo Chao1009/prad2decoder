@@ -270,6 +270,35 @@ int main(int argc, char *argv[])
                 EventVars ev;
                 prad2::SetRawReadBranches(tree, ev);
 
+                TTree *gain_tree = dynamic_cast<TTree *>(rfile->Get("gains"));
+                float gain_corr_W[1156][3], gain_W[1156][3], gain_W_ref[1156][3];
+                float refPMT_ratio[3];
+                Long64_t mid_event_num;
+                if (gain_tree) {
+                    gain_tree->SetBranchAddress("gain_corr_W", gain_corr_W);
+                    gain_tree->SetBranchAddress("gain_W", gain_W);
+                    gain_tree->SetBranchAddress("gain_W_ref", gain_W_ref);
+                    gain_tree->SetBranchAddress("refPMT_ratio", refPMT_ratio);
+                    gain_tree->SetBranchAddress("mid_event_num", &mid_event_num);
+                    if (gain_tree->GetEntries() > 0) {
+                        //in this case, only one entry is expected in the gain tree
+                        //because each thread works on one file
+                        gain_tree->GetEntry(0);
+                        std::lock_guard<std::mutex> lk(io_mtx);
+                        std::cout << "[thread " << t << "] loaded gain tree from "
+                                  << root_files[fi] << "\n";
+                    } else {
+                        std::lock_guard<std::mutex> lk(io_mtx);
+                        std::cout << "[thread " << t << "] gain tree empty in "
+                                  << root_files[fi] << "\n";
+                    }
+                } else {
+                    std::lock_guard<std::mutex> lk(io_mtx);
+                    std::cout << "[thread " << t << "] no gain tree in "
+                              << root_files[fi] << "\n";
+                }
+                
+
                 int run_num = get_run_int(root_files[fi]);
                 auto localConfig = LoadRunConfig(db_dir + "/runinfo/2p1_general.json", run_num);
                 //auto gain_correction = prad2::ComputeGainCorrection(db_dir +
@@ -322,6 +351,8 @@ int main(int argc, char *argv[])
                             }
                             if (bestIdx < 0) continue;
                             adc    = ev.peak_integral[j][bestIdx];
+                            adc *= (gain_corr_W[mod->id-1000-1][0]+gain_corr_W[mod->id-1000-1][1]+
+                                gain_corr_W[mod->id-1000-1][2]) / 3.; // apply gain correction
                             int mod_id = ev.module_id[j];
                             float E = (mod->cal_factor > 0) ? static_cast<float>(mod->energize(adc)) : adc * 0.f;
                             valid_peaks.push_back({mod_id, E, ev.peak_time[j][bestIdx]});
