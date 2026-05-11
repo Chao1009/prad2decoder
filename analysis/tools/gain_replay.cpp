@@ -222,6 +222,11 @@ int main(int argc, char *argv[])
                             auto mtype = static_cast<uint8_t>(replay.moduleType(crate, s, c));
                             ana.SetChannelKey(roc.tag, s, c);
                             ana.Analyze(cd.samples, cd.nsamples, wres);
+                            //temporary test for integral
+                            for(int s = wres.peaks[p].left -2; s < wres.peaks[p].left; s++)
+                                wres.peaks[p].integral += cd.samples[s] - wres.ped.mean;
+                            for(int s = wres.peaks[p].right + 1; s <= wres.peaks[p].right + 3; s++)
+                                wres.peaks[p].integral += cd.samples[s] - wres.ped.mean;
                             channels.push_back({mid, mtype,
                                                 wres.npeaks,
                                                 wres.npeaks > 0 ? wres.peaks[0].integral : 0.f});
