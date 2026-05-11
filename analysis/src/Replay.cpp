@@ -577,12 +577,12 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
         auto ref_gain_tbl = prad2::LoadGainFactors(gRunConfig.gain_data_dir, gRunConfig.gain_ref_run);
         prad2::FitResult fit_W_lms[1156], fit_ref_lms[3], fit_ref_alpha[3];
         for(int i = 0; i < 3; i++){
-            fit_ref_lms[i] = prad2::gain_hist_fitter(ref_lms[i], 0.1f);
-            fit_ref_alpha[i] = prad2::gain_hist_fitter(ref_alpha[i], 0.1f);
+            fit_ref_lms[i] = prad2::gain_hist_fitter(ref_lms[i], 0.5f);
+            fit_ref_alpha[i] = prad2::gain_hist_fitter(ref_alpha[i], 0.5f);
             refPMT_ratio[i] = fit_ref_lms[i].mean / fit_ref_alpha[i].mean;
         }
         for(int i = 0; i < 1156; i++){
-            fit_W_lms[i] = prad2::gain_hist_fitter(mod_lms[i], 0.1f);
+            fit_W_lms[i] = prad2::gain_hist_fitter(mod_lms[i], 0.5f);
             gain_W[i][0] = fit_W_lms[i].mean / refPMT_ratio[0]; // g1-based correction (matches LMS1)
             gain_W[i][1] = fit_W_lms[i].mean / refPMT_ratio[1]; // g2-based correction (matches LMS2)
             gain_W[i][2] = fit_W_lms[i].mean / refPMT_ratio[2]; // g3-based correction (matches LMS3)

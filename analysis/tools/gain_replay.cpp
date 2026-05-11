@@ -273,15 +273,15 @@ int main(int argc, char *argv[])
     float gain_W[1156][3] = {};
 
     for (int i = 0; i < 3; ++i) {
-        fit_ref_lms  [i] = prad2::gain_hist_fitter(ref_lms  [i], 0.1f);
-        fit_ref_alpha[i] = prad2::gain_hist_fitter(ref_alpha[i], 0.1f);
+        fit_ref_lms  [i] = prad2::gain_hist_fitter(ref_lms  [i], 0.5f);
+        fit_ref_alpha[i] = prad2::gain_hist_fitter(ref_alpha[i], 0.5f);
         if (fit_ref_lms[i].mean > 0.f && fit_ref_alpha[i].mean > 0.f)
             refPMT_ratio[i] = fit_ref_lms[i].mean / fit_ref_alpha[i].mean;
         std::cerr << Form("  LMS%d : lms=%.1f  alpha=%.1f  ratio=%.4f\n",
                           i+1, fit_ref_lms[i].mean, fit_ref_alpha[i].mean, refPMT_ratio[i]);
     }
     for (int i = 0; i < 1156; ++i) {
-        fit_W_lms[i] = prad2::gain_hist_fitter(mod_lms[i], 0.1f);
+        fit_W_lms[i] = prad2::gain_hist_fitter(mod_lms[i], 0.5f);
         for (int j = 0; j < 3; ++j)
             gain_W[i][j] = (refPMT_ratio[j] > 0.f && fit_W_lms[i].mean > 0.f)
                          ? fit_W_lms[i].mean / refPMT_ratio[j] : 0.f;
