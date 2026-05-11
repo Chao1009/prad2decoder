@@ -477,7 +477,7 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                                 //temporary test for integral
                                 for(int s = wres.peaks[p].left -2; s < wres.peaks[p].left; s++)
                                     ev->peak_integral[nch][p] += cd.samples[s] - wres.ped.mean;
-                                for(int s = wres.peaks[p].right + 1; s <= wres.peaks[p].right + 15; s++)
+                                for(int s = wres.peaks[p].right + 1; s <= wres.peaks[p].right + 3; s++)
                                     ev->peak_integral[nch][p] += cd.samples[s] - wres.ped.mean;
                                 ev->peak_quality[nch][p]  = wres.peaks[p].quality;
                             }
