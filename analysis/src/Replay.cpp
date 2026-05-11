@@ -182,7 +182,8 @@ void Replay::setupReconBranches(TTree *tree, EventVars_Recon &ev)
 
 bool Replay::Process(const std::string &input_evio, const std::string &output_root, RunConfig &gRunConfig,
                      const std::string &db_dir,
-                     int max_events, bool write_peaks , const std::string &daq_config_file)
+                     int max_events, bool write_peaks, const std::string &daq_config_file,
+                     bool gain_plot)
 {
     // build ROC tag → crate index mapping from DAQ config JSON
     std::unordered_map<int, int> roc_to_crate;
@@ -240,6 +241,26 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
     prad2::SetScalerWriteBranches (scalers_tree, *sc_row);
     prad2::SetEpicsWriteBranches  (epics_tree,   *ep_row);
     prad2::SetRunInfoWriteBranches(runinfo_tree, *ri_row);
+
+    //gain correction factors of all channels for each evio file, only W modules for now
+    TTree *gain_tree = new TTree("gains", "PRad2 gain correction factors");
+    float gain_corr_W[1156][3], gain_W[1156][3], gain_W_ref[1156][3];
+    float refPMT_ratio[3]; //ref_ratio = LMS / alpha for the three reference PMTs
+    Long64_t mid_event_num;
+    gain_tree->Branch("gain_corr_W", gain_corr_W, "gain_corr_W[1156][3]/F");
+    gain_tree->Branch("gain_W", gain_W, "gain_W[1156][3]/F");
+    gain_tree->Branch("gain_W_ref", gain_W_ref, "gain_W_ref[1156][3]/F");
+    gain_tree->Branch("refPMT_ratio", refPMT_ratio, "refPMT_ratio[3]/F");
+    gain_tree->Branch("mid_event_num", &mid_event_num, "mid_event_num/L");
+
+    TH1F *ref_lms[3], *ref_alpha[3], *mod_lms[1156];
+    for (int i = 0; i < 3; ++i) {
+        ref_lms[i]   = new TH1F(Form("ref_lms%d_%s",   i+1, input_evio.c_str()), Form("Reference LMS%d",   i+1), 150*2, 0, 15000);
+        ref_alpha[i] = new TH1F(Form("ref_alpha%d_%s", i+1, input_evio.c_str()), Form("Reference alpha%d", i+1), 150*2, 0, 15000);
+    }
+    for(int i = 0; i < 1156; ++i) {
+        mod_lms[i] = new TH1F(Form("mod_lms%d_%s", i, input_evio.c_str()), Form("Module %d LMS", i), 150*2, 0, 15000);
+    }
 
     auto event = std::make_unique<fdec::EventData>();
     auto ssp_evt = std::make_unique<ssp::SspEventData>();
@@ -475,6 +496,36 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
             }
             ev->nch = nch;
 
+            //calculate gain correction factors for W modules and fill the gain tree
+            //Because the LMS and alpha trigger_bits can not believe, 
+            // we need to use "nch" to seperate the LMS and alpha events
+            // this needs to open the "write_peaks" option
+            if(write_peaks) {
+                bool is_lms = ((ev->trigger_bits & (1 << 24)) != 0 && ev->nch > 1000);
+                bool is_alpha = ((ev->trigger_bits & (1 << 25)) != 0 && ev->nch < 50);
+                if(is_lms){
+                    for(int i = 0; i < ev->nch; i++){
+                        if(ev->module_type[i] == prad2::MOD_PbWO4 && ev->npeaks[i] == 1){
+                            int mod_id = ev->module_id[i] - 1000;
+                            mod_lms[mod_id-1]->Fill(ev->peak_integral[i][0]);
+                        }
+                        if(ev->module_type[i] == prad2::MOD_LMS && ev->npeaks[i] == 1){
+                            int lms_id = ev->module_id[i] - 3100;
+                            ref_lms[lms_id-1]->Fill(ev->peak_integral[i][0]);
+                        }
+
+                    }
+                }
+                if(is_alpha){
+                    for(int i = 0; i < ev->nch; i++){
+                        if(ev->module_type[i] == prad2::MOD_LMS && ev->npeaks[i] == 1){
+                            int lms_id = ev->module_id[i] - 3100;
+                            ref_alpha[lms_id-1]->Fill(ev->peak_integral[i][0]);
+                        }
+                    }
+                }
+            }
+
             // decode GEM SSP data
             int gem_ch = 0;
             for (int m = 0; m < ssp_evt->nmpds; ++m) {
@@ -503,14 +554,58 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
             tree->Fill();
             total++;
 
+            if(total == 1) mid_event_num += ev->event_num / 2;
+
             if (total % 1000 == 0)
                 std::cerr << "\rReplay: " << total << " events processed" << std::flush;
         }
         if (max_events > 0 && total >= max_events) break;
     }
 
+    mid_event_num += ev->event_num / 2; // Finalize mid_event_num after the loop
+
+    //calculate gain correction factors for W modules and fill the gain tree
+    //Because the LMS and alpha trigger_bits can not believe, 
+    // we need to use "nch" to seperate the LMS and alpha events
+    // this needs to open the "write_peaks" option
+    if(write_peaks) {
+        auto ref_gain_tbl = prad2::LoadGainFactors(gRunConfig.gain_data_dir, gRunConfig.gain_ref_run);
+        prad2::FitResult fit_W_lms[1156], fit_ref_lms[3], fit_ref_alpha[3];
+        for(int i = 0; i < 3; i++){
+            fit_ref_lms[i] = prad2::gain_hist_fitter(ref_lms[i], 0.1f);
+            fit_ref_alpha[i] = prad2::gain_hist_fitter(ref_alpha[i], 0.1f);
+            refPMT_ratio[i] = fit_ref_lms[i].mean / fit_ref_alpha[i].mean;
+        }
+        for(int i = 0; i < 1156; i++){
+            fit_W_lms[i] = prad2::gain_hist_fitter(mod_lms[i], 0.1f);
+            gain_W[i][0] = fit_W_lms[i].mean / refPMT_ratio[0]; // g1-based correction (matches LMS1)
+            gain_W[i][1] = fit_W_lms[i].mean / refPMT_ratio[1]; // g2-based correction (matches LMS2)
+            gain_W[i][2] = fit_W_lms[i].mean / refPMT_ratio[2]; // g3-based correction (matches LMS3)
+            gain_W_ref[i][0] = ref_gain_tbl.w[i + 1].g[0];
+            gain_W_ref[i][1] = ref_gain_tbl.w[i + 1].g[1];
+            gain_W_ref[i][2] = ref_gain_tbl.w[i + 1].g[2];
+            gain_corr_W[i][0] = gain_W[i][0] / gain_W_ref[i][0];
+            gain_corr_W[i][1] = gain_W[i][1] / gain_W_ref[i][1];
+            gain_corr_W[i][2] = gain_W[i][2] / gain_W_ref[i][2];
+        }
+        gain_tree->Fill();
+    }
+    if(gain_plot){
+    outfile->cd();
+    outfile->mkdir("gain_hists");
+    outfile->cd("gain_hists");
+    for(int i = 0; i < 3; i++) ref_lms[i]->Write();
+    for(int i = 0; i < 3; i++) ref_alpha[i]->Write();
+    for(int i = 0; i < 1156; i++) mod_lms[i]->Write();
+    } else{
+        for(int i = 0; i < 3; i++) delete ref_lms[i];
+        for(int i = 0; i < 3; i++) delete ref_alpha[i];
+        for(int i = 0; i < 1156; i++) delete mod_lms[i];
+    }
     std::cerr << "\rReplay: " << total << " events written to " << output_root << "\n";
+    outfile->cd();
     tree->Write();
+    gain_tree->Write();
     scalers_tree->Write();
     epics_tree->Write();
     runinfo_tree->Write();

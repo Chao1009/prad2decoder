@@ -64,8 +64,8 @@
                 "use_square_cut": true
             },
             "gain_factor": {
-                "data_dir": "/home/clasrun/prad2_daq/gain_monitoring/gain_monitor_output",
-                "ref_run": 24200
+                "data_dir": "/home/liyuan/PRad2_script/new/prad2evviewer/database/gain_factor",
+                "ref_run": 24484
             }
         }
     ]

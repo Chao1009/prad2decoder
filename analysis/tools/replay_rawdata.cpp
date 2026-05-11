@@ -79,6 +79,7 @@ int main(int argc, char *argv[])
     int max_events = -1;
     int max_files = -1;
     bool peaks = false;
+    bool gain_plot = false;
     int num_threads = 4;
 
     std::string db_dir = prad2::resolve_data_dir(
@@ -87,8 +88,12 @@ int main(int argc, char *argv[])
         DATABASE_DIR);
     daq_config = db_dir + "/daq_config.json"; // default DAQ config for PRad2
 
+    static struct option long_opts[] = {
+        {"gain_plot", no_argument, nullptr, 'g'},
+        {nullptr, 0, nullptr, 0}
+    };
     int opt;
-    while ((opt = getopt(argc, argv, "o:f:n:c:d:j:p")) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:f:n:c:d:j:p", long_opts, nullptr)) != -1) {
         switch (opt) {
             case 'o': output_dir = optarg; break;
             case 'f': max_files = std::atoi(optarg); break;
@@ -97,6 +102,7 @@ int main(int argc, char *argv[])
             case 'd': daq_map = optarg; break;
             case 'j': num_threads = std::atoi(optarg); break;
             case 'p': peaks = true; break;
+            case 'g': gain_plot = true; peaks = true; break;
         }
     }
 
@@ -117,6 +123,7 @@ int main(int argc, char *argv[])
         std::cerr << "  -d  HyCal map JSON (default: <db>/hycal_map.json)\n";
         std::cerr << "  -n  max events per file (default: all)\n";
         std::cerr << "  -p  include peak analysis branches (soft + firmware DAQ-mode)\n";
+        std::cerr << "  --gain_plot  save gain histograms / gain tree (implies -p)\n";
         return 1;
     }
     int num_files = static_cast<int>(evio_files.size());
@@ -153,7 +160,7 @@ int main(int argc, char *argv[])
             if (idx >= num_files) break;
 
             std::string out = output_dir + "/" + makeOutputFile(evio_files[idx]);
-            bool ok = replay.Process(evio_files[idx], out, gRunConfig, db_dir, max_events, peaks, daq_config);
+            bool ok = replay.Process(evio_files[idx], out, gRunConfig, db_dir, max_events, peaks, daq_config, gain_plot);
 
             std::lock_guard<std::mutex> lk(io_mtx);
             if (ok) {
