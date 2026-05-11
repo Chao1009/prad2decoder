@@ -223,10 +223,10 @@ int main(int argc, char *argv[])
                             ana.SetChannelKey(roc.tag, s, c);
                             ana.Analyze(cd.samples, cd.nsamples, wres);
                             //temporary test for integral
-                            for(int s = wres.peaks[p].left -2; s < wres.peaks[p].left; s++)
-                                wres.peaks[p].integral += cd.samples[s] - wres.ped.mean;
-                            for(int s = wres.peaks[p].right + 1; s <= wres.peaks[p].right + 3; s++)
-                                wres.peaks[p].integral += cd.samples[s] - wres.ped.mean;
+                            for(int s = wres.peaks[0].left -2; s < wres.peaks[0].left; s++)
+                                wres.peaks[0].integral += cd.samples[s] - wres.ped.mean;
+                            for(int s = wres.peaks[0].right + 1; s <= wres.peaks[0].right + 3; s++)
+                                wres.peaks[0].integral += cd.samples[s] - wres.ped.mean;
                             channels.push_back({mid, mtype,
                                                 wres.npeaks,
                                                 wres.npeaks > 0 ? wres.peaks[0].integral : 0.f});
