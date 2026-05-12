@@ -27,7 +27,7 @@
         },
         "height_hist": {
             "min": 0, "max": 4000, "step": 10,
-            "ref_lines": [
+            "//ref_lines": [
                 {"axis": "x", "pos": 2800, "lw": 2, "ls": "dash", "layer": "above", "color": "#ff6"}
             ]
         },
@@ -42,14 +42,14 @@
         "reject_trigger_bits": ["LMS", "Alpha", "Pulser"],
         "energy_hist": {
             "min": 0,
-            "max": 4000,
-            "step": 10
+            "max": 1000,
+            "step": 5
         },
         "raw_energy_hist": {
             "// Per-event sum of all module energies (pre-clustering).": "",
             "min": 100,
-            "max": 4100,
-            "step": 10
+            "max": 1000,
+            "step": 5
         },
         "nclusters_hist": {
             "min": 0.5,
@@ -165,8 +165,8 @@
             "angle_max": 8.0,
             "angle_step": 0.2,
             "energy_min": 0.0,
-            "energy_max": 4000.0,
-            "energy_step": 100.0
+            "energy_max": 1000.0,
+            "energy_step": 20.0
         },
         "moller": {
             "energy_tolerance": 0.1,
