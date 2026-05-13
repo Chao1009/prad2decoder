@@ -20,11 +20,16 @@
 //       ]
 //     }
 //
-// Lookup rules (all use largest from_run <= run_num; latest entry if
-// run_num < 0):
-//   * configurations: pick one entry, overlay it on `defaults`.
-//   * gem_pedestals: pick one entry, override gem.pedestal_file /
-//     gem.common_mode_file from the merged result.
+// Lookup rules:
+//   * configurations: overlay every entry with from_run <= run_num in
+//     ascending from_run order on top of `defaults` (chained inheritance).
+//     Sparse later entries only need to list the fields that differ from
+//     the previous period — e.g. a 0.7 GeV entry that reuses the 3.5 GeV
+//     survey only specifies beam_energy.  When run_num < 0, all entries
+//     are applied (i.e. you get the latest chained state).
+//   * gem_pedestals: pick one entry (largest from_run <= run_num),
+//     override gem.pedestal_file / gem.common_mode_file on the merged
+//     result.  No chaining — each pedestal table row is self-contained.
 //
 // `run_number` is accepted as an alias for `from_run`, and either of the
 // new blocks may be omitted — older runinfo files (no defaults, no
@@ -41,6 +46,8 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace prad2 {
 
@@ -85,12 +92,14 @@ struct RunConfig {
     std::string hycal_time_cut_file;
 };
 
-// Returns a RunConfig populated from the best-matching entry in `path`.
+// Returns a RunConfig populated by chaining all matching `configurations`
+// entries (and one `gem_pedestals` entry) from `path`.
 //
-// Selection rule (applied independently to `configurations` and to
-// `gem_pedestals`):
-//   run_num >= 0 -> entry with the largest from_run that is <= run_num
-//   run_num <  0 -> entry with the largest from_run ("latest")
+// Selection rule:
+//   * configurations: every entry with from_run <= run_num (or every
+//     entry when run_num < 0), applied in ascending from_run order.
+//   * gem_pedestals: the single entry with the largest from_run <= run_num
+//     (latest overall when run_num < 0).
 // `run_number` is accepted as an alias for `from_run`.
 //
 // On any failure (file missing, parse error, no "configurations" array,
@@ -128,7 +137,7 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
     };
 
     // Pick the largest entry with from_run <= run_num (or the largest
-    // overall when run_num < 0).
+    // overall when run_num < 0).  Used by the gem_pedestals lookup.
     auto pick_best = [&](const nlohmann::json &arr) -> std::pair<const nlohmann::json *, int> {
         const nlohmann::json *best = nullptr;
         int best_run = -1;
@@ -142,6 +151,24 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
             }
         }
         return {best, best_run};
+    };
+
+    // Collect all entries with from_run <= run_num (or all entries when
+    // run_num < 0), sorted ascending so chained application overlays in
+    // the right order.  Used by the configurations chain.
+    auto collect_chain = [&](const nlohmann::json &arr)
+        -> std::vector<std::pair<int, const nlohmann::json *>>
+    {
+        std::vector<std::pair<int, const nlohmann::json *>> chain;
+        for (const auto &e : arr) {
+            int rn = entry_from_run(e);
+            if (rn < 0) continue;
+            if (run_num >= 0 && rn > run_num) continue;
+            chain.emplace_back(rn, &e);
+        }
+        std::sort(chain.begin(), chain.end(),
+                  [](const auto &a, const auto &b) { return a.first < b.first; });
+        return chain;
     };
 
     // Field-by-field overlay.  Called with `defaults` first (if present),
@@ -225,14 +252,16 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
     if (cfg.contains("defaults") && cfg["defaults"].is_object())
         apply_entry(cfg["defaults"]);
 
-    // 2) picked configurations entry overlays defaults.
-    auto [best, best_run] = pick_best(cfg["configurations"]);
-    if (best == nullptr) {
+    // 2) configurations chain: every entry with from_run <= run_num,
+    //    applied in ascending order so the latest overrides earlier ones.
+    auto chain = collect_chain(cfg["configurations"]);
+    if (chain.empty()) {
         std::cerr << "Warning: no matching configuration in " << path
                   << " for run " << run_num << ", using defaults.\n";
         return result;
     }
-    apply_entry(*best);
+    for (const auto &kv : chain) apply_entry(*kv.second);
+    int best_run = chain.back().first;
 
     // 3) gem_pedestals: independent lookup; overrides the gem.*_file fields
     //    so a new pedestal can be added without touching configurations.
@@ -248,7 +277,8 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
         }
     }
 
-    std::cerr << "RunInfo   : loaded from_run=" << best_run;
+    std::cerr << "RunInfo   : chained " << chain.size()
+              << " config(s), last from_run=" << best_run;
     if (best_ped_run >= 0) std::cerr << "  ped_from_run=" << best_ped_run;
     std::cerr << " from " << path << "\n";
     return result;

@@ -1,32 +1,40 @@
 {
     "// Run-period geometry + calibration metadata.  Three tiers:":                                                                  "",
     "//   defaults       — fields that almost never change (invariants).":                                                            "",
-    "//   configurations — sparse period entries; each overlays defaults.":                                                           "",
-    "//                    Lookup picks the largest from_run <= run_num.":                                                            "",
+    "//   configurations — sparse period entries; each chains on top of":                                                             "",
+    "//                    the previous one (and over defaults).":                                                                    "",
     "//   gem_pedestals  — per-run pedestal/CM table; lookup is independent":                                                         "",
-    "//                    of configurations (same largest-from_run <= run_num rule).":                                               "",
+    "//                    of configurations (largest from_run <= run_num).":                                                         "",
     "//":                                                                                                                             "",
     "// `from_run` is the trigger key; `run_number` is accepted as an alias for":                                                     "",
     "// backward-compat with older runinfo files.":                                                                                   "",
     "//":                                                                                                                             "",
-    "// Per-detector GEM entries merge by `id`: defaults provides tilting once,":                                                     "",
-    "// each period provides position[id].  No chained inheritance between":                                                          "",
-    "// configurations — duplicate explicitly if two periods share survey.":                                                          "",
+    "// Detector positions live in `defaults` (the latest precise survey), so":                                                       "",
+    "// every period reads them by default.  Configurations may still override":                                                      "",
+    "// hycal.position / gem.detectors[id].position when a future period gets":                                                       "",
+    "// its own survey — per-id GEM entries merge by id, so an override that":                                                        "",
+    "// only sets position for one detector keeps the others on defaults.":                                                           "",
+    "//":                                                                                                                             "",
+    "// Chained semantics: anything an earlier entry overrides stays applied":                                                        "",
+    "// to later entries unless they explicitly re-override.  Keep `defaults`":                                                       "",
+    "// for fields that genuinely never change; period-volatile fields should":                                                       "",
+    "// be set explicitly in every period entry that needs them.":                                                                    "",
 
     "defaults": {
         "calibration":   {"default_adc2mev": 0.12},
         "target":        [0.0, 0.0, 0.0],
-        "hycal":         {"tilting": [0.0, 0.0, 0.0]},
+        "hycal": {
+            "position":  [-0.70, -1.83, 6269.81], "tilting":   [0.0, 0.0, 0.0]
+        },
         "gem": {
             "detectors": [
-                {"id": 0, "tilting": [180.0, 0.0,   0.0]},
-                {"id": 1, "tilting": [180.0, 0.0, 180.0]},
-                {"id": 2, "tilting": [180.0, 0.0,   0.0]},
-                {"id": 3, "tilting": [180.0, 0.0, 180.0]}
+                {"id": 0, "position": [-229.16, -2.2, 5817.0], "tilting": [180.0, 0.0,   0.0]},
+                {"id": 1, "position": [ 226.35, -1.4, 5853.8], "tilting": [180.0, 0.0, 180.0]},
+                {"id": 2, "position": [-229.10, -1.0, 5414.0], "tilting": [180.0, 0.0,   0.0]},
+                {"id": 3, "position": [ 226.53, -1.2, 5458.0], "tilting": [180.0, 0.0, 180.0]}
             ]
         },
-        "matching":      {"radius": 15.0, "use_square_cut": true},
-        "gain_factor":   {"data_dir": "/home/clasrun/prad2_daq/gain_monitoring/gain_monitor_output"}
+        "matching":      {"radius": 15.0, "use_square_cut": true}
     },
 
     "configurations": [
@@ -34,13 +42,6 @@
             "from_run":    0,
             "beam_energy": 2108.8,
             "calibration": {"file": "calibration/calibration_factor_2p1.json"},
-            "hycal":       {"position": [-0.48, 1.39, 6269.81]},
-            "gem": {"detectors": [
-                {"id": 0, "position": [-229.26, 1.5, 5805.0]},
-                {"id": 1, "position": [ 226.70, 1.5, 5850.0]},
-                {"id": 2, "position": [-228.80, 1.8, 5413.0]},
-                {"id": 3, "position": [ 227.00, 1.3, 5458.9]}
-            ]},
             "time_cuts":   {"hc_time_window": [60.0, 400.0]},
             "gain_factor": {"data_dir": "gain_factor", "ref_run": 23960}
         },
@@ -48,29 +49,17 @@
             "from_run":    24185,
             "beam_energy": 3488.43,
             "calibration": {"file": "calibration/calibration_factor_3p5.json"},
-            "hycal":       {"position": [-0.70, -1.83, 6269.81]},
-            "gem": {"detectors": [
-                {"id": 0, "position": [-229.16, -2.2, 5817.0]},
-                {"id": 1, "position": [ 226.35, -1.4, 5853.8]},
-                {"id": 2, "position": [-229.10, -1.0, 5414.0]},
-                {"id": 3, "position": [ 226.53, -1.2, 5458.0]}
-            ]},
             "time_cuts":   {"hc_time_window": [130.0, 200.0]},
-            "gain_factor": {"ref_run": 24200}
+            "gain_factor": {
+                "data_dir": "/home/clasrun/prad2_daq/gain_monitoring/gain_monitor_output",
+                "ref_run":  24200
+            }
         },
         {
+            "// Reuses the 24185 calibration, time cuts, and gain reference":  "",
+            "// — chained inheritance fills in the rest.":                     "",
             "from_run":    24551,
-            "beam_energy": 728.9,
-            "calibration": {"file": "calibration/calibration_factor_3p5.json"},
-            "hycal":       {"position": [-0.70, -1.83, 6269.81]},
-            "gem": {"detectors": [
-                {"id": 0, "position": [-229.16, -2.2, 5817.0]},
-                {"id": 1, "position": [ 226.35, -1.4, 5853.8]},
-                {"id": 2, "position": [-229.10, -1.0, 5414.0]},
-                {"id": 3, "position": [ 226.53, -1.2, 5458.0]}
-            ]},
-            "time_cuts":   {"hc_time_window": [130.0, 200.0]},
-            "gain_factor": {"ref_run": 24200}
+            "beam_energy": 728.9
         }
     ],
 
