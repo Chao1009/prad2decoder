@@ -213,7 +213,7 @@ peak time satisfies
 
 $$
 \bigl\lvert t_{h^\star} - t_s \bigr\rvert \;\le\; W,
-\qquad W \;=\; \texttt{seed\_time\_window}.
+\qquad W \;=\; \mathtt{seed\_time\_window}.
 $$
 
 Setting $W \le 0$ disables the gate and recovers the original
