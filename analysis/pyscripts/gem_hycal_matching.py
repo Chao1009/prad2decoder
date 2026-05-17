@@ -240,9 +240,11 @@ def main(argv: list[str] | None = None) -> int:
                     # ---- best match per HC × GEM detector ---------------
                     # find_per_plane_matches projects the target → HC seed
                     # to each plane and picks the closest hit within
-                    # match_nsigma · σ_total — bit-equivalent to the
-                    # previous Python inline loop, but the math now runs in
-                    # one shared C++ implementation.
+                    # match_nsigma · σ_total.  Note: the matcher works in
+                    # the plane's local frame (after xform.labToLocal),
+                    # while the prior Python loop matched in lab frame —
+                    # identical for axis-aligned planes, sub-mm differences
+                    # for the small GEM tilts in PRad-II.
                     for k, (hx, hy, hz, he, hc_center, hc_nblocks) in enumerate(hc_lab):
                         if hz <= 0.0:
                             continue

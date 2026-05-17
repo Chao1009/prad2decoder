@@ -1302,7 +1302,8 @@ static void bind_track_matcher(py::module_ &m)
         "Single-HC, stateless matcher.  Multi-cluster contention (greedy-"
         "by-E or Hungarian) is the caller's job — sort HC by energy "
         "descending, call find_best_track per HC, remove claimed hits "
-        "between calls.  See project_track_matcher.md for the full spec.")
+        "between calls.  See prad2det/include/TrackMatcher.h for the "
+        "algorithm and frame contract.")
         .def(py::init<MatcherConfig>(), py::arg("config"))
         .def_property_readonly("config", &TrackMatcher::config,
                                py::return_value_policy::reference_internal)

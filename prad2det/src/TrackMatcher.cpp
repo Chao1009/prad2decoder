@@ -312,11 +312,6 @@ TrackMatcher::findBestTrack(const ClusterHit &hc,
         for (uint32_t sub = 1; sub < (1u << K); ++sub) {
             if (popcount32(sub) < require_planes) continue;
 
-            // Subset-of-planes → mask in plane-index space.
-            uint32_t sub_mask = 0;
-            for (int b = 0; b < K; ++b)
-                if (sub & (1u << b)) sub_mask |= (1u << fit_planes[b]);
-
             // Enumerate hit cross-product across the subset.  Use indices
             // into capped per-plane lists.
             int idx_max[kMaxPlanes] = {};
@@ -358,12 +353,15 @@ TrackMatcher::findBestTrack(const ClusterHit &hc,
                 {
                     // Wrap as a Track via the same residual gate path —
                     // call runFromSeed with the fit as the "seed" line and
-                    // the subset as fit_mask.  The matched-set will be
-                    // identical because the fit goes through these hits.
+                    // the FULL fit_planes_mask, not sub_mask.  Subsets are
+                    // only used to enumerate seed fits; once a fit is built
+                    // every eligible plane should be considered for matching
+                    // so a 3-plane seed can still claim plane 4 when it
+                    // lies within the post-fit σ window.
                     if (cfg_.match_nsigma > 0) {
                         Track cand;
                         if (runFromSeed(cfg_, fit, hc, sigma_hc, hits_by_plane,
-                                        sub_mask, require_target_in_fit,
+                                        fit_planes_mask, require_target_in_fit,
                                         require_planes, /*seed_plane=*/-1,
                                         /*seed_hit_idx=*/-1, diag, cand)
                             && cand.fit.chi2_per_dof < best_chi2)
