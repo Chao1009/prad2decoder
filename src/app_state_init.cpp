@@ -537,6 +537,8 @@ void AppState::init(const std::string &db_dir,
             auto_report_local_save_dir = ar["local_save_dir"].get<std::string>();
         if (ar.contains("min_interval_ms"))
             auto_report_min_interval_ms = ar["min_interval_ms"].get<int>();
+        if (ar.contains("schedule_minutes"))
+            auto_report_schedule_minutes = ar["schedule_minutes"].get<int>();
         if (ar.contains("elog")) {
             auto &el = ar["elog"];
             if (el.contains("url"))     elog_url     = el["url"];
@@ -551,6 +553,7 @@ void AppState::init(const std::string &db_dir,
     std::cerr << "AutoReport: enabled=" << (auto_report_enabled ? "ON" : "OFF")
               << " post_to_elog=" << (auto_report_post_to_elog ? "yes" : "no")
               << " min_interval_ms=" << auto_report_min_interval_ms
+              << " schedule_minutes=" << auto_report_schedule_minutes
               << (auto_report_local_save_dir.empty() ? std::string()
                   : " local_save=" + auto_report_local_save_dir)
               << "\n";

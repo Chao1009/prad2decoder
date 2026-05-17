@@ -765,10 +765,11 @@ void AppState::fillConfigJson(json &cfg) const
         }},
     };
     cfg["auto_report"] = {
-        {"enabled",         auto_report_enabled},
-        {"post_to_elog",    auto_report_post_to_elog},
-        {"local_save_dir",  auto_report_local_save_dir},
-        {"min_interval_ms", auto_report_min_interval_ms},
+        {"enabled",           auto_report_enabled},
+        {"post_to_elog",      auto_report_post_to_elog},
+        {"local_save_dir",    auto_report_local_save_dir},
+        {"min_interval_ms",   auto_report_min_interval_ms},
+        {"schedule_minutes",  auto_report_schedule_minutes},
         {"elog", {
             {"url", elog_url}, {"logbook", elog_logbook},
             {"author", elog_author}, {"tags", elog_tags},

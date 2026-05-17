@@ -215,6 +215,17 @@ async function captureTabScreenshot(tab){
         // mid-render, leaving the captured PNG with empty plots.
         switchTab(tab, {skipFetch:true});
         await _wait(TAB_SETTLE_MS);
+    } else {
+        // Same-tab path: the prior section's prep (e.g. _prepLmsTab calling
+        // geoLms) may have repainted the SHARED geo canvas with the wrong
+        // tab's coloring.  switchTab's setTimeout-based redraw doesn't run
+        // here because tab===activeTab short-circuits, so we'd snapshot the
+        // stale pixels.  Force a redraw matching the current tab; canvas
+        // 2D draws are synchronous so toDataURL would already pick up the
+        // new bitmap, but we yield once anyway in case redrawGeo schedules
+        // any deferred work (e.g. a Plotly resize on a co-mounted plot).
+        if(typeof redrawGeo==='function') redrawGeo();
+        await _wait(0);
     }
 
     const tabSpec = REPORT_TABS.find(t=>t.tab===tab);
@@ -374,7 +385,17 @@ async function _summaryLms(){
     const refQ=lms3>=0?`?ref=${lms3}`:'';
     let d=null;
     try{ d=await fetch(`/api/lms/summary${refQ}`).then(r=>r.json()); }catch(e){}
-    if(d) lmsSummaryData=d;
+    if(d) {
+        lmsSummaryData=d;
+        // refreshDataForReport's fetchLmsSummary populated the table
+        // with the user's default ref; _summaryLms refetches with LMS3
+        // ref so the warn table in the markdown body matches the
+        // screenshot.  Re-render the DOM table too — otherwise the LMS
+        // tab screenshot shows the stale "default-ref" rows (or "No
+        // LMS data" if the autoclear had wiped lmsSummaryData and the
+        // first fetch returned no modules yet).
+        if(typeof updateLmsTable==='function') updateLmsTable();
+    }
     if(!d || !d.modules || !Object.keys(d.modules).length){
         const tf=d&&d.trigger||{};
         const trigMask=`accept=0x${(tf.trigger_accept||0).toString(16)} reject=0x${(tf.trigger_reject||0).toString(16)}`;

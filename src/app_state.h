@@ -438,8 +438,17 @@ struct AppState {
     std::string auto_report_local_save_dir;
     // Server-side dedup window (ms) between auto posts for the same
     // run; absorbs the END + run-change double-fire and multi-browser
-    // races. Default 15 min.
+    // races. Default 15 min. Per-run dedup (one report per run) is
+    // enforced separately by checking for any saved XML under the
+    // run's directory, so this window only matters for back-to-back
+    // overlap.
     int         auto_report_min_interval_ms = 900000;
+    // Minutes after a new run is first observed before the server
+    // dispatches a "schedule" capture for that run.  Whichever fires
+    // first (this timer or run-change / END) wins; subsequent triggers
+    // are dropped by the per-run on-disk dedup.  Set to 0 to disable
+    // the timer trigger and rely solely on run-change / END.
+    int         auto_report_schedule_minutes = 45;
 
     // color range defaults: key "tab:metric" → [min, max]
     std::map<std::string, std::pair<float, float>> color_range_defaults;

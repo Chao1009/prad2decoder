@@ -197,27 +197,53 @@ void ViewerServer::etReaderThread()
                         const auto &s = ch.Sync();
                         if (app_online_.sync_unix == 0 && s.unix_time != 0)
                             app_online_.recordSyncTime(s.unix_time, last_ti_ts);
-                        // Auto-report and the post-run wipe are server-driven:
-                        //   END      → dispatch capture (if enabled) and
-                        //              scheduleAutoClear; the schedule
-                        //              pauses while pending_capture_ is
-                        //              set so screenshots see pre-wipe data.
-                        //   PRESTART → no scheduling.  Between PRESTART
-                        //              and GO there is no pending_capture_
-                        //              to gate on, so a timer here would
-                        //              fire standalone and wipe the prior
-                        //              run's data before the run-change
-                        //              fallback (in the per-event loop)
-                        //              gets a chance to capture it.  The
-                        //              run-change branch covers the
-                        //              END-missed case on its own.
+                        // Arm the 45-min schedule the moment we see a run
+                        // number — idempotent on the same run, restarts
+                        // the timer when the number changes.  PRESTART /
+                        // GO usually fires this; the first physics event
+                        // covers the case where both control events were
+                        // dropped by CODA.
+                        if (s.run_number > 0)
+                            armScheduleForRun(s.run_number);
+                        // END dispatches a capture as the last-resort
+                        // trigger (dropped by the per-run on-disk dedup
+                        // inside dispatchCapture if the 45-min timer or
+                        // run-change already wrote a report for this
+                        // run).  scheduleAutoClear runs regardless — the
+                        // 5 s delay + pending_capture_ gating absorbs an
+                        // in-flight capture.  PRESTART / GO do NOT
+                        // schedule autoclear: between PRESTART and GO
+                        // there is no pending_capture_ to gate on, so a
+                        // timer there would wipe the prior run's data
+                        // before the run-change branch (per-event loop)
+                        // has a chance to capture it.
                         if (et == EventType::End) {
+                            // Fix A: only fast-clear on END when either a
+                            // capture is in-flight (dispatch returned true,
+                            // pending_capture_ now set) OR a report for
+                            // this run is already saved on disk.  When the
+                            // END dispatch fails for lack of a client AND
+                            // we have no prior save, fall back to a long
+                            // (5 min) autoclear delay so the run-change
+                            // branch has a chance to retry the capture
+                            // with pre-wipe data.  scheduleAutoClear is
+                            // last-call-wins, so a run-change firing
+                            // inside that window will re-anchor to 5 s.
+                            int autoclear_delay_ms = 5000;
                             if (app_online_.auto_report_enabled &&
                                 s.run_number > 0)
                             {
-                                dispatchCapture(s.run_number, "end");
+                                if (!dispatchCapture(s.run_number, "end")
+                                    && !hasSavedReportForRun(s.run_number))
+                                {
+                                    autoclear_delay_ms = 300000;  // 5 min
+                                    std::cerr << "AutoReport: deferring autoclear 5 min for run "
+                                              << s.run_number
+                                              << " — END dispatch produced nothing,"
+                                              << " awaiting run-change retry\n";
+                                }
                             }
-                            scheduleAutoClear(5000);
+                            scheduleAutoClear(autoclear_delay_ms);
                         }
                     }
                 }
@@ -253,25 +279,46 @@ void ViewerServer::etReaderThread()
                     app_online_.processGemEvent(ssp_evt);
                     app_online_.processEvent(event, ana, wres);
 
-                    // Run-change fallback: if a physics event arrives
-                    // with a run_number we haven't dispatched a capture
-                    // for yet, fire one for the OLD run (the just-ended
-                    // one) and schedule the post-run autoclear.  This
-                    // covers the worst case where END *and* PRESTART
-                    // were both dropped by CODA — the boundary is then
-                    // detectable only from the run_number flip, and
-                    // without a server-side autoclear schedule the next
-                    // run would accumulate on top of the prior one.
-                    // Per-run dedup in handleElogPost absorbs the dup if
-                    // END already triggered.
+                    // Run-change branch — the primary capture trigger
+                    // when a 2-hour run finishes before the 45-min timer
+                    // would have run (i.e. it already fired) or when END
+                    // was dropped entirely.  Dispatches a capture for
+                    // the OLD run and schedules the post-run autoclear;
+                    // both are dedup'd by the in-dispatchCapture per-run
+                    // check, so a redundant END / schedule will not
+                    // re-send a capture_request to the chosen client.
+                    // Always re-arms the schedule for the new run so its
+                    // 45-min checkpoint is anchored to the first
+                    // physics event we see for it (not the prior run's
+                    // PRESTART, in case that was dropped).
                     if (event.info.run_number > 0 &&
                         event.info.run_number != last_seen_run_)
                     {
                         if (last_seen_run_ > 0) {
-                            if (app_online_.auto_report_enabled)
-                                dispatchCapture(last_seen_run_, "run-change");
-                            scheduleAutoClear(5000);
+                            // Same Fix-A guard as the END branch — without
+                            // it, a run-change firing 30 s after a deferred
+                            // END would re-anchor scheduleAutoClear from
+                            // 5 min back to 5 s (last-call-wins), wiping
+                            // the data before a late-arriving client can
+                            // capture it.  Trade-off: 5 min of new-run
+                            // events keep flowing into the unwiped
+                            // histograms — acceptable given the
+                            // alternative is losing the prior run's
+                            // report outright.
+                            int autoclear_delay_ms = 5000;
+                            if (app_online_.auto_report_enabled) {
+                                if (!dispatchCapture(last_seen_run_, "run-change")
+                                    && !hasSavedReportForRun(last_seen_run_))
+                                {
+                                    autoclear_delay_ms = 300000;  // 5 min
+                                    std::cerr << "AutoReport: deferring autoclear 5 min for run "
+                                              << last_seen_run_
+                                              << " — run-change dispatch produced nothing\n";
+                                }
+                            }
+                            scheduleAutoClear(autoclear_delay_ms);
                         }
+                        armScheduleForRun(event.info.run_number);
                         last_seen_run_ = event.info.run_number;
                     }
 
@@ -476,6 +523,12 @@ void ViewerServer::monitorStatusPollThread()
         // wipe once its countdown elapses, paused while a capture is in
         // flight.  TICK_MS resolution is plenty for a 5 s delay.
         tickAutoClear();
+
+        // Auto-report 45-min schedule — fires the per-run checkpoint
+        // dispatch once schedule_minutes have elapsed since the run was
+        // first observed.  Per-run on-disk dedup inside dispatchCapture
+        // makes this a no-op if run-change / END already captured.
+        tickAutoReportSchedule();
 
         for (auto &m : metrics) {
             if (m.next_in_ds > 0) { --m.next_in_ds; continue; }

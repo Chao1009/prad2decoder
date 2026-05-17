@@ -313,4 +313,29 @@ private:
     void scheduleAutoClear(int delay_ms);
     void tickAutoClear();
     void runAutoClearNow();
+
+    // ---- Auto-report schedule (per-run 45-min timer) ----------------------
+    // armScheduleForRun() is idempotent — re-arming for the same run is a
+    // no-op; the timer only restarts when the observed run number changes.
+    // tickAutoReportSchedule() runs in the same TICK_MS poll as
+    // tickAutoClear / autoReportWatchdog; when elapsed >= schedule_minutes
+    // it fires a dispatchCapture(run, "schedule").  Per-run on-disk dedup
+    // (inside dispatchCapture) drops the dispatch if a report for that run
+    // already exists, so the 45-min trigger races run-change / END
+    // harmlessly — first-saved wins.
+    struct AutoReportSchedule {
+        uint32_t                              run = 0;       // current run being timed
+        std::chrono::steady_clock::time_point started;       // when first observed
+        std::chrono::steady_clock::time_point last_attempt;  // throttles retry-on-failure
+        bool                                  armed = false; // ↦ true after armScheduleForRun
+        bool                                  fired = false; // ↦ true once dispatch landed (sent or dedup hit)
+    };
+    std::mutex          ar_sched_mtx_;
+    AutoReportSchedule  ar_sched_;
+
+    void armScheduleForRun(uint32_t run);
+    void tickAutoReportSchedule();
+    // True iff <local_save_dir>/run_NNNNNN/ contains any .xml file.  Used
+    // by dispatchCapture for the per-run "one report per run" guarantee.
+    bool hasSavedReportForRun(uint32_t run);
 };

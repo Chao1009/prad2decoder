@@ -565,6 +565,17 @@ bool ViewerServer::dispatchCapture(uint32_t run, const std::string &reason,
     }
     if (!run) return false;
 
+    // Per-run dedup: one report per run.  If any XML for this run is
+    // already saved under local_save_dir, drop the dispatch silently —
+    // the first trigger to land on disk (schedule / run-change / END)
+    // wins.  Watchdog retries (request_id_in non-empty) bypass this so
+    // an in-flight retry can still complete.
+    if (request_id_in.empty() && hasSavedReportForRun(run)) {
+        std::cerr << "AutoReport: dispatch skipped for run " << run
+                  << " (" << reason << ") — report already saved\n";
+        return false;
+    }
+
     // Only clients that advertised the on-demand auto-report
     // capability via client_hello are eligible.  Old (pre-update) tabs
     // never appear here so the watchdog won't waste 30 s timing them
@@ -759,6 +770,113 @@ void ViewerServer::runAutoClearNow()
     wsBroadcast("{\"type\":\"lms_cleared\"}");
     wsBroadcast("{\"type\":\"epics_cleared\"}");
     wsBroadcast("{\"type\":\"autoclear_done\"}");
+}
+
+// =========================================================================
+// Auto-report schedule — per-run 45-min checkpoint
+// =========================================================================
+// Two-trigger model (plus END as a last-resort): whichever fires first
+// dispatches the capture for that run; subsequent triggers are dropped by
+// the on-disk per-run dedup inside dispatchCapture.
+//   1) armScheduleForRun(run) — call whenever a control event or physics
+//      event surfaces a run_number.  Idempotent on the same run; restarts
+//      the timer when the run changes.
+//   2) tickAutoReportSchedule() — polled from the same TICK_MS loop as
+//      tickAutoClear / autoReportWatchdog.  Fires dispatchCapture once
+//      elapsed >= schedule_minutes; flips ar_sched_.fired so the same run
+//      isn't re-dispatched on subsequent ticks.
+// =========================================================================
+
+void ViewerServer::armScheduleForRun(uint32_t run)
+{
+    if (run == 0) return;
+    std::lock_guard<std::mutex> lk(ar_sched_mtx_);
+    if (ar_sched_.armed && ar_sched_.run == run) return;
+    auto now = std::chrono::steady_clock::now();
+    ar_sched_.run          = run;
+    ar_sched_.started      = now;
+    // Park last_attempt at epoch so the first post-elapsed tick fires
+    // immediately rather than waiting another retry-throttle window.
+    ar_sched_.last_attempt = std::chrono::steady_clock::time_point{};
+    ar_sched_.armed        = true;
+    ar_sched_.fired        = false;
+    std::cerr << "AutoReport: schedule armed for run " << run << "\n";
+}
+
+void ViewerServer::tickAutoReportSchedule()
+{
+    constexpr auto RETRY_THROTTLE = std::chrono::seconds(5);
+
+    uint32_t run_to_fire = 0;
+    {
+        std::lock_guard<std::mutex> lk(ar_sched_mtx_);
+        if (!ar_sched_.armed || ar_sched_.fired || ar_sched_.run == 0)
+            return;
+        int sched_min = activeApp().auto_report_schedule_minutes;
+        if (sched_min <= 0) return;
+        auto now = std::chrono::steady_clock::now();
+        if (now - ar_sched_.started < std::chrono::minutes(sched_min))
+            return;
+        // Retry-on-failure throttle: don't hammer dispatchCapture every
+        // TICK_MS when there's no capable client.  5 s is plenty fast
+        // to catch a tab that just connected, and quiet enough to keep
+        // the log readable.
+        if (now - ar_sched_.last_attempt < RETRY_THROTTLE) return;
+        run_to_fire           = ar_sched_.run;
+        ar_sched_.last_attempt = now;
+    }
+    std::cerr << "AutoReport: schedule timer fired for run "
+              << run_to_fire << "\n";
+    bool dispatched = dispatchCapture(run_to_fire, "schedule");
+    // fired ⇒ "we're done with this run".  dispatched=true means a
+    // capture_request is on the wire (handleElogPost will reset
+    // pending_capture_ when the POST lands).  Even if dispatched
+    // returned false, hasSavedReportForRun catches the "dedup'd
+    // because END or run-change beat us" case so we don't loop on
+    // a run that's already been reported.  Otherwise (no client +
+    // no save), leave fired=false so the next throttled tick retries.
+    bool done = dispatched || hasSavedReportForRun(run_to_fire);
+    if (done) {
+        std::lock_guard<std::mutex> lk(ar_sched_mtx_);
+        // Guard against a concurrent armScheduleForRun(next_run)
+        // having flipped run/started — only mark fired if it's still
+        // the same run we just acted on.
+        if (ar_sched_.run == run_to_fire) ar_sched_.fired = true;
+    }
+}
+
+bool ViewerServer::hasSavedReportForRun(uint32_t run)
+{
+    auto &app = activeApp();
+    if (app.auto_report_local_save_dir.empty() || run == 0) return false;
+    char run_name[32];
+    std::snprintf(run_name, sizeof(run_name), "run_%06u", run);
+    fs::path run_dir = fs::path(app.auto_report_local_save_dir) / run_name;
+    std::error_code ec;
+    if (!fs::exists(run_dir, ec) || !fs::is_directory(run_dir, ec))
+        return false;
+    // Manual iterator drive — the range-for syntax uses the throwing
+    // overload of operator++, which would propagate (e.g. on a
+    // concurrent rmdir or a permission flap) all the way out through
+    // dispatchCapture and tickAutoReportSchedule and kill the monitor
+    // thread.  Drive via the (ec)-overload increment instead, and treat
+    // any unexpected error as "no saved report" — the worst case is
+    // one spurious dispatch, vs. losing all auto-clears / watchdogs.
+    try {
+        fs::directory_iterator it(run_dir, ec), end;
+        if (ec) return false;
+        for (; it != end; it.increment(ec)) {
+            if (ec) return false;
+            if (it->is_regular_file(ec) && !ec &&
+                it->path().extension() == ".xml")
+                return true;
+        }
+    } catch (const std::exception &e) {
+        std::cerr << "AutoReport: hasSavedReportForRun(" << run
+                  << ") threw — treating as no save: " << e.what() << "\n";
+        return false;
+    }
+    return false;
 }
 
 // =========================================================================
