@@ -123,6 +123,9 @@ inline RefGainTable LoadRefGain(const std::string &dir, int run_num)
             tbl.run_number = std::stoi(m[1].str());
     }
 
+    // Skip the header line (contains string column names, not numeric data).
+    { std::string header; std::getline(f, header); }
+
     std::string name;
     float col2, col3, col4, g1, g2, g3;
     while (f >> name >> col2 >> col3 >> col4 >> g1 >> g2 >> g3) {
