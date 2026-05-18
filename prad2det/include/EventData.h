@@ -324,4 +324,25 @@ struct RawRunInfo {
     std::string daq_config;          // full 0xE10E text (empty on GO/END)
 };
 
+// only save the LMS and gain-correction-related fields to the gain tree
+struct LMSEventData {
+    int      event_num    = 0;
+    uint8_t  trigger_type = 0;   // main trigger (from event tag: tag - 0x80)
+    uint32_t trigger_bits      = 0;   // FP trigger bits (multi-bit, from TI master d[5])
+    long long  timestamp    = 0;
+
+    int event_type = 0; // 0 for LMS events, 1 for alpha events
+
+    // FADC250 per-channel data — HyCal + LMS in one flat array,
+    // distinguished by module_type (MOD_LMS = 4).
+    int          nch = 0;
+    uint16_t     module_id[kMaxChannels]   = {};
+    uint8_t      module_type[kMaxChannels] = {};   // ModuleType enum value
+
+    uint8_t npeaks[kMaxChannels]                         = {};
+    float   peak_height[kMaxChannels][fdec::MAX_PEAKS]   = {};
+    float   peak_time[kMaxChannels][fdec::MAX_PEAKS]     = {};
+    float   peak_integral[kMaxChannels][fdec::MAX_PEAKS] = {};
+};
+
 } // namespace prad2

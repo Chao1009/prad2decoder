@@ -170,6 +170,25 @@ void Replay::clearReconEvent(EventVars_Recon &ev)
     std::fill(&ev.lms_peak_integral[0][0], &ev.lms_peak_integral[0][0] + 4 * fdec::MAX_PEAKS, 0.f);
 }
 
+void Replay::clearLMSEvent(LMSEventVars &ev)
+{
+    ev.event_num    = 0;
+    ev.trigger_type = 0;
+    ev.trigger_bits = 0;
+    ev.timestamp    = 0;
+    ev.event_type   = 0;
+    ev.nch          = 0;
+    std::fill(std::begin(ev.npeaks), std::end(ev.npeaks), 0);
+    std::fill(&ev.peak_height[0][0],   &ev.peak_height[0][0]   + prad2::kMaxChannels * fdec::MAX_PEAKS, 0.f);
+    std::fill(&ev.peak_time[0][0],     &ev.peak_time[0][0]     + prad2::kMaxChannels * fdec::MAX_PEAKS, 0.f);
+    std::fill(&ev.peak_integral[0][0], &ev.peak_integral[0][0] + prad2::kMaxChannels * fdec::MAX_PEAKS, 0.f);
+}
+
+void Replay::setupLMSBranches(TTree *tree, LMSEventVars &ev)
+{
+    prad2::SetLMSWriteBranches(tree, ev);
+}
+
 void Replay::setupBranches(TTree *tree, EventVars &ev, bool write_peaks)
 {
     prad2::SetRawWriteBranches(tree, ev, write_peaks);
@@ -982,4 +1001,153 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
 
     return true;
 }
+
+bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::string &output_root,
+                         RunConfig &gRunConfig,
+                     const std::string &db_dir, const std::string &daq_config_file)
+{
+    // build ROC tag → crate index mapping from DAQ config JSON
+    std::unordered_map<int, int> roc_to_crate;
+    if (!daq_config_file.empty()) {
+        std::cout << "Loading DAQ config from " << daq_config_file << "\n";
+        std::ifstream dcf(daq_config_file);
+        if (dcf.is_open()) {
+            auto dcj = nlohmann::json::parse(dcf, nullptr, false, true);
+            if (dcj.contains("roc_tags") && dcj["roc_tags"].is_array()) {
+                for (auto &entry : dcj["roc_tags"]) {
+                    int tag   = std::stoi(entry.at("tag").get<std::string>(), nullptr, 16);
+                    int crate = entry.at("crate").get<int>();
+                    roc_to_crate[tag] = crate;
+                }
+            }
+        }
+    }
+    else {
+        std::cerr << "No DAQ config file provided, ROC tag to crate mapping will be unavailable.\n";
+    }
+
+    evc::EvChannel ch;
+    ch.SetConfig(daq_cfg_);
+
+    auto ev = std::make_unique<LMSEventVars>();
+
+    if (ch.OpenAuto(input_evio) != evc::status::success) {
+        std::cerr << "Replay: cannot open " << input_evio << "\n";
+        return false;
+    }
+
+    TFile *outfile = TFile::Open(output_root.c_str(), "RECREATE");
+    if (!outfile || !outfile->IsOpen()) {
+        std::cerr << "Replay: cannot create " << output_root << "\n";
+        return false;
+    }
+
+    TTree *tree = new TTree("lms_gain", "LMS gain factor calculation");
+    setupLMSBranches(tree, *ev);
+
+    auto event = std::make_unique<fdec::EventData>();
+    fdec::WaveAnalyzer ana(daq_cfg_.wave_cfg);
+    // NNLS pile-up template store (loaded only if config asks for it;
+    // failure is non-fatal — the analyzer falls back to local-maxima
+    // peak heights).
+    fdec::PulseTemplateStore template_store;
+    if (daq_cfg_.wave_cfg.nnls_deconv.enabled
+        && !daq_cfg_.wave_cfg.nnls_deconv.template_file.empty()) {
+        template_store.LoadFromFile(
+            db_dir + "/" + daq_cfg_.wave_cfg.nnls_deconv.template_file,
+            daq_cfg_.wave_cfg);
+    }
+    ana.SetTemplateStore(&template_store);
+    fdec::WaveResult wres;
+    
+    int total = 0;
+
+    int run_num = get_run_int(input_evio);
+    auto gain_correction = prad2::ComputeGainCorrection(gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
+
+    while (ch.Read() == evc::status::success) {
+        if (!ch.Scan()) continue;
+
+        const auto et = ch.GetEventType();
+    
+        if (et != evc::EventType::Physics) continue;
+
+        for (int ie = 0; ie < ch.GetNEvents(); ++ie) {
+            event->clear();
+            if (!ch.DecodeEvent(ie, *event, nullptr)) continue;
+
+            clearLMSEvent(*ev);
+            ev->event_num    = event->info.event_number;
+            ev->trigger_type = event->info.trigger_type;
+            ev->trigger_bits      = event->info.trigger_bits;
+            ev->timestamp    = event->info.timestamp;
+
+            // Decode FADC250 data — single pass over all channels (HyCal +
+            // Veto + LMS).  Type dispatch comes from hycal_map.json's "t"
+            // field, not module-name prefix; module_type[nch] records the
+            // category.
+            int nch = 0;
+            for (int r = 0; r < event->nrocs; ++r) {
+                auto &roc = event->rocs[r];
+                if (!roc.present) continue;
+                auto cit = roc_to_crate.find(roc.tag);
+                int crate = (cit == roc_to_crate.end()) ? (int)roc.tag : cit->second;
+                for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
+                    if (!roc.slots[s].present) continue;
+                    for (int c = 0; c < 16; ++c) {
+                        if (!(roc.slots[s].channel_mask & (1ull << c))) continue;
+                        auto &cd = roc.slots[s].channels[c];
+                        if (cd.nsamples <= 0 || nch >= prad2::kMaxChannels) continue;
+
+                        int  mod_id   = moduleID(crate, s, c);
+                        auto mod_type = moduleType(crate, s, c);
+                        // Drop channels with no DAQ-map / module-info entry —
+                        // we have no way to interpret them downstream.
+                        if (mod_id < 0) continue;
+
+                        ev->module_id[nch] = mod_id;
+                        ev->module_type[nch] = mod_type;
+
+                        // Soft analyzer drives both peaks AND the
+                        // pedestal estimate that the firmware analyzer
+                        // consumes — only run it when its output is
+                        // being written.
+                        ana.SetChannelKey(roc.tag, s, c);
+                        ana.Analyze(cd.samples, cd.nsamples, wres);
+                        ev->npeaks[nch]   = static_cast<uint8_t>(wres.npeaks);
+                        for (int p = 0; p < wres.npeaks && p < fdec::MAX_PEAKS; p++) {
+                            ev->peak_height[nch][p]   = wres.peaks[p].height;
+                            ev->peak_time[nch][p]     = wres.peaks[p].time;
+                            ev->peak_integral[nch][p] = wres.peaks[p].integral;
+                        }
+                        nch++;
+                    }
+                }
+            }
+            ev->nch = nch;
+
+            //calculate gain correction factors for W modules and fill the gain tree
+            //Because the LMS and alpha trigger_bits can not believe, 
+            // we need to use "nch" to seperate the LMS and alpha events
+            bool is_lms = ((ev->trigger_bits & (1 << 24)) != 0 || ev->nch > 1000);
+            bool is_alpha = ((ev->trigger_bits & (1 << 25)) != 0 && ev->nch < 50);
+            
+            if(is_lms) ev->event_type = 0; // LMS event
+            if(is_alpha) ev->event_type = 1; // alpha event
+
+            if(is_lms || is_alpha) tree->Fill();
+
+            total++;
+            if (total % 1000 == 0)
+                std::cerr << "\rReplay: " << total << " events processed" << std::flush;
+        }
+    }
+
+    std::cerr << "\rReplay: " << total << " events written to " << output_root << "\n";
+    outfile->cd();
+    tree->Write();
+    delete outfile;
+    return true;
+}
+
 } // namespace analysis

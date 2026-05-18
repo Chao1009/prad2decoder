@@ -1,93 +1,152 @@
-// gain_replay.cpp — replay tool for gain monitoring data
-// Usage: gain_replay <input evio dir> [-o output.dat] [-D daq_config.json] [-n N]
+// gain_replay.cpp — EVIO -> LMS/alpha gain factors (single-pass, global fit)
+//
+// Reads EVIO files directly, classifies events by channel count,
+// accumulates histograms over ALL events (one global fit), then writes:
+//   * a .dat file with fit results (same format as before)
+//   * a .root file with all histograms (raw + fitted) for inspection
+//
+// Usage:
+//   gain_replay <evio_file_or_dir> [more files/dirs...]
+//              [-o output.dat]    default: lms_alpha_peaks.dat
+//              [-r hists.root]    default: prad_XXXXXX_lms_hists.root
+//              [-c daq_config.json]
+//              [-d hycal_map.json]
+//              [-n max_events]
 
 #include "Replay.h"
+#include "EventData.h"
+#include "InstallPaths.h"
+#include "ConfigSetup.h"
+#include "load_daq_config.h"
 #include "DaqConfig.h"
-#include "HyCalSystem.h"
-#include "PhysicsTools.h"
+#include "EvChannel.h"
+#include "WaveAnalyzer.h"
 #include "PulseTemplateStore.h"
+#include "Fadc250Data.h"
 
-#include <TF1.h>
-#include <TMath.h>
+#include <TClass.h>
+#include <TROOT.h>
+#include <TFile.h>
+#include <TH1F.h>
+// gain_factor.h uses TH1F -- include TH1F.h first
+#include "gain_factor.h"
 
 #include <nlohmann/json.hpp>
-#include <fstream>
-#include <iostream>
-#include <string>
-#include <cstdlib>
-#include <getopt.h>
 
-using json = nlohmann::json;
+#include <algorithm>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <getopt.h>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #ifndef DATABASE_DIR
 #define DATABASE_DIR "."
 #endif
 
-static std::vector<std::string> getFilesInDir(const std::string &dir_path)
+using namespace analysis;
+
+// ── constants (mirror replay_lms.cpp) ────────────────────────────────────────
+static constexpr int   N_W         = 1156;
+static constexpr int   N_LMS       = 3;
+static constexpr int   LMS_ID_BASE = 3101;   // LMS1=3101, LMS2=3102, LMS3=3103
+static constexpr int   W_ID_BASE   = 1000;   // PbWO4: module_id = W-id + 1000
+static constexpr int   HIST_BINS   = 600;
+static constexpr float HIST_MIN    = 0.f;
+static constexpr float HIST_MAX    = 15000.f;
+
+// Create a histogram detached from any ROOT directory (heap-only).
+static TH1F *makeH(const char *name)
+{
+    auto *h = new TH1F(name, name, HIST_BINS, HIST_MIN, HIST_MAX);
+    h->SetDirectory(nullptr);  // detach from gROOT/any TFile
+    return h;
+}
+
+static std::vector<std::string> collectEvioFiles(const std::string &path)
 {
     std::vector<std::string> files;
-    for (auto &entry : std::filesystem::directory_iterator(dir_path)) {
-        if (entry.is_regular_file()) {
-            if (entry.path().filename().string().find(".evio") != std::string::npos)
-                files.push_back(entry.path().string());
+    if (std::filesystem::is_directory(path)) {
+        for (auto &e : std::filesystem::directory_iterator(path)) {
+            if (e.is_regular_file() &&
+                e.path().filename().string().find(".evio") != std::string::npos)
+                files.push_back(e.path().string());
         }
+        std::sort(files.begin(), files.end());
+    } else {
+        files.push_back(path);
     }
-    std::sort(files.begin(), files.end());
     return files;
 }
 
-
 int main(int argc, char *argv[])
 {
-    std::string input, output, daq_config;
+    TClass::GetClass("TFile");
+
+    std::string output_dat, output_root, daq_config, daq_map;
     int max_events = -1;
 
-    std::string db_dir = DATABASE_DIR;
-    if (const char *env = std::getenv("PRAD2_DATABASE_DIR"))  db_dir = env;
-    daq_config = db_dir + "/daq_config.json"; // default DAQ config for PRad2
+    std::string db_dir = prad2::resolve_data_dir(
+        "PRAD2_DATABASE_DIR",
+        {"../share/prad2evviewer/database"},
+        DATABASE_DIR);
+    daq_config = db_dir + "/daq_config.json";
 
     int opt;
-    while ((opt = getopt(argc, argv, "o:n:D:")) != -1) {
+    while ((opt = getopt(argc, argv, "o:r:c:d:n:")) != -1) {
         switch (opt) {
-            case 'o': output = optarg; break;
-            case 'n': max_events = std::atoi(optarg); break;
-            case 'D': daq_config = optarg; break;
+            case 'o': output_dat  = optarg; break;
+            case 'r': output_root = optarg; break;
+            case 'c': daq_config  = optarg; break;
+            case 'd': daq_map     = optarg; break;
+            case 'n': max_events  = std::atoi(optarg); break;
         }
     }
-    if (optind < argc) input = argv[optind];
-    else {
-        std::cerr << "Usage: gain_replay <input evio dir> [-o output.dat] [-D daq_config.json] [-n N]\n";
-        return 1;
+
+    std::vector<std::string> evio_files;
+    for (int i = optind; i < argc; ++i) {
+        auto f = collectEvioFiles(argv[i]);
+        evio_files.insert(evio_files.end(), f.begin(), f.end());
     }
 
-    std::vector<std::string> evio_files = getFilesInDir(input);
     if (evio_files.empty()) {
-        std::cerr << "No EVIO files found in: " << input << "\n";
+        std::cerr <<
+            "Usage: gain_replay <evio_file_or_dir> [...]\n"
+            "       [-o output.dat] [-r hists.root]\n"
+            "       [-c daq_config.json] [-d hycal_map.json] [-n max_events]\n";
         return 1;
     }
 
-    if (input.empty()) {
-        std::cerr << "Usage: gain_replay <input evio dir> [-o output.dat] [-D daq_config.json] [-n N]\n";
-        return 1;
+    if (output_dat.empty())  output_dat  = "lms_alpha_peaks.dat";
+    if (daq_map.empty())     daq_map     = db_dir + "/hycal_map.json";
+    if (output_root.empty()) {
+        int run = get_run_int(evio_files[0]);
+        output_root = Form("prad_%06d_lms_hists.root", run);
     }
 
+    std::cout << "  Files   : " << evio_files.size() << "\n"
+              << "  DAQ cfg : " << daq_config << "\n"
+              << "  HyCal   : " << daq_map << "\n"
+              << "  Out dat : " << output_dat << "\n"
+              << "  Out root: " << output_root << "\n";
+
+    // ── Load DAQ config ───────────────────────────────────────────────────────
     evc::DaqConfig daq_cfg;
     evc::load_daq_config(daq_config, daq_cfg);
 
+    // ── Load module map ───────────────────────────────────────────────────────
     analysis::Replay replay;
-    if (!daq_config.empty()) replay.LoadDaqConfig(daq_config);
-    const std::string hycal_map = db_dir + "/hycal_map.json";
-    replay.LoadHyCalMap(hycal_map);
-    std::cerr << "Using HyCal map: " << hycal_map << "\n";
+    replay.LoadDaqConfig(daq_config);
+    replay.LoadHyCalMap(daq_map);
 
-    fdec::HyCalSystem hycal;
-    hycal.Init(hycal_map);
-    analysis::PhysicsTools physics(hycal);
-
-    // build ROC tag → crate index mapping from DAQ config JSON
+    // ── ROC tag -> crate mapping ──────────────────────────────────────────────
     std::unordered_map<int, int> roc_to_crate;
-    if (!daq_config.empty()) {
-        std::cout << "Loading DAQ config from " << daq_config << "\n";
+    {
         std::ifstream dcf(daq_config);
         if (dcf.is_open()) {
             auto dcj = nlohmann::json::parse(dcf, nullptr, false, true);
@@ -100,240 +159,220 @@ int main(int argc, char *argv[])
             }
         }
     }
-    else {
-        std::cerr << "No DAQ config file provided, ROC tag to crate mapping will be unavailable.\n";
-    }
 
-    if(output.empty()) output = "gain_replay_output.root";
-    TFile *outfile = TFile::Open(output.c_str(), "RECREATE");
-    if (!outfile || !outfile->IsOpen()) {
-        std::cerr << "Cannot create output ROOT file\n";
-        return 1;
-    }
+    // ── Histograms (heap-only, detached from ROOT directory system) ───────────
+    TH1F *mod_lms  [N_W];
+    TH1F *ref_lms  [N_LMS];
+    TH1F *ref_alpha[N_LMS];
+    for (int i = 0; i < N_W;   ++i) mod_lms[i]   = makeH(Form("mod_lms_%d",   i + 1));
+    for (int i = 0; i < N_LMS; ++i) ref_lms[i]   = makeH(Form("ref_lms_%d",   i + 1));
+    for (int i = 0; i < N_LMS; ++i) ref_alpha[i]  = makeH(Form("ref_alpha_%d", i + 1));
 
+    // ── EVIO reading loop ─────────────────────────────────────────────────────
     evc::EvChannel ch;
     ch.SetConfig(daq_cfg);
 
-    auto event = std::make_unique<fdec::EventData>();
     fdec::WaveAnalyzer ana(daq_cfg.wave_cfg);
-    fdec::PulseTemplateStore template_store;
-    if (daq_cfg.wave_cfg.nnls_deconv.enabled
-        && !daq_cfg.wave_cfg.nnls_deconv.template_file.empty()) {
-        template_store.LoadFromFile(
+    fdec::PulseTemplateStore tpl_store;
+    if (daq_cfg.wave_cfg.nnls_deconv.enabled &&
+        !daq_cfg.wave_cfg.nnls_deconv.template_file.empty()) {
+        tpl_store.LoadFromFile(
             db_dir + "/" + daq_cfg.wave_cfg.nnls_deconv.template_file,
             daq_cfg.wave_cfg);
     }
-    ana.SetTemplateStore(&template_store);
-    fdec::WaveResult wres;
-    int total = 0;
+    ana.SetTemplateStore(&tpl_store);
 
-    for (const auto &input_evio : evio_files) {
-        if (ch.OpenAuto(input_evio) != evc::status::success) {
-            std::cerr << "Replay: cannot open " << input_evio << "\n";
-            return 1;
+    // Heap-allocate the large EventData struct (following codebase convention).
+    auto event = std::make_unique<fdec::EventData>();
+    fdec::WaveResult wres;
+
+    long total = 0, n_lms_ev = 0, n_alpha_ev = 0;
+    bool done_early = false;
+
+    for (const auto &evio : evio_files) {
+        if (done_early) break;
+        if (ch.OpenAuto(evio) != evc::status::success) {
+            std::cerr << "Cannot open " << evio << "\n";
+            continue;
         }
+        std::cout << "  Processing " << evio << "\n";
 
         while (ch.Read() == evc::status::success) {
+            if (done_early) break;
             if (!ch.Scan()) continue;
             if (ch.GetEventType() != evc::EventType::Physics) continue;
 
             for (int ie = 0; ie < ch.GetNEvents(); ++ie) {
+                if (max_events > 0 && total >= max_events) { done_early = true; break; }
+
                 event->clear();
-                if (!ch.DecodeEvent(ie, *event)) continue;
-                if (max_events > 0 && total >= max_events) goto done;
+                if (!ch.DecodeEvent(ie, *event, nullptr)) continue;
 
-                uint32_t trigger_bits = event->info.trigger_bits;
-                uint64_t timestamp    = event->info.timestamp;
-
-                static constexpr uint32_t TBIT_lms = (1u << 24);
-                static constexpr uint32_t TBIT_alpha = (1u << 25);
-                if ( !(trigger_bits & TBIT_lms) && !(trigger_bits & TBIT_alpha) ) continue;
-
-                // decode HyCal FADC250 data
+                // ── Pass 1: count channels with data (for classification) ──────
                 int nch = 0;
                 for (int r = 0; r < event->nrocs; ++r) {
                     auto &roc = event->rocs[r];
                     if (!roc.present) continue;
-                    auto cit = roc_to_crate.find(roc.tag);
-                    int crate;
-                    if (cit == roc_to_crate.end()) crate = roc.tag;
-                    else crate = cit->second;
+                    for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
+                        if (!roc.slots[s].present) continue;
+                        for (int c = 0; c < 16; ++c) {
+                            if (!(roc.slots[s].channel_mask & (1ull << c))) continue;
+                            if (roc.slots[s].channels[c].nsamples > 0) ++nch;
+                        }
+                    }
+                }
+
+                // Classify by channel count (trigger_bits unreliable):
+                //   LMS flash illuminates all ~1735 channels -> nch > 1000
+                //   Alpha source fires only a few crystals  -> 1 <= nch < 50
+                const bool is_lms   = (nch > 1000);
+                const bool is_alpha = (nch >= 1 && nch < 50);
+                if (!is_lms && !is_alpha) { ++total; continue; }
+
+                if (is_lms)   ++n_lms_ev;
+                if (is_alpha) ++n_alpha_ev;
+
+                // ── Pass 2: decode waveforms, fill histograms ─────────────────
+                for (int r = 0; r < event->nrocs; ++r) {
+                    auto &roc = event->rocs[r];
+                    if (!roc.present) continue;
+                    auto cit   = roc_to_crate.find(roc.tag);
+                    int  crate = (cit == roc_to_crate.end()) ? (int)roc.tag : cit->second;
+
                     for (int s = 0; s < fdec::MAX_SLOTS; ++s) {
                         if (!roc.slots[s].present) continue;
                         for (int c = 0; c < 16; ++c) {
                             if (!(roc.slots[s].channel_mask & (1ull << c))) continue;
                             auto &cd = roc.slots[s].channels[c];
-                            if (cd.nsamples <= 0 || nch >= prad2::kMaxChannels) continue;
-                            int mod_id = replay.moduleID(crate, s, c);
-                            if(mod_id < 0){
-                                std::string mod_name = replay.moduleName(crate, s, c);
-                                if(mod_name.empty()) continue;
-                                if(mod_name[0] == 'L'){
-                                    if(mod_name.length() != 4) continue;
-                                    int lms_id;
-                                    if(mod_name[3] == 'P') lms_id = 0;
-                                    else lms_id = mod_name[3] - '0';
-                                    ana.SetChannelKey(roc.tag, s, c);
-                                    ana.Analyze(cd.samples, cd.nsamples, wres);
-                                    //if(wres.npeaks != 1) continue;
-                                    int idx = 0;
-                                    for (int k = 0; k < wres.npeaks; ++k)
-                                        if (wres.peaks[k].height > wres.peaks[idx].height) idx = k;
-                                    float peak_height = wres.peaks[idx].height;
-                                    float peak_integral = wres.peaks[idx].integral;
-                                    if(trigger_bits & TBIT_lms) {
-                                        physics.Fill_lmsCH_lmsHeight(lms_id, peak_height);
-                                        physics.Fill_lmsCH_lmsIntegral(lms_id, peak_integral);
-                                    }
-                                    if(trigger_bits & TBIT_alpha) {
-                                        physics.Fill_lmsCH_alphaHeight(lms_id, peak_height);
-                                        physics.Fill_lmsCH_alphaIntegral(lms_id, peak_integral);
-                                    }
-                                    total++;
-                                }
-                            }else {
-                                if(!(trigger_bits & TBIT_lms)) continue;
+                            if (cd.nsamples <= 0) continue;
 
-                                int mod_id = replay.moduleID(crate, s, c);
-                                if (mod_id < 0) continue;
-                                ana.SetChannelKey(roc.tag, s, c);
-                                ana.Analyze(cd.samples, cd.nsamples, wres);
-                                if(wres.npeaks != 1) continue;;
-                                float peak_height = wres.peaks[0].height;
-                                float peak_integral = wres.peaks[0].integral;
-                                physics.Fill_modCH_lmsHeight(mod_id, peak_height);
-                                physics.Fill_modCH_lmsIntegral(mod_id, peak_integral);
-                                total++;
+                            int mid = replay.moduleID(crate, s, c);
+                            if (mid < 0) continue;
+                            auto mtyp = replay.moduleType(crate, s, c);
+                            if (mtyp != prad2::MOD_PbWO4 && mtyp != prad2::MOD_LMS) continue;
+
+                            ana.SetChannelKey(roc.tag, s, c);
+                            ana.Analyze(cd.samples, cd.nsamples, wres);
+                            if (wres.npeaks != 1) continue;
+                            float integral = wres.peaks[0].integral;
+                            if (integral <= 0.f) continue;
+
+                            if (mtyp == prad2::MOD_PbWO4) {
+                                int wid = mid - W_ID_BASE;   // 1..N_W
+                                if (wid >= 1 && wid <= N_W && is_lms)
+                                    mod_lms[wid - 1]->Fill(integral);
+                            } else {
+                                int lid = mid - LMS_ID_BASE; // 0..N_LMS-1
+                                if (lid >= 0 && lid < N_LMS) {
+                                    if (is_lms)   ref_lms[lid]->Fill(integral);
+                                    if (is_alpha) ref_alpha[lid]->Fill(integral);
+                                }
                             }
                         }
                     }
                 }
-                std::cerr << "Processed event " << total << " / " << max_events << "\r" << std::flush;
+                ++total;
+                if (total % 1000 == 0)
+                    std::cerr << "\r  Events: " << total
+                              << "  LMS: " << n_lms_ev
+                              << "  alpha: " << n_alpha_ev << std::flush;
             }
         }
         ch.Close();
     }
+    std::cerr << "\n  Total: " << total
+              << "  LMS events: " << n_lms_ev
+              << "  alpha events: " << n_alpha_ev << "\n";
 
-done:
-    // analyze and save results
-    // fit LMS or alpha signal peaks and output to a .dat file
-    //Format:
-    //        LMS1  lms1_peak lms1_sigma lms1_kai2/ndf alpha1_peak alpha1_sigma alpha1_kai2/ndf
-    //         ...
-    //         W1   lms_peak lms_sigma lms_kai2/ndf    g1 g2 g3
-    //         ...
-    //       gi = lms_peak * alpha_i_peak / lms_i_peak
-    std::ofstream out("lms_alpha_peaks.dat");
+    // ── Save raw histograms to ROOT file (before fitting) ─────────────────────
+    // Write first so the TFile never sees post-fit TF1 functions,
+    // and so closing the file cannot affect in-memory histogram ownership.
+    {
+        TFile *outfile = TFile::Open(output_root.c_str(), "RECREATE");
+        if (!outfile || !outfile->IsOpen()) {
+            std::cerr << "Warning: cannot create " << output_root << "\n";
+        } else {
+            outfile->mkdir("ref");
+            outfile->cd("ref");
+            for (int i = 0; i < N_LMS; ++i) {
+                ref_lms[i]->Write();
+                ref_alpha[i]->Write();
+            }
+            outfile->mkdir("modules");
+            outfile->cd("modules");
+            for (int i = 0; i < N_W; ++i)
+                if (mod_lms[i]->GetEntries() > 0)
+                    mod_lms[i]->Write();
+            delete outfile;   // Close() + free; histograms stay in memory (SetDirectory(nullptr))
+            std::cout << "Histograms saved to " << output_root << "\n";
+        }
+    }
+    gROOT->cd();  // restore global directory after TFile scope
+
+    // ── Fit reference PMTs ────────────────────────────────────────────────────
+    prad2::FitResult fit_lms[N_LMS], fit_alpha[N_LMS];
+    for (int i = 0; i < N_LMS; ++i) {
+        fit_lms[i]   = prad2::gain_hist_fitter(ref_lms[i],   0.1f);
+        fit_alpha[i] = prad2::gain_hist_fitter(ref_alpha[i], 0.1f);
+    }
+
+    // ── Write .dat file ───────────────────────────────────────────────────────
+    std::ofstream out(output_dat);
     if (!out.is_open()) {
-        std::cerr << "Cannot open output file lms_alpha_peaks.dat\n";
+        std::cerr << "Cannot open output file: " << output_dat << "\n";
         return 1;
     }
 
-    //variables to store fit results
-    const int nmod = hycal.module_count();
-    float lms_ref[4] = {0}, alpha_ref[4] = {0};
-    float lms_sigma[4] = {0}, alpha_sigma[4] = {0};
-    float lms_chi2[4] = {0}, alpha_chi2[4] = {0};
-    float mod_lms[nmod] = {0};
-    float mod_lms_sigma[nmod] = {0};
-    float mod_lms_chi2[nmod] = {0};
-    float g[nmod][4] = {{0}}; // gain factors for each module and alpha peak
+    out << std::left
+        << std::setw(8)  << "Name"
+        << std::setw(12) << "lms_peak"
+        << std::setw(12) << "lms_sigma"
+        << std::setw(14) << "lms_chi2/ndf"
+        << std::setw(16) << "alpha_peak (g1)"
+        << std::setw(16) << "alpha_sigma (g2)"
+        << std::setw(16) << "alpha_chi2/ndf (g3)"
+        << "\n";
 
-    int n_lms = 0;
-    for (int i = 0; i < 4; ++i) {
-        TH1F *h_lms = physics.Get_lmsCH_lmsHeightHist(i);
-        if (h_lms == nullptr || h_lms->GetEntries() < 10) continue;
-        {
-            double peak0 = h_lms->GetBinCenter(h_lms->GetMaximumBin());
-            double rms0  = h_lms->GetRMS();
-            double lo = peak0 - 2.0 * rms0, hi = peak0 + 2.0 * rms0;
-            TF1 f_gaus("f_lms", "gaus", lo, hi);
-            f_gaus.SetParameters(h_lms->GetMaximum(), peak0, rms0);
-            h_lms->Fit(&f_gaus, "RQ0");
-            lms_ref[i]   = f_gaus.GetParameter(1);
-            lms_sigma[i] = f_gaus.GetParameter(2);
-            lms_chi2[i]  = (f_gaus.GetNDF() > 0) ? f_gaus.GetChisquare() / f_gaus.GetNDF() : 0;
-        }
-
-        TH1F *h_alpha = physics.Get_lmsCH_alphaHeightHist(i);
-        if (h_alpha == nullptr || h_alpha->GetEntries() < 10) continue;
-        {
-            double peak0 = h_alpha->GetBinCenter(h_alpha->GetMaximumBin());
-            double rms0  = h_alpha->GetRMS();
-            double lo = peak0 - 2.0 * rms0, hi = peak0 + 2.0 * rms0;
-            TF1 f_gaus("f_alpha", "gaus", lo, hi);
-            f_gaus.SetParameters(h_alpha->GetMaximum(), peak0, rms0);
-            h_alpha->Fit(&f_gaus, "RQ0");
-            alpha_ref[i]   = f_gaus.GetParameter(1);
-            alpha_sigma[i] = f_gaus.GetParameter(2);
-            alpha_chi2[i]  = (f_gaus.GetNDF() > 0) ? f_gaus.GetChisquare() / f_gaus.GetNDF() : 0;
-        }
-
-        if (lms_ref[i] > 0) n_lms++;
-    }
-    out << std::left;
-    out << std::setw(6) << "Name" << std::setw(12) << "lms_peak" << std::setw(12) << "lms_sigma" << std::setw(12) << "lms_chi2/ndf" 
-        << std::setw(16) << "alpha_peak (g1)" << std::setw(16) << "alpha_sigma (g2)" << std::setw(16) << "alpha_chi2/ndf (g3)" << "\n";
-    for(int i = 1; i <= 3; i++){
-        out << std::setw(6) << ("LMS" + std::to_string(i))
-            << std::setw(12) << std::fixed << std::setprecision(3) << lms_ref[i]
-            << std::setw(12) << std::fixed << std::setprecision(3) << lms_sigma[i]
-            << std::setw(12) << std::fixed << std::setprecision(3) << lms_chi2[i]
-            << std::setw(16) << std::fixed << std::setprecision(3) << alpha_ref[i]
-            << std::setw(16) << std::fixed << std::setprecision(3) << alpha_sigma[i]
-            << std::setw(16) << std::fixed << std::setprecision(3) << alpha_chi2[i]
+    for (int i = 0; i < N_LMS; ++i) {
+        out << std::setw(8)  << ("LMS" + std::to_string(i + 1))
+            << std::setw(12) << std::fixed << std::setprecision(3) << fit_lms[i].mean
+            << std::setw(12) << std::fixed << std::setprecision(3) << fit_lms[i].sigma
+            << std::setw(14) << std::fixed << std::setprecision(3) << fit_lms[i].chi2pndf
+            << std::setw(16) << std::fixed << std::setprecision(3) << fit_alpha[i].mean
+            << std::setw(16) << std::fixed << std::setprecision(3) << fit_alpha[i].sigma
+            << std::setw(16) << std::fixed << std::setprecision(3) << fit_alpha[i].chi2pndf
             << "\n";
     }
+
     int n_mod = 0;
-    for (int i = 0; i < hycal.module_count(); ++i) {
-        if (!hycal.module(i).is_hycal()) continue;
-        if (hycal.module(i).name[0] != 'W') continue;
+    for (int i = 0; i < N_W; ++i) {
+        if (mod_lms[i]->GetEntries() < 10) continue;
+        auto fr = prad2::gain_hist_fitter(mod_lms[i], 0.1f);
 
-        TH1F *h_lms = physics.Get_modCH_lmsHeightHist(hycal.module(i).id);
-        if (h_lms == nullptr) continue;
-
-        {
-            double peak0 = h_lms->GetBinCenter(h_lms->GetMaximumBin());
-            double rms0  = h_lms->GetRMS();
-            double lo = peak0 - 2.0 * rms0, hi = peak0 + 2.0 * rms0;
-            TF1 f_gaus("f_mod", "gaus", lo, hi);
-            f_gaus.SetParameters(h_lms->GetMaximum(), peak0, rms0);
-            h_lms->Fit(&f_gaus, "RQ");
-            mod_lms[i]       = f_gaus.GetParameter(1);
-            mod_lms_sigma[i] = f_gaus.GetParameter(2);
-            mod_lms_chi2[i]  = (f_gaus.GetNDF() > 0) ? f_gaus.GetChisquare() / f_gaus.GetNDF() : 0;
+        // g[j] = W_peak * alpha_ref[j] / lms_ref[j]
+        float g[N_LMS] = {};
+        for (int j = 0; j < N_LMS; ++j) {
+            if (fit_lms[j].mean > 0.f && fr.mean > 0.f && fit_alpha[j].mean > 0.f)
+                g[j] = fr.mean * fit_alpha[j].mean / fit_lms[j].mean;
         }
 
-        for (int j = 1; j <= 3; ++j) {
-            g[i][j] = (lms_ref[j] > 0 && mod_lms[i] > 0 && alpha_ref[j] > 0) ? 
-                        mod_lms[i] * alpha_ref[j] / lms_ref[j] : 0;
-        }
-        out << std::setw(6) << hycal.module(i).name
-            << std::setw(12) << std::fixed << std::setprecision(3) << mod_lms[i]
-            << std::setw(12) << std::fixed << std::setprecision(3) << mod_lms_sigma[i]
-            << std::setw(12) << std::fixed << std::setprecision(3) << mod_lms_chi2[i]
-            << std::setw(16) << std::fixed << std::setprecision(3) << g[i][1]
-            << std::setw(16) << std::fixed << std::setprecision(3) << g[i][2]
-            << std::setw(16) << std::fixed << std::setprecision(3) << g[i][3]
+        out << std::setw(8)  << ("W" + std::to_string(i + 1))
+            << std::setw(12) << std::fixed << std::setprecision(3) << fr.mean
+            << std::setw(12) << std::fixed << std::setprecision(3) << fr.sigma
+            << std::setw(14) << std::fixed << std::setprecision(3) << fr.chi2pndf
+            << std::setw(16) << std::fixed << std::setprecision(3) << g[0]
+            << std::setw(16) << std::fixed << std::setprecision(3) << g[1]
+            << std::setw(16) << std::fixed << std::setprecision(3) << g[2]
             << "\n";
-        n_mod++;
+        ++n_mod;
     }
     out.close();
-    std::cerr << "LMS and alpha peak analysis completed for " << n_lms << " LMS channels and " << n_mod << " modules. Results saved to lms_alpha_peaks.dat\n";
+    std::cout << "Fit results written to " << output_dat
+              << " (" << n_mod << " W modules)\n";
 
-    outfile->cd();
-    outfile->mkdir("lms");
-    outfile->cd("lms");
-    for (int i = 0; i < 4; ++i) {
-        if (physics.Get_lmsCH_lmsHeightHist(i)) physics.Get_lmsCH_lmsHeightHist(i)->Write();
-        if (physics.Get_lmsCH_lmsIntegralHist(i)) physics.Get_lmsCH_lmsIntegralHist(i)->Write();
-        if (physics.Get_lmsCH_alphaHeightHist(i)) physics.Get_lmsCH_alphaHeightHist(i)->Write();
-        if (physics.Get_lmsCH_alphaIntegralHist(i)) physics.Get_lmsCH_alphaIntegralHist(i)->Write();
-    }
-    outfile->mkdir("modules");
-    outfile->cd("modules");
-    for (int i = 0; i < hycal.module_count(); ++i) {
-        if (physics.Get_modCH_lmsHeightHist(hycal.module(i).id)) physics.Get_modCH_lmsHeightHist(hycal.module(i).id)->Write();
-    }
-    outfile->Close();
+    // Cleanup
+    for (int i = 0; i < N_W;   ++i) delete mod_lms[i];
+    for (int i = 0; i < N_LMS; ++i) { delete ref_lms[i]; delete ref_alpha[i]; }
+
+    return 0;
 }

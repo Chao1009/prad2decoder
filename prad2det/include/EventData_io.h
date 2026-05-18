@@ -611,4 +611,54 @@ inline void FillRunInfoRow(const psync::SyncInfo &sync,
     out.daq_config = daq_config_text;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// LMS gain-correction tree ("gain") — write / read
+//
+// Only peak-level data is kept (no waveform samples): HyCal channels are
+// stored with the same hycal.* prefix used in the events tree so that
+// existing channel-lookup helpers work unchanged.  LMS PMT channels are
+// fixed-size [4] arrays (no lms_nch count branch needed).
+// ─────────────────────────────────────────────────────────────────────────
+inline void SetLMSWriteBranches(TTree *tree, LMSEventData &ev)
+{
+    tree->Branch("event_num",    &ev.event_num,    "event_num/I");
+    tree->Branch("trigger_type", &ev.trigger_type, "trigger_type/b");
+    tree->Branch("trigger_bits", &ev.trigger_bits, "trigger_bits/i");
+    tree->Branch("timestamp",    &ev.timestamp,    "timestamp/L");
+    tree->Branch("event_type",   &ev.event_type,   "event_type/I");
+
+    // HyCal channel peak data (no waveform samples stored in this tree).
+    tree->Branch("hycal.nch",         &ev.nch,        "hycal.nch/I");
+    tree->Branch("hycal.module_id",   ev.module_id,   "hycal.module_id[hycal.nch]/s");
+    tree->Branch("hycal.module_type", ev.module_type, "hycal.module_type[hycal.nch]/b");
+    tree->Branch("hycal.npeaks",      ev.npeaks,      "hycal.npeaks[hycal.nch]/b");
+    tree->Branch("hycal.peak_height",   ev.peak_height,
+                 Form("hycal.peak_height[hycal.nch][%d]/F",   fdec::MAX_PEAKS));
+    tree->Branch("hycal.peak_time",     ev.peak_time,
+                 Form("hycal.peak_time[hycal.nch][%d]/F",     fdec::MAX_PEAKS));
+    tree->Branch("hycal.peak_integral", ev.peak_integral,
+                 Form("hycal.peak_integral[hycal.nch][%d]/F", fdec::MAX_PEAKS));
+}
+
+inline void SetLMSReadBranches(TTree *tree, LMSEventData &ev)
+{
+    auto bind = [&](const char *name, void *addr) {
+        if (tree->GetBranch(name)) tree->SetBranchAddress(name, addr);
+    };
+
+    bind("event_num",    &ev.event_num);
+    bind("trigger_type", &ev.trigger_type);
+    bind("trigger_bits", &ev.trigger_bits);
+    bind("timestamp",    &ev.timestamp);
+    bind("event_type",   &ev.event_type);
+
+    bind("hycal.nch",         &ev.nch);
+    bind("hycal.module_id",   ev.module_id);
+    bind("hycal.module_type", ev.module_type);
+    bind("hycal.npeaks",      ev.npeaks);
+    bind("hycal.peak_height",   ev.peak_height);
+    bind("hycal.peak_time",     ev.peak_time);
+    bind("hycal.peak_integral", ev.peak_integral);
+}
+
 } // namespace prad2
