@@ -574,7 +574,7 @@ int main(int argc, char *argv[])
     // ── Phase 2: gain corrections ────────────────────────────────────────────
     std::sort(lms_out_files.begin(), lms_out_files.end());
 
-    auto ref_tbl = prad2::LoadRefGain(gRunConfig.gain_data_dir, ref_run);
+    auto ref_tbl = prad2::LoadRefGain(gRunConfig.gain_data_dir + "/ref_gain", ref_run);
     if (!ref_tbl.loaded) {
         std::cerr << "Warning: reference gain table not loaded"
                   << " (ref_run=" << ref_run
