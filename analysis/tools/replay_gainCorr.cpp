@@ -581,8 +581,17 @@ int main(int argc, char *argv[])
                   << ", dir=" << gRunConfig.gain_data_dir << ")\n";
     }
 
-    std::string gain_out = output_dir + "/" +
-        Form("prad_%06d_gain_corr.root", run_num);
+    // Save gain-correction output to the project database directory.
+    std::string gain_corr_dir = db_dir + "/gain_factor/gain_correction";
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(gain_corr_dir, ec);
+        if (ec)
+            std::cerr << "Warning: cannot create " << gain_corr_dir
+                      << ": " << ec.message() << "\n";
+    }
+    std::string gain_out = gain_corr_dir + "/" +
+        std::string(Form("prad_%06d_gain_corr.root", run_num));
 
     std::cout << "\n=== Phase 2: gain corrections ===\n"
               << "  Batch size : " << batch_size << " LMS events\n"
