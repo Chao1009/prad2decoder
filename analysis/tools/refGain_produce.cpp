@@ -2,13 +2,13 @@
 //
 // Reads EVIO files directly, classifies events by channel count,
 // accumulates histograms over ALL events (one global fit), then writes:
-//   * a .dat file with fit results (same format as before)
-//   * a .root file with all histograms (raw + fitted) for inspection
+//   * <db>/gain_factor/ref_gain/prad_XXXXXX_LMS.dat  (fit results)
+//   * <db>/gain_factor/ref_gain/prad_XXXXXX_LMS_hists.root  (histograms)
 //
 // Usage:
 //   refGain_produce <evio_file_or_dir> [more files/dirs...]
-//              [-o output.dat]    default: lms_alpha_peaks.dat
-//              [-r hists.root]    default: prad_XXXXXX_lms_hists.root
+//              [-o output.dat]    default: <db>/gain_factor/ref_gain/prad_XXXXXX_LMS.dat
+//              [-r hists.root]    default: <db>/gain_factor/ref_gain/prad_XXXXXX_LMS_hists.root
 //              [-c daq_config.json]
 //              [-d hycal_map.json]
 //              [-n max_events]
@@ -117,17 +117,26 @@ int main(int argc, char *argv[])
     if (evio_files.empty()) {
         std::cerr <<
             "Usage: refGain_produce <evio_file_or_dir> [...]\n"
-            "       [-o output.dat] [-r hists.root]\n"
+            "       [-o output.dat]    default: <db>/gain_factor/ref_gain/prad_XXXXXX_LMS.dat\n"
+            "       [-r hists.root]    default: <db>/gain_factor/ref_gain/prad_XXXXXX_LMS_hists.root\n"
             "       [-c daq_config.json] [-d hycal_map.json] [-n max_events]\n";
         return 1;
     }
 
-    if (output_dat.empty())  output_dat  = "lms_alpha_peaks.dat";
-    if (daq_map.empty())     daq_map     = db_dir + "/hycal_map.json";
-    if (output_root.empty()) {
-        int run = get_run_int(evio_files[0]);
-        output_root = Form("prad_%06d_lms_hists.root", run);
+    if (daq_map.empty()) daq_map = db_dir + "/hycal_map.json";
+
+    int run = get_run_int(evio_files[0]);
+    std::string ref_gain_dir = db_dir + "/gain_factor/ref_gain";
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(ref_gain_dir, ec);
+        if (ec)
+            std::cerr << "Warning: cannot create " << ref_gain_dir << ": " << ec.message() << "\n";
     }
+    if (output_dat.empty())
+        output_dat  = ref_gain_dir + "/" + Form("prad_%06d_LMS.dat",       run);
+    if (output_root.empty())
+        output_root = ref_gain_dir + "/" + Form("prad_%06d_LMS_hists.root", run);
 
     std::cout << "  Files   : " << evio_files.size() << "\n"
               << "  DAQ cfg : " << daq_config << "\n"
