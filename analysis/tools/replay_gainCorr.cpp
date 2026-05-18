@@ -1,12 +1,12 @@
 //=============================================================================
-// replay_lms — extract LMS/alpha events from EVIO, then compute gain corrections
+// replay_gainCorr — extract LMS/alpha events from EVIO, then compute gain corrections
 //
 // Phase 1: replay EVIO files (multi-threaded) → per-file *_lms.root
 // Phase 2: chain all *_lms.root, accumulate histograms in windows of N LMS
 //          events, fit them, write gain-correction rows to gain_corr.root
 //
 // Usage:
-//   replay_lms <evio_file_or_dir> [more files/dirs...]
+//   replay_gainCorr <evio_file_or_dir> [more files/dirs...]
 //              -o output_dir
 //              [-f max_files] [-j num_threads]
 //              [-c daq_config.json] [-d hycal_map.json]
@@ -493,7 +493,7 @@ int main(int argc, char *argv[])
 
     if (evio_files.empty() || output_dir.empty()) {
         std::cerr <<
-            "Usage: replay_lms <evio_file_or_dir> [...] -o output_dir\n"
+            "Usage: replay_gainCorr <evio_file_or_dir> [...] -o output_dir\n"
             "       [-f max_files] [-j threads] [-c daq_config.json] [-d hycal_map.json]\n"
             "       [-b batch_size (2000)] [-r ref_run]\n"
             "       [-s] (save intermediate *_lms.root merged via hadd; default: delete)\n"

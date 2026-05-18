@@ -1,4 +1,4 @@
-// gain_replay.cpp — EVIO -> LMS/alpha gain factors (single-pass, global fit)
+// refGain_produce.cpp — EVIO -> LMS/alpha gain factors (single-pass, global fit)
 //
 // Reads EVIO files directly, classifies events by channel count,
 // accumulates histograms over ALL events (one global fit), then writes:
@@ -6,7 +6,7 @@
 //   * a .root file with all histograms (raw + fitted) for inspection
 //
 // Usage:
-//   gain_replay <evio_file_or_dir> [more files/dirs...]
+//   refGain_produce <evio_file_or_dir> [more files/dirs...]
 //              [-o output.dat]    default: lms_alpha_peaks.dat
 //              [-r hists.root]    default: prad_XXXXXX_lms_hists.root
 //              [-c daq_config.json]
@@ -51,7 +51,7 @@
 
 using namespace analysis;
 
-// ── constants (mirror replay_lms.cpp) ────────────────────────────────────────
+// ── constants (mirror replay_gainCorr.cpp) ───────────────────────────────────
 static constexpr int   N_W         = 1156;
 static constexpr int   N_LMS       = 3;
 static constexpr int   LMS_ID_BASE = 3101;   // LMS1=3101, LMS2=3102, LMS3=3103
@@ -116,7 +116,7 @@ int main(int argc, char *argv[])
 
     if (evio_files.empty()) {
         std::cerr <<
-            "Usage: gain_replay <evio_file_or_dir> [...]\n"
+            "Usage: refGain_produce <evio_file_or_dir> [...]\n"
             "       [-o output.dat] [-r hists.root]\n"
             "       [-c daq_config.json] [-d hycal_map.json] [-n max_events]\n";
         return 1;
