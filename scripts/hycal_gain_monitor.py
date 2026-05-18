@@ -1807,13 +1807,15 @@ def _fmt_bytes(b: int) -> str:
 
 
 def _check_disk_space(remote_host: str, remote_run_dir: str,
-                      local_base: str, f_start: int, f_end: int):
+                      local_base: str, f_start: int, f_end: int,
+                      local_run_dir: str = None):
     """Return (needed_bytes, free_bytes) for evio files [f_start, f_end].
 
     SSHes to remote_host and sums the sizes of files whose .evio.NNN suffix
-    falls within [f_start, f_end].  If the remote listing yields no usable
+    falls within [f_start, f_end].  Files that already exist in local_run_dir
+    are excluded from the calculation.  If the remote listing yields no usable
     sizes, falls back to a conservative ~2 GB-per-file estimate using the
-    requested range count.  Free space is measured on the filesystem that
+    count of missing files.  Free space is measured on the filesystem that
     contains local_base (or its nearest existing ancestor).
     Raises RuntimeError if the SSH call itself fails (exit 255).
     """
@@ -1839,6 +1841,9 @@ def _check_disk_space(remote_host: str, remote_run_dir: str,
             continue
         n = int(m.group(1))
         if f_start <= n <= f_end:
+            fname = parts[-1]
+            if local_run_dir and os.path.isfile(os.path.join(local_run_dir, fname)):
+                continue  # already downloaded, skip
             try:
                 needed += int(parts[4])
                 counted += 1
@@ -1849,7 +1854,18 @@ def _check_disk_space(remote_host: str, remote_run_dir: str,
     # SSH success but no files yet) fall back to a conservative estimate so
     # the user doesn't proceed without any check at all.
     if counted == 0:
-        needed = (f_end - f_start + 1) * _EVIO_BYTES_PER_FILE_EST
+        if local_run_dir and os.path.isdir(local_run_dir):
+            import glob as _glob
+            existing_nums = set()
+            for p in _glob.glob(os.path.join(local_run_dir, "*.evio.*")):
+                mm = re.search(r'\.evio\.(\d+)$', os.path.basename(p))
+                if mm:
+                    existing_nums.add(int(mm.group(1)))
+            missing = sum(1 for n in range(f_start, f_end + 1)
+                          if n not in existing_nums)
+        else:
+            missing = f_end - f_start + 1
+        needed = missing * _EVIO_BYTES_PER_FILE_EST
 
     # walk up to the nearest existing directory so disk_usage doesn't fail
     check_path = local_base
@@ -2015,7 +2031,8 @@ class GetDataDialog(QDialog):
         # -- disk space check --
         try:
             needed, free = _check_disk_space(
-                remote_host, remote_run_dir, local_base, f_start, f_end)
+                remote_host, remote_run_dir, local_base, f_start, f_end,
+                local_run_dir)
         except Exception as exc:
             box = QMessageBox(self)
             box.setWindowTitle("Disk Space Check Failed")
@@ -2320,9 +2337,11 @@ class DoItAllDialog(QDialog):
         # a conservative ~2GB-per-file estimate (see runtime block below).
         first_run = run_numbers[0]
         first_remote_run_dir = f"{remote_base}/prad_{first_run}"
+        first_local_run_dir = f"{local_base}/prad_{first_run}"
         try:
             needed, free = _check_disk_space(
-                remote_host, first_remote_run_dir, local_base, f_start, f_end)
+                remote_host, first_remote_run_dir, local_base, f_start, f_end,
+                first_local_run_dir)
         except Exception as exc:
             # SSH itself failed — fall back to the ~2GB-per-file estimate so
             # the user isn't asked to "proceed without any check".

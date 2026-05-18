@@ -1514,9 +1514,10 @@ class ControlPanel(QWidget):
             rb = rbas_e.text().strip() or _REMOTE_DATA_BASE
             lb = lbas_e.text().strip() or _LOCAL_DATA_BASE
             rdir = f"{rb}/prad_{int(rn):06d}"
+            lrun_dir = os.path.join(lb, f"prad_{int(rn):06d}")
             disk_lbl.setText("Checking…")
             try:
-                needed, free = _check_disk_space(h, rdir, lb, fs_sp.value(), fe_sp.value())
+                needed, free = _check_disk_space(h, rdir, lb, fs_sp.value(), fe_sp.value(), lrun_dir)
                 ok = free >= needed
                 c = "#3fb950" if ok else "#f85149"
                 disk_lbl.setText(f"<span style='color:{c}'>need {_fmt_bytes(needed)}, free {_fmt_bytes(free)}{'  ✓' if ok else '  ✗'}</span>")
@@ -1730,10 +1731,11 @@ class ControlPanel(QWidget):
         f_start = self._f_start.value()
         f_end = self._f_end.value()
         remote_run_dir = f"{remote_base}/prad_{int(run_num):06d}"
+        local_run_dir = os.path.join(local_base, f"prad_{int(run_num):06d}")
         self._disk_lbl.setText("Checking…")
         try:
             needed, free = _check_disk_space(host, remote_run_dir, local_base,
-                                              f_start, f_end)
+                                              f_start, f_end, local_run_dir)
             ok = free >= needed
             color = "#3fb950" if ok else "#f85149"
             self._disk_lbl.setText(
@@ -1818,7 +1820,7 @@ class ControlPanel(QWidget):
         self._status_lbl.setText("Checking disk space…")
         try:
             needed, free = _check_disk_space(host, remote_run_dir, local_base,
-                                              f_start, f_end)
+                                              f_start, f_end, local_run_dir)
             ok = free >= needed
             color = "#3fb950" if ok else "#f85149"
             self._log(
@@ -2156,7 +2158,8 @@ class ControlPanel(QWidget):
         self._console.moveCursor(self._console.textCursor().MoveOperation.End)
 
 
-def _check_disk_space(remote_host, remote_run_dir, local_base, f_start, f_end):
+def _check_disk_space(remote_host, remote_run_dir, local_base, f_start, f_end,
+                      local_run_dir=None):
     result = subprocess.run(
         ["ssh", "-o", "ConnectTimeout=10",
          remote_host, f"ls -l {remote_run_dir}/ 2>/dev/null"],
@@ -2176,6 +2179,9 @@ def _check_disk_space(remote_host, remote_run_dir, local_base, f_start, f_end):
             continue
         n = int(m.group(1))
         if f_start <= n <= f_end:
+            fname = parts[-1]
+            if local_run_dir and os.path.isfile(os.path.join(local_run_dir, fname)):
+                continue  # already downloaded, skip
             try:
                 needed += int(parts[4])
                 counted += 1
@@ -2183,7 +2189,19 @@ def _check_disk_space(remote_host, remote_run_dir, local_base, f_start, f_end):
                 pass
 
     if counted == 0:
-        needed = (f_end - f_start + 1) * _EVIO_BYTES_PER_FILE_EST
+        # estimate based only on files not yet present locally
+        if local_run_dir and os.path.isdir(local_run_dir):
+            import glob as _glob
+            existing_nums = set()
+            for p in _glob.glob(os.path.join(local_run_dir, "*.evio.*")):
+                mm = re.search(r'\.evio\.(\d+)$', os.path.basename(p))
+                if mm:
+                    existing_nums.add(int(mm.group(1)))
+            missing = sum(1 for n in range(f_start, f_end + 1)
+                          if n not in existing_nums)
+        else:
+            missing = f_end - f_start + 1
+        needed = missing * _EVIO_BYTES_PER_FILE_EST
 
     check_path = local_base
     while check_path and not os.path.exists(check_path):
