@@ -11,6 +11,7 @@
 //              [-r hists.root]    default: <db>/gain_factor/ref_gain/prad_XXXXXX_LMS_hists.root
 //              [-c daq_config.json]
 //              [-d hycal_map.json]
+//              [-f max_files]
 //              [-n max_events]
 
 #include "Replay.h"
@@ -90,6 +91,7 @@ int main(int argc, char *argv[])
 
     std::string output_dat, output_root, daq_config, daq_map;
     int max_events = -1;
+    int max_files  = -1;
 
     std::string db_dir = prad2::resolve_data_dir(
         "PRAD2_DATABASE_DIR",
@@ -98,12 +100,13 @@ int main(int argc, char *argv[])
     daq_config = db_dir + "/daq_config.json";
 
     int opt;
-    while ((opt = getopt(argc, argv, "o:r:c:d:n:")) != -1) {
+    while ((opt = getopt(argc, argv, "o:r:c:d:f:n:")) != -1) {
         switch (opt) {
             case 'o': output_dat  = optarg; break;
             case 'r': output_root = optarg; break;
             case 'c': daq_config  = optarg; break;
             case 'd': daq_map     = optarg; break;
+            case 'f': max_files   = std::atoi(optarg); break;
             case 'n': max_events  = std::atoi(optarg); break;
         }
     }
@@ -119,11 +122,13 @@ int main(int argc, char *argv[])
             "Usage: refGain_produce <evio_file_or_dir> [...]\n"
             "       [-o output.dat]    default: <db>/gain_factor/ref_gain/prad_XXXXXX_LMS.dat\n"
             "       [-r hists.root]    default: <db>/gain_factor/ref_gain/prad_XXXXXX_LMS_hists.root\n"
-            "       [-c daq_config.json] [-d hycal_map.json] [-n max_events]\n";
+            "       [-c daq_config.json] [-d hycal_map.json] [-f max_files] [-n max_events]\n";
         return 1;
     }
 
     if (daq_map.empty()) daq_map = db_dir + "/hycal_map.json";
+    if (max_files > 0 && (int)evio_files.size() > max_files)
+        evio_files.resize(max_files);
 
     int run = get_run_int(evio_files[0]);
     std::string ref_gain_dir = db_dir + "/gain_factor/ref_gain";
