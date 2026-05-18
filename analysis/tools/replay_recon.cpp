@@ -34,12 +34,93 @@
 #include <TFileMerger.h>
 #include <TClass.h>
 #include <TROOT.h>
+#include <TH1F.h>
+#include "gain_factor.h"
+
+#include <cerrno>
+#include <cstring>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #ifndef DATABASE_DIR
 #define DATABASE_DIR "."
 #endif
 
 using namespace analysis;
+
+// Auto-run replay_gainCorr if no gain-correction file exists for this run.
+// Returns true when the file is ready; prints a warning and returns false on
+// failure (the replay continues with identity gain correction).
+static bool ensureGainCorr(int run_num,
+                            const std::string &db_dir,
+                            const std::vector<std::string> &evio_files,
+                            int num_files,
+                            const std::string &daq_config,
+                            const std::string &daq_map,
+                            int num_threads)
+{
+    std::string gain_corr_dir = db_dir + "/gain_factor/gain_correction";
+    if (!prad2::FindGainCorrRootFile(gain_corr_dir, run_num).empty())
+        return true;   // already exists
+
+    std::cout << "[gain_corr] No gain-correction file for run " << run_num
+              << "; launching prad2ana_replay_gainCorr...\n";
+
+    // Locate the binary beside this executable.
+    std::string gainCorr_exe = prad2::module_dir() + "/prad2ana_replay_gainCorr";
+
+    // Temporary directory for intermediate *_lms.root files.
+    // replay_gainCorr deletes them (no -s flag); we clean up the dir itself.
+    char tmpl[] = "/tmp/prad2_lms_XXXXXX";
+    char *tmp = mkdtemp(tmpl);
+    if (!tmp) {
+        std::cerr << "[gain_corr] mkdtemp failed: " << std::strerror(errno) << "\n";
+        return false;
+    }
+    std::string tmp_dir(tmp);
+
+    // Build argv for execvp — no shell, so no command-injection risk.
+    std::vector<std::string> arg_strs;
+    arg_strs.push_back(gainCorr_exe);
+    for (int i = 0; i < num_files; ++i)
+        arg_strs.push_back(evio_files[i]);
+    arg_strs.push_back("-o"); arg_strs.push_back(tmp_dir);
+    arg_strs.push_back("-j"); arg_strs.push_back(std::to_string(num_threads));
+    if (!daq_config.empty()) { arg_strs.push_back("-c"); arg_strs.push_back(daq_config); }
+    if (!daq_map.empty())    { arg_strs.push_back("-d"); arg_strs.push_back(daq_map); }
+
+    std::vector<char *> argv_vec;
+    for (auto &s : arg_strs) argv_vec.push_back(const_cast<char *>(s.c_str()));
+    argv_vec.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp(gainCorr_exe.c_str(), argv_vec.data());
+        std::cerr << "[gain_corr] execvp failed: " << std::strerror(errno) << "\n";
+        _exit(1);
+    }
+    if (pid < 0) {
+        std::cerr << "[gain_corr] fork failed: " << std::strerror(errno) << "\n";
+        std::filesystem::remove_all(tmp_dir);
+        return false;
+    }
+
+    int wstatus = 0;
+    waitpid(pid, &wstatus, 0);
+    std::filesystem::remove_all(tmp_dir);
+
+    if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
+        std::cerr << "[gain_corr] replay_gainCorr exited with code "
+                  << WEXITSTATUS(wstatus) << "\n";
+        return false;
+    }
+    if (prad2::FindGainCorrRootFile(gain_corr_dir, run_num).empty()) {
+        std::cerr << "[gain_corr] Output not found in " << gain_corr_dir << "\n";
+        return false;
+    }
+    std::cout << "[gain_corr] Gain-correction file ready.\n";
+    return true;
+}
 
 static std::vector<std::string> collectEvioFiles(const std::string &path)
 {
@@ -135,6 +216,7 @@ int main(int argc, char *argv[])
     std::string run_str = get_run_str(evio_files[0]);
     int run_num = get_run_int(evio_files[0]);
     gRunConfig = LoadRunConfig(db_dir + "/runinfo/general.json", run_num);
+    ensureGainCorr(run_num, db_dir, evio_files, num_files, daq_config, daq_map, num_threads);
 
     // shared work queue: atomic index into file list
     std::atomic<int> next_file{0};
