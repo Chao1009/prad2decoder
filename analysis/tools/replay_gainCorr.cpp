@@ -149,7 +149,7 @@ static void setupGainBranches(TTree *tree, GainBatch &b)
 static void flushBatch(GainBatch &b, TTree *tree,
                        TH1F *mod_lms[N_W],
                        TH1F *ref_lms[N_LMS], TH1F *ref_alpha[N_LMS],
-                       const prad2::GainFactorTable &ref_tbl)
+                       const prad2::RefGainTable &ref_tbl)
 {
     prad2::FitResult fit_ref_lms[N_LMS], fit_ref_alpha[N_LMS];
     for (int i = 0; i < N_LMS; ++i) {
@@ -315,7 +315,7 @@ static void computeGainCorrections(const std::vector<std::string> &lms_files,
                                    const std::string               &gain_out,
                                    int                              batch_size,
                                    int                              ref_run_num,
-                                   const prad2::GainFactorTable    &ref_tbl,
+                                   const prad2::RefGainTable       &ref_tbl,
                                    const PlotConfig                &plot_cfg,
                                    PlotStore                       &ps)
 {
@@ -536,7 +536,7 @@ int main(int argc, char *argv[])
 
             std::string out = output_dir + "/" + makeOutputFile(evio_files[idx]);
             bool ok = replay.Process_LMSgainFactor(evio_files[idx], out,
-                                                   gRunConfig, db_dir, daq_config);
+                                                   db_dir, daq_config);
             {
                 std::lock_guard<std::mutex> lk(io_mtx);
                 if (ok) {
@@ -574,7 +574,7 @@ int main(int argc, char *argv[])
     // ── Phase 2: gain corrections ────────────────────────────────────────────
     std::sort(lms_out_files.begin(), lms_out_files.end());
 
-    auto ref_tbl = prad2::LoadGainFactors(gRunConfig.gain_data_dir, ref_run);
+    auto ref_tbl = prad2::LoadRefGain(gRunConfig.gain_data_dir, ref_run);
     if (!ref_tbl.loaded) {
         std::cerr << "Warning: reference gain table not loaded"
                   << " (ref_run=" << ref_run

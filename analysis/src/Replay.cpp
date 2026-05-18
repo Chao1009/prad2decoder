@@ -284,7 +284,8 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
     int total = 0;
 
     int run_num = get_run_int(input_evio);
-    auto gain_correction = prad2::ComputeGainCorrection(gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
+    auto gain_corr_ts = prad2::LoadGainCorrTimeSeries(
+        gRunConfig.gain_data_dir + "/gain_correction", run_num);
 
     while (ch.Read() == evc::status::success) {
         if (!ch.Scan()) continue;
@@ -415,6 +416,9 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
             ev->tdc_nwords   = tdc_nwords_snapshot;
             ev->tdc_words    = tdc_words_snapshot;
 
+            // Per-event gain correction (time-series lookup by event number).
+            const auto &gain_corr = gain_corr_ts.GetCorr(static_cast<int>(ev->event_num));
+
             // Decode FADC250 data — single pass over all channels (HyCal +
             // Veto + LMS).  Type dispatch comes from hycal_map.json's "t"
             // field, not module-name prefix; module_type[nch] records the
@@ -445,12 +449,12 @@ bool Replay::Process(const std::string &input_evio, const std::string &output_ro
                             ev->samples[nch][i] = cd.samples[i];
 
                         // Gain correction is HyCal-only (PbGlass / PbWO4) —
-                        // Veto / LMS get unity factor.  Comes from a lookup
-                        // table, no analyzer needed.
+                        // Veto / LMS get unity factor.  Average of the three
+                        // LMS channels from the time-series lookup.
                         if (mod_type == prad2::MOD_PbWO4) {
-                            ev->gain_factor[nch] = gain_correction.w[mod_id - 1000].corr[1]; // Use g2-based correction for PbWO4 (matches LMS2)
+                            ev->gain_factor[nch] = gain_corr.w[mod_id - 1000].avg;
                         } else if (mod_type == prad2::MOD_PbGlass) {
-                            ev->gain_factor[nch] = gain_correction.g[mod_id].corr[1]; // Use g2-based correction for PbGlass (matches LMS2)
+                            ev->gain_factor[nch] = gain_corr.g[mod_id].avg;
                         } else {
                             ev->gain_factor[nch] = 1.0f;
                         }
@@ -690,7 +694,8 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
     int total = 0;
 
     int run_num = get_run_int(input_evio);
-    auto gain_correction = prad2::ComputeGainCorrection(gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
+    auto gain_corr_ts = prad2::LoadGainCorrTimeSeries(
+        gRunConfig.gain_data_dir + "/gain_correction", run_num);
 
     // Per-detector lab transforms — set up by either branch of the detector
     // wiring above (PipelineBuilder for PRad-II, BuildLabTransforms for PRad-1).
@@ -757,6 +762,9 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
             ev->trigger_bits = event->info.trigger_bits;
             ev->timestamp    = event->info.timestamp;
             ev->ssp_raw      = ssp_raw_snapshot;
+
+            // Per-event gain correction (time-series lookup by event number).
+            const auto &gain_corr = gain_corr_ts.GetCorr(static_cast<int>(ev->event_num));
 
             // TODO: use config-driven trigger filter (monitor_config.json "physics" section
             // accept_trigger_bits/reject_trigger_bits) instead of hardcoded bit check.
@@ -828,10 +836,10 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
                             else{
                                 const auto *mod = hycal.module_by_daq(crate, s, c);
                                 if (!mod || !mod->is_hycal()) continue;
-                                // Per-ID gain correction (g2-based, matches LMS2).
+                                // Per-ID gain correction: average of three LMS channels.
                                 const float gain = (mod->id > 1000)
-                                    ? gain_correction.w[mod->id - 1000].corr[1]
-                                    : gain_correction.g[mod->id].corr[1];
+                                    ? gain_corr.w[mod->id - 1000].avg
+                                    : gain_corr.g[mod->id].avg;
 
                                 if (prad1 == true) {
                                     float adc = cd.samples[0] * 0.543f * gain; //0.543 for prad1 run1308, correct to 1.1GeV
@@ -1003,7 +1011,6 @@ bool Replay::ProcessWithRecon(const std::string &input_evio, const std::string &
 }
 
 bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::string &output_root,
-                         RunConfig &gRunConfig,
                      const std::string &db_dir, const std::string &daq_config_file)
 {
     // build ROC tag → crate index mapping from DAQ config JSON
@@ -1063,7 +1070,6 @@ bool Replay::Process_LMSgainFactor(const std::string &input_evio, const std::str
     int total = 0;
 
     int run_num = get_run_int(input_evio);
-    auto gain_correction = prad2::ComputeGainCorrection(gRunConfig.gain_data_dir, run_num, gRunConfig.gain_ref_run);
 
     while (ch.Read() == evc::status::success) {
         if (!ch.Scan()) continue;

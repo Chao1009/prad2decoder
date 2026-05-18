@@ -71,8 +71,7 @@ public:
                             bool prad1 = false);
     
     bool Process_LMSgainFactor(const std::string &input_evio, const std::string &output_root,
-                         RunConfig &gRunConfig,
-                     const std::string &db_dir, const std::string &daq_config_file);
+                                const std::string &db_dir, const std::string &daq_config_file);
 
 private:
     void setupBranches(TTree *tree, EventVars &ev, bool write_peaks);
