@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -281,6 +282,15 @@ inline RunConfig LoadRunConfig(const std::string &path, int run_num)
               << " config(s), last from_run=" << best_run;
     if (best_ped_run >= 0) std::cerr << "  ped_from_run=" << best_ped_run;
     std::cerr << " from " << path << "\n";
+
+    // If gain_data_dir is empty (not set in JSON, or explicitly set to ""),
+    // fall back to <db>/gain_factor derived from the runinfo file location.
+    if (result.gain_data_dir.empty()) {
+        result.gain_data_dir =
+            std::filesystem::path(path).parent_path().parent_path().string()
+            + "/gain_factor";
+    }
+
     return result;
 }
 

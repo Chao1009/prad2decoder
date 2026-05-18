@@ -25,6 +25,7 @@ namespace analysis {
 // Aliases for the shared replay data structures
 using EventVars       = prad2::RawEventData;
 using EventVars_Recon = prad2::ReconEventData;
+using LMSEventVars    = prad2::LMSEventData;
 
 class Replay
 {
@@ -68,6 +69,9 @@ public:
                             const std::string &daq_config_file = "",
                             const std::string &gem_ped_file = "", float zerosup_override = 0.f,
                             bool prad1 = false);
+    
+    bool Process_LMSgainFactor(const std::string &input_evio, const std::string &output_root,
+                                const std::string &db_dir, const std::string &daq_config_file);
 
 private:
     void setupBranches(TTree *tree, EventVars &ev, bool write_peaks);
@@ -75,6 +79,9 @@ private:
 
     void setupReconBranches(TTree *tree, EventVars_Recon &ev);
     void clearReconEvent(EventVars_Recon &ev);
+
+    void setupLMSBranches(TTree *tree, LMSEventVars &ev);
+    void clearLMSEvent(LMSEventVars &ev);
 
 
     using DaqMap = std::unordered_map<std::string, std::string>;  // "roc_slot_ch" -> name
