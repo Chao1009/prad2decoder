@@ -110,6 +110,7 @@ struct GainBatch {
     int   event_num_end    = 0;
     int   n_lms_events     = 0;
     int   n_alpha_events   = 0;
+    int   ref_run          = 0;
 
     float refPMT_ratio       [N_LMS]        = {};
     float gain_W             [N_W][N_LMS]   = {};
@@ -127,6 +128,7 @@ static void setupGainBranches(TTree *tree, GainBatch &b)
     tree->Branch("event_num_end",   &b.event_num_end,   "event_num_end/I");
     tree->Branch("n_lms_events",    &b.n_lms_events,    "n_lms_events/I");
     tree->Branch("n_alpha_events",  &b.n_alpha_events,  "n_alpha_events/I");
+    tree->Branch("ref_run",         &b.ref_run,         "ref_run/I");
 
     tree->Branch("refPMT_ratio",       b.refPMT_ratio,
                  Form("refPMT_ratio[%d]/F",    N_LMS));
@@ -312,6 +314,7 @@ static void savePlots(const std::string &pdf_path,
 static void computeGainCorrections(const std::vector<std::string> &lms_files,
                                    const std::string               &gain_out,
                                    int                              batch_size,
+                                   int                              ref_run_num,
                                    const prad2::GainFactorTable    &ref_tbl,
                                    const PlotConfig                &plot_cfg,
                                    PlotStore                       &ps)
@@ -341,6 +344,7 @@ static void computeGainCorrections(const std::vector<std::string> &lms_files,
     TTree *out_tree = new TTree("gain_corr", "LMS gain correction time series");
     GainBatch batch;
     setupGainBranches(out_tree, batch);
+    batch.ref_run = ref_run_num;
 
     Long64_t nentries    = chain.GetEntries();
     int      lms_count   = 0;
@@ -421,18 +425,6 @@ static void computeGainCorrections(const std::vector<std::string> &lms_files,
 
             std::cerr << "\r  [gain] batch " << batch_id << " written" << std::endl;
         }
-    }
-
-    // Flush final partial batch
-    if (lms_count > 0) {
-        batch.batch_id        = batch_id;
-        batch.event_num_start = ev_start;
-        batch.event_num_end   = ev.event_num;
-        batch.n_lms_events    = lms_count;
-        batch.n_alpha_events  = alpha_count;
-        flushBatch(batch, out_tree, mod_lms, ref_lms, ref_alpha, ref_tbl);
-        captureForPlot();
-        ++batch_id;
     }
 
     std::cerr << "\n";
@@ -597,7 +589,7 @@ int main(int argc, char *argv[])
               << "  Ref run    : " << ref_run << "\n"
               << "  Output     : " << gain_out << "\n";
 
-    computeGainCorrections(lms_out_files, gain_out, batch_size, ref_tbl, plot_cfg, ps);
+    computeGainCorrections(lms_out_files, gain_out, batch_size, ref_run, ref_tbl, plot_cfg, ps);
 
     if (plot_cfg.enabled) {
         std::string pdf_out = gain_out.substr(0, gain_out.rfind('.')) + "_plots.pdf";
