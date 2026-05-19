@@ -223,34 +223,37 @@ static void drawOverlay(const std::vector<TH1F*> &all, int max_hists, const char
     if (all.empty()) return;
     auto sel = subsample(all, max_hists);
 
-    // Determine x range from data: find first/last non-empty bin across all histograms.
-    double ymax = 0.;
-    int first_bin = INT_MAX, last_bin = 0;
+    // Determine x range from peak position and FWHM across all selected histograms.
+    // Display window: [peak - 4*FWHM, peak + 4*FWHM], unioned across histograms.
+    double ymax    = 0.;
+    double xlo_acc =  1.e15;
+    double xhi_acc = -1.e15;
     for (auto *h : sel) {
         ymax = std::max(ymax, h->GetMaximum());
-        int nb = h->GetNbinsX();
-        for (int b = 1; b <= nb; ++b) {
-            if (h->GetBinContent(b) > 0) {
-                first_bin = std::min(first_bin, b);
-                last_bin  = std::max(last_bin,  b);
-                break;
-            }
-        }
-        for (int b = nb; b >= 1; --b) {
-            if (h->GetBinContent(b) > 0) {
-                last_bin = std::max(last_bin, b);
-                break;
-            }
-        }
+        int    nb       = h->GetNbinsX();
+        int    peak_bin = h->GetMaximumBin();
+        double peak_val = h->GetBinContent(peak_bin);
+        if (peak_val <= 0.) continue;
+
+        // Scan outward from peak to estimate FWHM.
+        double half_max = peak_val * 0.5;
+        int lo_hm = 1;
+        for (int b = peak_bin; b >= 1; --b)
+            if (h->GetBinContent(b) < half_max) { lo_hm = b; break; }
+        int hi_hm = nb;
+        for (int b = peak_bin; b <= nb; ++b)
+            if (h->GetBinContent(b) < half_max) { hi_hm = b; break; }
+        double fwhm = h->GetBinCenter(hi_hm) - h->GetBinCenter(lo_hm);
+        if (fwhm < h->GetBinWidth(1)) fwhm = h->GetBinWidth(1) * 10.;
+
+        double center = h->GetBinCenter(peak_bin);
+        xlo_acc = std::min(xlo_acc, center - 4. * fwhm);
+        xhi_acc = std::max(xhi_acc, center + 4. * fwhm);
     }
-    // Add 5% padding on each side; fall back to full range if no data.
     double xlo = 0., xhi = sel[0]->GetXaxis()->GetXmax();
-    if (first_bin != INT_MAX && last_bin > 0) {
-        double w   = sel[0]->GetBinWidth(1);
-        xlo = sel[0]->GetBinLowEdge(first_bin) - w * 2.;
-        xhi = sel[0]->GetBinLowEdge(last_bin)  + w * 3.;
-        xlo = std::max(xlo, 0.);
-        xhi = std::min(xhi, sel[0]->GetXaxis()->GetXmax());
+    if (xlo_acc < xhi_acc) {
+        xlo = std::max(0., xlo_acc);
+        xhi = std::min(xhi, xhi_acc);
     }
 
     for (int k = 0; k < (int)sel.size(); ++k) {
